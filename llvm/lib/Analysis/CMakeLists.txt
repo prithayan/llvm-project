@@ -99,6 +99,7 @@ add_llvm_library(LLVMAnalysis
 
   ADDITIONAL_HEADER_DIRS
   ${LLVM_MAIN_INCLUDE_DIR}/llvm/Analysis
+  ${LLVM_MAIN_INCLUDE_DIR}/openmp/libomptarget/include/
 
   DEPENDS
   intrinsics_gen

@@ -1,4 +1,4 @@
-//===- OmpDiagnosticsAnalysis.h - Stack memory safety analysis -----*- C++ -*-===//
+//===- OmpDiagnosticsAnalysis.h - Analyze omp target clauses and infer data mapping -----*- C++ -*-===//
 //
 // Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
 // See https://llvm.org/LICENSE.txt for license information.
@@ -6,8 +6,12 @@
 //
 //===----------------------------------------------------------------------===//
 //
-// Stack Safety Analysis detects allocas and arguments with safe access.
-//
+// OpenMp target data mapping Analysis, 
+// A Diagnostics Pass to help understand usage of data mapping clauses.
+// Looks at all the omp target RTL calls, and interprets their semantics, 
+// to conclude which variable is residing on Device or Host memory, 
+// outside and inside target regions.
+// RTL is an acronym for "Run Time Library"
 //===----------------------------------------------------------------------===//
 
 #ifndef LLVM_ANALYSIS_OmpDiagnosticsANALYSIS_H
@@ -15,26 +19,190 @@
 
 #include "llvm/IR/PassManager.h"
 #include "llvm/Pass.h"
+#include <set>
 
 namespace llvm {
 
-/// Interface to access stack safety analysis results for single function.
-class OmpDiagnosticsInfo {
-public:
-  struct FunctionInfo;
+  // Copied the enum for map type from openmp/libomptarget/include/omptarget.h
+  // TODO: Can we include the above file ?
+  enum tgt_map_type {
+    // No flags
+    OMP_TGT_MAPTYPE_NONE            = 0x000,
+    // copy data from host to device
+    OMP_TGT_MAPTYPE_TO              = 0x001,
+    // copy data from device to host
+    OMP_TGT_MAPTYPE_FROM            = 0x002,
+    // copy regardless of the reference count
+    OMP_TGT_MAPTYPE_ALWAYS          = 0x004,
+    // force unmapping of data
+    OMP_TGT_MAPTYPE_DELETE          = 0x008,
+    // map the pointer as well as the pointee
+    OMP_TGT_MAPTYPE_PTR_AND_OBJ     = 0x010,
+    // pass device base address to kernel
+    OMP_TGT_MAPTYPE_TARGET_PARAM    = 0x020,
+    // return base device address of mapped data
+    OMP_TGT_MAPTYPE_RETURN_PARAM    = 0x040,
+    // private variable - not mapped
+    OMP_TGT_MAPTYPE_PRIVATE         = 0x080,
+    // copy by value - not mapped
+    OMP_TGT_MAPTYPE_LITERAL         = 0x100,
+    // mapping is implicit
+    OMP_TGT_MAPTYPE_IMPLICIT        = 0x200,
+    // member of struct, member given by [16 MSBs] - 1
+    OMP_TGT_MAPTYPE_MEMBER_OF       = 0xffff000000000000
+  };
+  /// Represents the string type of Omp RTL call names
+  using ConstCallNameType = const std::string;
+  /// Represents the information associated with each RTL call.
+  /// Each RTL call can have different arguments, 
+  /// this struct records which argument is what, by recording the argument number of 
+  /// parameters required for inferring the data mapping
+  struct RTLinfoType {
+    using ArgPos = const unsigned;
+    /// Some RTL calls are not relevant for data mapping, 
+    /// use this flag to ignore them.
+    bool IsDataMappingRTL, IsEnterEnv, IsExitEnv;
+    /// The four arguments that we are interested in, 
+    /// Number of variables mapped.
+    /// BaseAddress of the variable mapped.
+    /// Size of the array section mapped.
+    /// Type of mapping specified.
+    ArgPos NumVariablesPosition, VariableBaseAddressPosition, VariableSizePosition, MapTypePosition;
+    RTLinfoType(): 
+      IsDataMappingRTL(false),
+      IsEnterEnv(false), IsExitEnv(false),
+      NumVariablesPosition(0),
+      VariableBaseAddressPosition(0),
+      VariableSizePosition(0),
+      MapTypePosition(0){}
+    RTLinfoType(ArgPos A, ArgPos B, ArgPos C, ArgPos D, bool IsEnter, bool IsExit): 
+      IsDataMappingRTL(true),
+      IsEnterEnv(IsEnter), IsExitEnv(IsExit),
+      NumVariablesPosition(A),
+      VariableBaseAddressPosition(B),
+      VariableSizePosition(C),
+      MapTypePosition(D){}
+  };
+  /// Map of RTL call to its arguments
+  using RTL2infoMapType = const std::map<ConstCallNameType, const RTLinfoType>;
+  /// This map provides information about the meaning of each argument 
+  /// of the RTL calls, 
+  /// Our Analysis will look at the arguments to analyze the semantics of the 
+  /// RTL calls, and infer the data mapping according to OMP 5.0
+  RTL2infoMapType TargetRTLMap = {
+    //"omp_get_num_devices",
+    //"omp_get_initial_device",
+    //"omp_target_alloc",
+    //"omp_target_free",
+    //"omp_target_is_present",
+    //"omp_target_memcpy",
+    //"omp_target_memcpy_rect",
+    //"omp_target_associate_ptr",
+    //"omp_target_disassociate_ptr",
+    //{"__tgt_register_lib",RTLinfoType( ) },
+    //{"__tgt_unregister_lib",RTLinfoType( ) },
+    {"__tgt_target_data_begin",RTLinfoType(1,2,4,5,true,false ) },
+    {"__tgt_target_data_end",RTLinfoType(1,2,4,5, false, true) },
+    {"__tgt_target_data_update",RTLinfoType(1,2,4,5, true, true ) },
+    {"__tgt_target",RTLinfoType(2,3,5,6, true, true ) },
+    {"__tgt_target_teams",RTLinfoType(2,3,5,6, true, true ) },
+    {"__tgt_target_data_begin_nowait",RTLinfoType(1,2,4,5,true,false  ) },
+    {"__tgt_target_data_end_nowait",RTLinfoType(1,2,4,5, false, true ) },
+    {"__tgt_target_data_update_nowait",RTLinfoType(1,2,4,5, true, true ) },
+    {"__tgt_target_nowait",RTLinfoType(2,3,5,6, true, true ) },
+    //"__tgt_target_teams_nowait",RTLinfoType(2,3,5,6 ) },
+    //"__tgt_target_data_begin_depend",RTLinfoType(1,2,4,5 ) },
+    //"__tgt_target_data_end_depend",RTLinfoType(1,2,4,5 ) },
+    //"__tgt_target_data_update_depend",RTLinfoType(1,2,4,5 ) },
+    //"__tgt_target_data_begin_nowait_depend",
+    //"__tgt_target_data_end_nowait_depend",
+    //"__tgt_target_data_update_nowait_depend", 
+  };
 
+class OmpDiagnosticsInfo ;
+#define EXISTSinMap(MAP,ELEM ) (MAP.find(ELEM) != MAP.end())
+/// used to analyze the last written contents of every Value* within the basicblock
+class ValueFlowAtInstruction {
+  public:
+    using IdType = unsigned;
+    using VectorOfIdsType = std::vector<IdType>;
+    using Value2IdMapType = std::map<const Value*, VectorOfIdsType>;
+    using ValueFlowMapType = std::map<IdType, IdType> ;
+    //using AddresContentType = std::map<IdType, IdType>;
+    using Id2ValueMapType = std::vector<const Value *>;
+  private:
+
+    // This is a map from a value to an array of Ids, 
+    // Where Each Id from the array of Ids refers to the 
+    // corresponding offset from the Value, 
+    // So, A->[8,9,10], means, 
+    // A[0] has an id of 8, A[1] of 9 and so on.
+    Value2IdMapType Value2IdMap; 
+    Id2ValueMapType Id2ValueMap;
+    // ValueFlowMap is used to store Identifiers whose contents are same
+    // entry maybe a pointer, and ValueFlowMap[Ptr1] = Ptr2 means, both Ptr1 and Ptr2 point to same address
+    // ValueFlowMap[Addres] = V, Means that the contents at Address is V
+    // ValueFlowMap[Address1] = &Address2, Means that Address1 is a double pointer, and contains Address2
+    ValueFlowMapType ValueFlowMap; 
+    //AddresContentType AddresContent;
+    const Instruction &ValuesAtInstruction;
+    OmpDiagnosticsInfo &OmpEnvInfo;
+    IdType getIdForValue(const Value *V, const unsigned Index=0);
+    bool getIdForValue(IdType &Id, const Value *V, const unsigned Index);
+    void addAlias(const Value*, const Value*, unsigned Index = 0 );
+  public:
+    ValueFlowAtInstruction(const Instruction &I, OmpDiagnosticsInfo &O): 
+      ValuesAtInstruction(I), OmpEnvInfo(O){}
+    void run();
+    void print();
+    void parseArguments(const CallInst &, const unsigned NumVars, 
+        const Value *BaseAddrArg, const Value *SizeArg, 
+        const Value *MaptTypeArg);
+};
+class OmpDiagnosticsInfo {
+  friend class ValueFlowAtInstruction;
 private:
-  //std::unique_ptr<FunctionInfo> Info;
+  //using IdType = ValueFlowAtInstruction::IdType;
+  using IdType = const Value *;
+  /// Map of an Item represented by the Id to its reference count
+  using ItemsRefCountType = std::map<IdType, unsigned>;
+  using DeviceEnvironmentsType = SmallVector<ItemsRefCountType,1>;
+  using InstructionSetType = std::map<const Instruction*, std::set<IdType>>;
+
+  DeviceEnvironmentsType DeviceEnvironments;
+  InstructionSetType HostDeviceCopy;
+  InstructionSetType DeviceHostCopy;
+
 
 public:
   OmpDiagnosticsInfo();
-  OmpDiagnosticsInfo(FunctionInfo &&Info);
-  OmpDiagnosticsInfo(OmpDiagnosticsInfo &&);
-  OmpDiagnosticsInfo &operator=(OmpDiagnosticsInfo &&);
+  //OmpDiagnosticsInfo(OmpDiagnosticsInfo &&);
+  //OmpDiagnosticsInfo &operator=(OmpDiagnosticsInfo &&);
   ~OmpDiagnosticsInfo();
+  void enterDataEnv(const Instruction &OmpCall, IdType ItemId, unsigned MapTypeInt, unsigned ItemSize, unsigned deviceid=0); 
+  void exitDataEnv(const Instruction &OmpCall, IdType ItemId, unsigned MapTypeInt, unsigned ItemSize, unsigned deviceid=0); 
 
   // TODO: Add useful for client methods.
   void print(raw_ostream &O) const;
+};
+class OmpDiagnosticsLocalAnalysis {
+  const Function &Func2Analyze;
+
+  // RTLinfoType records what each argument of the RTL calls means
+  // We are only concerned about the following 4 arguments,
+  // These are the argument numbers of the interesting properties
+  bool getRTLArgsPos(const CallInst &CI, 
+      unsigned &NumVarsPos, unsigned &BaseAddrPos, unsigned &SizePos, unsigned &MapTypePos );
+  void analyzeRTLArguments(const CallInst &CI, 
+      const unsigned NumVarsPos, const unsigned BaseAddrPos, 
+      const unsigned SizePos, const unsigned MapTypePos );
+
+  public : 
+    static OmpDiagnosticsInfo OmpEnvInfo;
+    OmpDiagnosticsLocalAnalysis(const Function &F): 
+      Func2Analyze(F){}
+    // TODO : make sure the order of traversal of Basicblocks is correct, preorder traversal only
+    OmpDiagnosticsInfo &run();
 };
 
 /// OmpDiagnosticsInfo wrapper for the new pass manager.
@@ -44,7 +212,7 @@ class OmpDiagnosticsAnalysis : public AnalysisInfoMixin<OmpDiagnosticsAnalysis> 
 
 public:
   using Result = OmpDiagnosticsInfo;
-  OmpDiagnosticsInfo run(Function &F, FunctionAnalysisManager &AM);
+  OmpDiagnosticsInfo& run(Function &F, FunctionAnalysisManager &AM);
 };
 
 /// Printer pass for the \c OmpDiagnosticsAnalysis results.
@@ -58,13 +226,13 @@ public:
 
 /// OmpDiagnosticsInfo wrapper for the legacy pass manager
 class OmpDiagnosticsInfoWrapperPass : public FunctionPass {
-  OmpDiagnosticsInfo SSI;
 
+    OmpDiagnosticsInfo *OmpEnvInfo;
 public:
   static char ID;
   OmpDiagnosticsInfoWrapperPass();
 
-  const OmpDiagnosticsInfo &getResult() const { return SSI; }
+  const OmpDiagnosticsInfo &getResult() const { return *OmpEnvInfo; }
 
   void print(raw_ostream &O, const Module *M) const override;
   void getAnalysisUsage(AnalysisUsage &AU) const override;
