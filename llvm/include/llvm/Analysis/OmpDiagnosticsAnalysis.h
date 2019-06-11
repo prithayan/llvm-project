@@ -119,8 +119,49 @@ namespace llvm {
     //"__tgt_target_data_update_nowait_depend", 
   };
 
+struct OmpDataMapping {
+  const Value* MappedValue; 
+  const unsigned MapTypeInt; 
+  const unsigned MappedSectionSize;
+  OmpDataMapping (const Value* V, const unsigned T, const unsigned S) : 
+    MappedValue(V), MapTypeInt(T), MappedSectionSize(S){}
+  OmpDataMapping (const OmpDataMapping &O): 
+    MappedValue(O.MappedValue), MapTypeInt(O.MapTypeInt), MappedSectionSize(O.MappedSectionSize)
+  {  }
+  //OmpDataMapping & operator=(OmpDataMapping &O)
+
+};
+using DataMappingSetType = std::vector<OmpDataMapping>;
+using OmpDirectiveDataMapType = std::map<const CallInst*, DataMappingSetType>;
 class OmpDiagnosticsInfo ;
 #define EXISTSinMap(MAP,ELEM ) (MAP.find(ELEM) != MAP.end())
+class OmpDiagnosticsInfo {
+  //friend class ValueFlowAtInstruction;
+private:
+  //using IdType = ValueFlowAtInstruction::IdType;
+  using IdType = const Value *;
+  /// Map of an Item represented by the Id to its reference count
+  using ItemsRefCountType = std::map<IdType, unsigned>;
+  using DeviceEnvironmentsType = SmallVector<ItemsRefCountType,1>;
+  using InstructionSetType = std::map<const Instruction*, std::set<IdType>>;
+
+  DeviceEnvironmentsType DeviceEnvironments;
+  InstructionSetType HostDeviceCopy;
+  InstructionSetType DeviceHostCopy;
+
+
+public:
+  OmpDirectiveDataMapType DirectiveToDataMap;
+  OmpDiagnosticsInfo();
+  //OmpDiagnosticsInfo(OmpDiagnosticsInfo &&);
+  //OmpDiagnosticsInfo &operator=(OmpDiagnosticsInfo &&);
+  ~OmpDiagnosticsInfo();
+  void enterDataEnv(const Instruction &OmpCall, IdType ItemId, unsigned MapTypeInt, unsigned ItemSize, unsigned deviceid=0); 
+  void exitDataEnv(const Instruction &OmpCall, IdType ItemId, unsigned MapTypeInt, unsigned ItemSize, unsigned deviceid=0); 
+
+  // TODO: Add useful for client methods.
+  void print(raw_ostream &O) const;
+};
 /// used to analyze the last written contents of every Value* within the basicblock
 class ValueFlowAtInstruction {
   public:
@@ -159,32 +200,6 @@ class ValueFlowAtInstruction {
         const Value *BaseAddrArg, const Value *SizeArg, 
         const Value *MaptTypeArg);
 };
-class OmpDiagnosticsInfo {
-  friend class ValueFlowAtInstruction;
-private:
-  //using IdType = ValueFlowAtInstruction::IdType;
-  using IdType = const Value *;
-  /// Map of an Item represented by the Id to its reference count
-  using ItemsRefCountType = std::map<IdType, unsigned>;
-  using DeviceEnvironmentsType = SmallVector<ItemsRefCountType,1>;
-  using InstructionSetType = std::map<const Instruction*, std::set<IdType>>;
-
-  DeviceEnvironmentsType DeviceEnvironments;
-  InstructionSetType HostDeviceCopy;
-  InstructionSetType DeviceHostCopy;
-
-
-public:
-  OmpDiagnosticsInfo();
-  //OmpDiagnosticsInfo(OmpDiagnosticsInfo &&);
-  //OmpDiagnosticsInfo &operator=(OmpDiagnosticsInfo &&);
-  ~OmpDiagnosticsInfo();
-  void enterDataEnv(const Instruction &OmpCall, IdType ItemId, unsigned MapTypeInt, unsigned ItemSize, unsigned deviceid=0); 
-  void exitDataEnv(const Instruction &OmpCall, IdType ItemId, unsigned MapTypeInt, unsigned ItemSize, unsigned deviceid=0); 
-
-  // TODO: Add useful for client methods.
-  void print(raw_ostream &O) const;
-};
 class OmpDiagnosticsLocalAnalysis {
   const Function &Func2Analyze;
 
@@ -196,13 +211,13 @@ class OmpDiagnosticsLocalAnalysis {
   void analyzeRTLArguments(const CallInst &CI, 
       const unsigned NumVarsPos, const unsigned BaseAddrPos, 
       const unsigned SizePos, const unsigned MapTypePos );
-
   public : 
     static OmpDiagnosticsInfo OmpEnvInfo;
     OmpDiagnosticsLocalAnalysis(const Function &F): 
       Func2Analyze(F){}
     // TODO : make sure the order of traversal of Basicblocks is correct, preorder traversal only
     OmpDiagnosticsInfo &run();
+    void print();
 };
 
 /// OmpDiagnosticsInfo wrapper for the new pass manager.

@@ -123,6 +123,14 @@ OmpDiagnosticsInfo::~OmpDiagnosticsInfo() = default;
 
 void OmpDiagnosticsInfo::print(raw_ostream &O) const {
 
+  for (auto Iter : DirectiveToDataMap){
+    LLVM_DEBUG(dbgs()<<"\n Callinst::"<< *Iter.first );
+    for (auto &DataMapping : Iter.second ){
+      LLVM_DEBUG(dbgs()<<"\n MappedValue: "<<*DataMapping.MappedValue 
+          << " MapType ::"<<DataMapping.MapTypeInt 
+          << " MappedSectionSize ::"<<DataMapping.MappedSectionSize);
+    }
+  }
   if (HostDeviceCopy.size()) {
     O <<"\n =============== ";
     O << "\n Host to Device Copy:";
@@ -303,7 +311,8 @@ void ValueFlowAtInstruction::parseArguments(const CallInst &OmpCall, const unsig
   auto MapTypeAddr = dyn_cast<GlobalVariable>(dyn_cast<GEPOperator>(MaptTypeArg)->getPointerOperand() )->getInitializer();
   auto SizeAddrGep = dyn_cast<GEPOperator>(SizeAddrArg);
   const GlobalVariable *ConstSizeAddr = nullptr; 
-  if (SizeAddrGep!= nullptr) ConstSizeAddr = dyn_cast<GlobalVariable>(SizeAddrGep->getPointerOperand()); 
+  if (SizeAddrGep!= nullptr) 
+    ConstSizeAddr = dyn_cast<GlobalVariable>(SizeAddrGep->getPointerOperand()); 
 
   // The Arguments sent to the RTL is always a pointer
   // and we assume the pointer will be obtained from a GEP
@@ -336,10 +345,12 @@ void ValueFlowAtInstruction::parseArguments(const CallInst &OmpCall, const unsig
     assert(RTLInfo != nullptr && "Not a data mapping RTL call ");
     LLVM_DEBUG(dbgs()<<"\n EnterEnv:: "<< RTLInfo->IsEnterEnv 
         <<" Exit:: "<<RTLInfo->IsExitEnv);
-    if (RTLInfo->IsEnterEnv)
-      OmpEnvInfo.enterDataEnv(OmpCall, Id2ValueMap[BaseAddrId], MapTypeInt, MappedSectionSize);
-    if (RTLInfo->IsExitEnv)
-      OmpEnvInfo.exitDataEnv(OmpCall, Id2ValueMap[BaseAddrId], MapTypeInt, MappedSectionSize);
+    OmpEnvInfo.DirectiveToDataMap[&OmpCall].push_back(OmpDataMapping(Id2ValueMap[BaseAddrId], MapTypeInt, MappedSectionSize));
+    //MappedVarSet.push_back(OmpDataMapping(Id2ValueMap[BaseAddrId], MapTypeInt, MappedSectionSize));
+    //if (RTLInfo->IsEnterEnv)
+    //  OmpEnvInfo.enterDataEnv(OmpCall, Id2ValueMap[BaseAddrId], MapTypeInt, MappedSectionSize);
+    //if (RTLInfo->IsExitEnv)
+    //  OmpEnvInfo.exitDataEnv(OmpCall, Id2ValueMap[BaseAddrId], MapTypeInt, MappedSectionSize);
   }
 }
 
@@ -387,10 +398,15 @@ void OmpDiagnosticsLocalAnalysis::analyzeRTLArguments(const CallInst &CI,
   ValueFlowAtInstruction VFA(CI, OmpEnvInfo);
   VFA.run();
   VFA.print();
-  VFA.parseArguments(CI, NumVars->getSExtValue(), BaseAddrArg, SizeArg, MaptTypeArg ); 
+  DataMappingSetType MappedVarSet;
+  VFA.parseArguments(CI, NumVars->getSExtValue(), BaseAddrArg, SizeArg, MaptTypeArg); 
+  //DirectiveToDataMap[&CI] = MappedVarSet;
 }
 OmpDiagnosticsInfo &OmpDiagnosticsLocalAnalysis::run(){
   for (auto &I : instructions(Func2Analyze)){
+    //TODO: Make sure that the order of traversing the call instructions 
+    //is strictly in the preorder, 
+    //Visit parents before traversing the chlid! 
     if (const CallInst *OmpCall = dyn_cast<CallInst>(&I)){
       unsigned NumVarsPos, BaseAddrPos, SizePos, MapTypePos;
       if (getRTLArgsPos(*OmpCall, 
@@ -403,8 +419,10 @@ OmpDiagnosticsInfo &OmpDiagnosticsLocalAnalysis::run(){
   }
   return OmpEnvInfo;
 }
-
+void OmpDiagnosticsLocalAnalysis::print(){
+}
 AnalysisKey OmpDiagnosticsAnalysis::Key;
+//OmpDirectiveDataMapType OmpDiagnosticsLocalAnalysis::DirectiveToDataMap;
 
 OmpDiagnosticsInfo& OmpDiagnosticsAnalysis::run(Function &F,
                                          FunctionAnalysisManager &AM) {
@@ -494,6 +512,15 @@ bool OmpDiagnosticsGlobalInfoWrapperPass::runOnModule(Module &M) {
   //      return getAnalysis<OmpDiagnosticsInfoWrapperPass>(F).getResult();
   //    });
   //SSI = SSDFA.run();
+  std::map<std::string, Function *> FuncNameMap;
+  for (Function &Func : M) {
+    if (!Func.hasName() || 
+        Func.isIntrinsic() ||
+        Func.isDeclaration()) continue;
+    FuncNameMap[Func.getName()] = &Func;
+  }
+  if (EXISTSinMap(FuncNameMap, "main")){
+  }
   return false;
 }
 
