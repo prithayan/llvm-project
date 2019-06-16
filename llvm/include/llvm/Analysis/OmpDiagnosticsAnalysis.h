@@ -17,9 +17,11 @@
 #ifndef LLVM_ANALYSIS_OmpDiagnosticsANALYSIS_H
 #define LLVM_ANALYSIS_OmpDiagnosticsANALYSIS_H
 
+#include "llvm/IR/DebugInfoMetadata.h"
 #include "llvm/IR/PassManager.h"
 #include "llvm/Pass.h"
 #include <set>
+#include <queue>
 
 namespace llvm {
 
@@ -128,39 +130,48 @@ struct OmpDataMapping {
   OmpDataMapping (const OmpDataMapping &O): 
     MappedValue(O.MappedValue), MapTypeInt(O.MapTypeInt), MappedSectionSize(O.MappedSectionSize)
   {  }
+  // cannot be copied/assigned, since the memebers are all constant
   //OmpDataMapping & operator=(OmpDataMapping &O)
-
 };
-using DataMappingSetType = std::vector<OmpDataMapping>;
-using OmpDirectiveDataMapType = std::map<const CallInst*, DataMappingSetType>;
-class OmpDiagnosticsInfo ;
+
 #define EXISTSinMap(MAP,ELEM ) (MAP.find(ELEM) != MAP.end())
+
 class OmpDiagnosticsInfo {
   //friend class ValueFlowAtInstruction;
-private:
-  //using IdType = ValueFlowAtInstruction::IdType;
-  using IdType = const Value *;
-  /// Map of an Item represented by the Id to its reference count
-  using ItemsRefCountType = std::map<IdType, unsigned>;
-  using DeviceEnvironmentsType = SmallVector<ItemsRefCountType,1>;
-  using InstructionSetType = std::map<const Instruction*, std::set<IdType>>;
+  private:
+    //using IdType = ValueFlowAtInstruction::IdType;
+    using IdType = const Value *;
+    /// Map of an Item represented by the Id to its reference count
+    using ItemsRefCountType = std::map<IdType, unsigned>;
+    using DeviceEnvironmentsType = SmallVector<ItemsRefCountType,1>;
+    using DataMappingSetType = std::vector<OmpDataMapping>;
+    using InstructionToMemCopyMapType = std::map<const Instruction*, DataMappingSetType>;
+    using OmpDirectiveDataMapType = std::map<const CallInst*, DataMappingSetType>;
 
-  DeviceEnvironmentsType DeviceEnvironments;
-  InstructionSetType HostDeviceCopy;
-  InstructionSetType DeviceHostCopy;
+    DeviceEnvironmentsType DeviceEnvironments;
+    InstructionToMemCopyMapType HostDeviceCopy;
+    InstructionToMemCopyMapType DeviceHostCopy;
+    OmpDirectiveDataMapType DirectiveToDataMap;
 
+  public:
+    OmpDiagnosticsInfo();
+    //OmpDiagnosticsInfo(OmpDiagnosticsInfo &&);
+    //OmpDiagnosticsInfo &operator=(OmpDiagnosticsInfo &&);
+    ~OmpDiagnosticsInfo();
+    /// Symbolically interpret the effect of executing this OpenMP RTL. Depending on which function is called, it will inturn call the enter or exit data env function. The DirectiveToDataMap member map is accessed to use the stored information. 
+    void processOmpRTLCall(const CallInst &CI);
+    /// Interpret the effect of enter data environment, according to OpenMP semantics. It will either create a host-device memory copy or ignore the call.
+    void enterDataEnv(const Instruction &OmpCall, OmpDataMapping &MappedVar , unsigned deviceid=0);
+        //IdType ItemId, unsigned MapTypeInt, unsigned ItemSize, unsigned deviceid=0); 
+    /// Interpret the effect of exit data environment, according to OpenMP semantics. It will either create a device-host memory copy or ignore the call.
+    void exitDataEnv(const Instruction &OmpCall,  OmpDataMapping &MappedVar , unsigned deviceid=0); 
+    //void addDirectiveDataMapping(const CallInst &CI, const OmpDataMapping &DM );
+    void addDirectiveDataMapping(const CallInst &CI, const Value* V, const unsigned T, const unsigned S );
 
-public:
-  OmpDirectiveDataMapType DirectiveToDataMap;
-  OmpDiagnosticsInfo();
-  //OmpDiagnosticsInfo(OmpDiagnosticsInfo &&);
-  //OmpDiagnosticsInfo &operator=(OmpDiagnosticsInfo &&);
-  ~OmpDiagnosticsInfo();
-  void enterDataEnv(const Instruction &OmpCall, IdType ItemId, unsigned MapTypeInt, unsigned ItemSize, unsigned deviceid=0); 
-  void exitDataEnv(const Instruction &OmpCall, IdType ItemId, unsigned MapTypeInt, unsigned ItemSize, unsigned deviceid=0); 
-
-  // TODO: Add useful for client methods.
-  void print(raw_ostream &O) const;
+    std::string getName(const IdType &ID) const;
+    // TODO: Add useful for client methods.
+    void print(raw_ostream &O) const;
+    void print() const;
 };
 /// used to analyze the last written contents of every Value* within the basicblock
 class ValueFlowAtInstruction {
@@ -200,8 +211,10 @@ class ValueFlowAtInstruction {
         const Value *BaseAddrArg, const Value *SizeArg, 
         const Value *MaptTypeArg);
 };
+
 class OmpDiagnosticsLocalAnalysis {
   const Function &Func2Analyze;
+  OmpDiagnosticsInfo &OmpEnvInfo;
 
   // RTLinfoType records what each argument of the RTL calls means
   // We are only concerned about the following 4 arguments,
@@ -212,50 +225,15 @@ class OmpDiagnosticsLocalAnalysis {
       const unsigned NumVarsPos, const unsigned BaseAddrPos, 
       const unsigned SizePos, const unsigned MapTypePos );
   public : 
-    static OmpDiagnosticsInfo OmpEnvInfo;
-    OmpDiagnosticsLocalAnalysis(const Function &F): 
-      Func2Analyze(F){}
+    OmpDiagnosticsLocalAnalysis(const Function &F, OmpDiagnosticsInfo &OInfo): 
+      Func2Analyze(F), OmpEnvInfo(OInfo){}
     // TODO : make sure the order of traversal of Basicblocks is correct, preorder traversal only
     OmpDiagnosticsInfo &run();
     void print();
 };
 
-/// OmpDiagnosticsInfo wrapper for the new pass manager.
-class OmpDiagnosticsAnalysis : public AnalysisInfoMixin<OmpDiagnosticsAnalysis> {
-  friend AnalysisInfoMixin<OmpDiagnosticsAnalysis>;
-  static AnalysisKey Key;
 
-public:
-  using Result = OmpDiagnosticsInfo;
-  OmpDiagnosticsInfo& run(Function &F, FunctionAnalysisManager &AM);
-};
-
-/// Printer pass for the \c OmpDiagnosticsAnalysis results.
-class OmpDiagnosticsPrinterPass : public PassInfoMixin<OmpDiagnosticsPrinterPass> {
-  raw_ostream &OS;
-
-public:
-  explicit OmpDiagnosticsPrinterPass(raw_ostream &OS) : OS(OS) {}
-  PreservedAnalyses run(Function &F, FunctionAnalysisManager &AM);
-};
-
-/// OmpDiagnosticsInfo wrapper for the legacy pass manager
-class OmpDiagnosticsInfoWrapperPass : public FunctionPass {
-
-    OmpDiagnosticsInfo *OmpEnvInfo;
-public:
-  static char ID;
-  OmpDiagnosticsInfoWrapperPass();
-
-  const OmpDiagnosticsInfo &getResult() const { return *OmpEnvInfo; }
-
-  void print(raw_ostream &O, const Module *M) const override;
-  void getAnalysisUsage(AnalysisUsage &AU) const override;
-
-  bool runOnFunction(Function &F) override;
-};
-
-using OmpDiagnosticsGlobalInfo = std::map<const GlobalValue *, OmpDiagnosticsInfo>;
+//using OmpDiagnosticsGlobalInfo = std::map<const GlobalValue *, OmpDiagnosticsInfo>;
 
 /// This pass performs the global (interprocedural) stack safety analysis (new
 /// pass manager).
@@ -263,9 +241,15 @@ class OmpDiagnosticsGlobalAnalysis
     : public AnalysisInfoMixin<OmpDiagnosticsGlobalAnalysis> {
   friend AnalysisInfoMixin<OmpDiagnosticsGlobalAnalysis>;
   static AnalysisKey Key;
+  Module *ThisModule;
+  ModuleAnalysisManager *AnalysisManager;
 
+  void analyzeModule(OmpDiagnosticsInfo &OmpEnvInfo);
+  void analyzeFunction(const Function &F, OmpDiagnosticsInfo &OmpEnvInfo);
+  void analyzeBasicBlock(const BasicBlock &BB, OmpDiagnosticsInfo &OmpEnvInfo);
+  std::map<std::string, Function *> FuncNameMap;
 public:
-  using Result = OmpDiagnosticsGlobalInfo;
+  using Result = OmpDiagnosticsInfo; 
   Result run(Module &M, ModuleAnalysisManager &AM);
 };
 
@@ -279,23 +263,23 @@ public:
   PreservedAnalyses run(Module &M, ModuleAnalysisManager &AM);
 };
 
-/// This pass performs the global (interprocedural) stack safety analysis
-/// (legacy pass manager).
-class OmpDiagnosticsGlobalInfoWrapperPass : public ModulePass {
-  OmpDiagnosticsGlobalInfo SSI;
-
-public:
-  static char ID;
-
-  OmpDiagnosticsGlobalInfoWrapperPass();
-
-  const OmpDiagnosticsGlobalInfo &getResult() const { return SSI; }
-
-  void print(raw_ostream &O, const Module *M) const override;
-  void getAnalysisUsage(AnalysisUsage &AU) const override;
-
-  bool runOnModule(Module &M) override;
-};
+///// This pass performs the global (interprocedural) stack safety analysis
+///// (legacy pass manager).
+//class OmpDiagnosticsGlobalInfoWrapperPass : public ModulePass {
+//  OmpDiagnosticsGlobalInfo SSI;
+//
+//public:
+//  static char ID;
+//
+//  OmpDiagnosticsGlobalInfoWrapperPass();
+//
+//  const OmpDiagnosticsGlobalInfo &getResult() const { return SSI; }
+//
+//  void print(raw_ostream &O, const Module *M) const override;
+//  void getAnalysisUsage(AnalysisUsage &AU) const override;
+//
+//  bool runOnModule(Module &M) override;
+//};
 
 } // end namespace llvm
 

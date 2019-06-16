@@ -119,8 +119,31 @@ OmpDiagnosticsInfo::OmpDiagnosticsInfo() {
 //OmpDiagnosticsInfo &OmpDiagnosticsInfo::operator=(OmpDiagnosticsInfo &&) = default;
 
 
+const std::string getDebugLocStr(const Instruction & inst) {
+  const std::string invalidRet = "";//(unsigned)(-1);
+  if (!inst.getDebugLoc()) return invalidRet;
+  const DebugLoc &loc = inst.getDebugLoc();
+  if (auto *scope = dyn_cast<DIScope>(loc.getScope())){
+    auto filename = scope->getFilename();
+    return filename.str()+":"+std::to_string(loc->getLine()) ;
+  }
+  return invalidRet;
+}
+
 OmpDiagnosticsInfo::~OmpDiagnosticsInfo() = default;
 
+void OmpDiagnosticsInfo::print() const {
+
+  for (auto Iter : DirectiveToDataMap){
+    LLVM_DEBUG(dbgs()<<"\n Callinst::"<< *Iter.first );
+    for (auto &DataMapping : Iter.second ){
+      LLVM_DEBUG(dbgs()<<"\n MappedValue: "<<*DataMapping.MappedValue 
+          << " MapType ::"<<DataMapping.MapTypeInt 
+          << " MappedSectionSize ::"<<DataMapping.MappedSectionSize);
+    }
+  }
+  
+}
 void OmpDiagnosticsInfo::print(raw_ostream &O) const {
 
   for (auto Iter : DirectiveToDataMap){
@@ -135,24 +158,36 @@ void OmpDiagnosticsInfo::print(raw_ostream &O) const {
     O <<"\n =============== ";
     O << "\n Host to Device Copy:";
     for (auto Iter : HostDeviceCopy) {
-      O << "\n " << *Iter.first ;
+      O << "\n " << getDebugLocStr(*Iter.first) ;
       for (auto Id : Iter.second ){
-        O << "\t Copy:: " << *Id;
+        O << "\n Copy:: " << getName(Id.MappedValue)
+          <<"[0:"<<Id.MappedSectionSize<<"]";
       }
     }
   }
   if (DeviceHostCopy.size()){
     O << "\n Device to Host Copy:";
     for (auto Iter : DeviceHostCopy) {
-      O << "\n " << *Iter.first ;
+      O << "\n " << getDebugLocStr(*Iter.first) ;
       for (auto Id : Iter.second ){
-        O << "\t Copy:: " << *Id;
+        O << "\n Copy:: " << getName(Id.MappedValue)
+          <<"[0:"<<Id.MappedSectionSize<<"]";
       }
     }
   }
+  O <<"\n =============== \n ";
 }
 
-void OmpDiagnosticsInfo::enterDataEnv(const Instruction &OmpCall, IdType ItemId, unsigned MapTypeInt, unsigned ItemSize, unsigned DeviceId){
+
+std::string OmpDiagnosticsInfo::getName(const IdType &ID) const{
+  assert(ID->hasName());
+  return ID->getName();
+}
+    void enterDataEnv(const Instruction &OmpCall, OmpDataMapping &MappedVar , unsigned deviceid=0);
+void OmpDiagnosticsInfo::enterDataEnv(const Instruction &OmpCall,  OmpDataMapping &MappedVar ,  unsigned DeviceId){
+  IdType ItemId = MappedVar.MappedValue;
+  auto MapTypeInt = MappedVar.MapTypeInt;
+//IdType ItemId, unsigned MapTypeInt, unsigned ItemSize,
   // 1. If a corresponding list item of the original list item is not present in the device data environment,then:
   //    a) A new list item with language-specific attributes is derived from the original list item and23created in the device data environment; 
   //    b) The new list item becomes the corresponding list item of the original list item in the device25data environment;
@@ -172,11 +207,14 @@ void OmpDiagnosticsInfo::enterDataEnv(const Instruction &OmpCall, IdType ItemId,
   if  ( (DEnvMap[ItemId] == 1 || (MapTypeInt & OMP_TGT_MAPTYPE_ALWAYS)) && 
       (MapTypeInt & OMP_TGT_MAPTYPE_TO) ){
     LLVM_DEBUG(dbgs()<<" Copy Host to Device");
-    HostDeviceCopy[&OmpCall].insert(ItemId);
+    HostDeviceCopy[&OmpCall].push_back(MappedVar); //.insert(ItemId);
   }
   LLVM_DEBUG(dbgs()<<"\n Enter ItemID:"<<ItemId<<" Count :"<<DEnvMap[ItemId]);
 }
-void OmpDiagnosticsInfo::exitDataEnv(const Instruction &OmpCall, IdType ItemId, unsigned MapTypeInt, unsigned ItemSize, unsigned DeviceId){
+void OmpDiagnosticsInfo::exitDataEnv(const Instruction &OmpCall, OmpDataMapping &MappedVar ,  unsigned DeviceId){
+  IdType ItemId = MappedVar.MappedValue;
+  auto MapTypeInt = MappedVar.MapTypeInt;
+
   // 1. If themap-type is notdeleteand the corresponding list item’s reference count is finite and was not already decremented because of the effect of amapclause on the construct then:
   //  a) The corresponding list item’s reference count is decremented by one;. 
   // 2. If themap-type is delete and the corresponding list item’s reference count is finite then:
@@ -204,10 +242,27 @@ void OmpDiagnosticsInfo::exitDataEnv(const Instruction &OmpCall, IdType ItemId, 
   if (( DEnvMap[ItemId] == 0 || (MapTypeInt & OMP_TGT_MAPTYPE_ALWAYS) ) && 
       (MapTypeInt & OMP_TGT_MAPTYPE_FROM) ) {
     LLVM_DEBUG(dbgs()<<" Copy Device to Host");
-    DeviceHostCopy[&OmpCall].insert(ItemId);
+    DeviceHostCopy[&OmpCall].push_back(MappedVar);//insert(ItemId);
   }
   if (DEnvMap[ItemId] == 0) 
     DeviceEnvironments[DeviceId].erase(ItemId );
+}
+void OmpDiagnosticsInfo::processOmpRTLCall(const CallInst &CI){
+  if (!EXISTSinMap(DirectiveToDataMap, &CI)) return;
+  auto &DataMappingList = DirectiveToDataMap[&CI];
+    auto RTLInfo  = getRTLinfo(CI);
+    assert(RTLInfo != nullptr && "Not a data mapping RTL call ");
+    LLVM_DEBUG(dbgs()<<"\n EnterEnv:: "<< RTLInfo->IsEnterEnv 
+        <<" Exit:: "<<RTLInfo->IsExitEnv);
+    for (auto &MapInfo : DataMappingList) {
+    if (RTLInfo->IsEnterEnv)
+      enterDataEnv(CI, MapInfo);//.MappedValue, MapInfo.MapTypeInt, MapInfo.MappedSectionSize);
+    if (RTLInfo->IsExitEnv)
+      exitDataEnv(CI, MapInfo);//.MappedValue, MapInfo.MapTypeInt, MapInfo.MappedSectionSize);
+    }
+}
+void OmpDiagnosticsInfo::addDirectiveDataMapping(const CallInst &CI, const Value* V, const unsigned T, const unsigned S ){
+  DirectiveToDataMap[&CI].push_back(OmpDataMapping(V, T, S));
 }
 bool ValueFlowAtInstruction::getIdForValue(IdType &Id, const Value *V, const unsigned Index){
   if (!EXISTSinMap(Value2IdMap, V))
@@ -345,7 +400,7 @@ void ValueFlowAtInstruction::parseArguments(const CallInst &OmpCall, const unsig
     assert(RTLInfo != nullptr && "Not a data mapping RTL call ");
     LLVM_DEBUG(dbgs()<<"\n EnterEnv:: "<< RTLInfo->IsEnterEnv 
         <<" Exit:: "<<RTLInfo->IsExitEnv);
-    OmpEnvInfo.DirectiveToDataMap[&OmpCall].push_back(OmpDataMapping(Id2ValueMap[BaseAddrId], MapTypeInt, MappedSectionSize));
+    OmpEnvInfo.addDirectiveDataMapping(OmpCall, Id2ValueMap[BaseAddrId], MapTypeInt, MappedSectionSize);
     //MappedVarSet.push_back(OmpDataMapping(Id2ValueMap[BaseAddrId], MapTypeInt, MappedSectionSize));
     //if (RTLInfo->IsEnterEnv)
     //  OmpEnvInfo.enterDataEnv(OmpCall, Id2ValueMap[BaseAddrId], MapTypeInt, MappedSectionSize);
@@ -354,7 +409,6 @@ void ValueFlowAtInstruction::parseArguments(const CallInst &OmpCall, const unsig
   }
 }
 
-OmpDiagnosticsInfo OmpDiagnosticsLocalAnalysis::OmpEnvInfo;
 bool OmpDiagnosticsLocalAnalysis::getRTLArgsPos(const CallInst &CI, 
     unsigned &NumVarsPos, unsigned &BaseAddrPos, unsigned &SizePos, unsigned &MapTypePos){
   auto Info = getRTLinfo(CI);
@@ -398,11 +452,12 @@ void OmpDiagnosticsLocalAnalysis::analyzeRTLArguments(const CallInst &CI,
   ValueFlowAtInstruction VFA(CI, OmpEnvInfo);
   VFA.run();
   VFA.print();
-  DataMappingSetType MappedVarSet;
   VFA.parseArguments(CI, NumVars->getSExtValue(), BaseAddrArg, SizeArg, MaptTypeArg); 
   //DirectiveToDataMap[&CI] = MappedVarSet;
 }
 OmpDiagnosticsInfo &OmpDiagnosticsLocalAnalysis::run(){
+
+  LLVM_DEBUG(dbgs()<<"\n Run on func:"<<Func2Analyze.getName());
   for (auto &I : instructions(Func2Analyze)){
     //TODO: Make sure that the order of traversing the call instructions 
     //is strictly in the preorder, 
@@ -421,56 +476,71 @@ OmpDiagnosticsInfo &OmpDiagnosticsLocalAnalysis::run(){
 }
 void OmpDiagnosticsLocalAnalysis::print(){
 }
-AnalysisKey OmpDiagnosticsAnalysis::Key;
-//OmpDirectiveDataMapType OmpDiagnosticsLocalAnalysis::DirectiveToDataMap;
-
-OmpDiagnosticsInfo& OmpDiagnosticsAnalysis::run(Function &F,
-                                         FunctionAnalysisManager &AM) {
-  OmpDiagnosticsLocalAnalysis OMPD(F);//.getResult<ScalarEvolutionAnalysis>(F));
-  return OMPD.run(); 
-  //OmpDiagnosticsLocalAnalysis SSLA(F, AM.getResult<ScalarEvolutionAnalysis>(F));
-  //return SSLA.run();
-}
-
-PreservedAnalyses OmpDiagnosticsPrinterPass::run(Function &F,
-                                              FunctionAnalysisManager &AM) {
-  OS << "'omp diagnostics Local Analysis' for function '" << F.getName() << "'\n";
-  AM.getResult<OmpDiagnosticsAnalysis>(F).print(OS);
-  return PreservedAnalyses::all();
-}
-
-char OmpDiagnosticsInfoWrapperPass::ID = 0;
-
-OmpDiagnosticsInfoWrapperPass::OmpDiagnosticsInfoWrapperPass() : FunctionPass(ID), 
-  OmpEnvInfo(nullptr){
-    initializeOmpDiagnosticsInfoWrapperPassPass(*PassRegistry::getPassRegistry());
-  }
-
-void OmpDiagnosticsInfoWrapperPass::getAnalysisUsage(AnalysisUsage &AU) const {
-  AU.addRequired<ScalarEvolutionWrapperPass>();
-  AU.setPreservesAll();
-}
-
-void OmpDiagnosticsInfoWrapperPass::print(raw_ostream &O, const Module *M) const {
-  OmpEnvInfo->print(O);
-  //SSI.print(O);
-}
-
-bool OmpDiagnosticsInfoWrapperPass::runOnFunction(Function &F) {
-  OmpDiagnosticsLocalAnalysis OMPD(F);//.getResult<ScalarEvolutionAnalysis>(F));
-  OmpEnvInfo = &OMPD.run(); 
-  //OmpDiagnosticsLocalAnalysis SSLA(
-  //    F, getAnalysis<ScalarEvolutionWrapperPass>().getSE());
-  //SSI = OmpDiagnosticsInfo(SSLA.run());
-  return false;
-}
 
 AnalysisKey OmpDiagnosticsGlobalAnalysis::Key;
 
-OmpDiagnosticsGlobalInfo
+void OmpDiagnosticsGlobalAnalysis::analyzeModule(OmpDiagnosticsInfo &OmpEnvInfo){
+  LLVM_DEBUG(dbgs()<<"\n Analysis module:");
+  for (Function &Func : *ThisModule) {
+    if (!Func.hasName() || 
+        Func.isIntrinsic() ||
+        Func.isDeclaration()) continue;
+    OmpDiagnosticsLocalAnalysis FuncAnalysis(Func, OmpEnvInfo);
+    FuncAnalysis.run();
+    LLVM_DEBUG(dbgs()<<"\n Function Map::"<<Func.getName());
+    FuncNameMap[Func.getName()] = &Func;
+  }
+  OmpEnvInfo.print();
+  const std::string MainFuncName = "main";
+  if (EXISTSinMap(FuncNameMap, MainFuncName)){
+    analyzeFunction(*FuncNameMap[MainFuncName], OmpEnvInfo);
+  }
+}
+void OmpDiagnosticsGlobalAnalysis::analyzeBasicBlock(const BasicBlock &BB, OmpDiagnosticsInfo &OmpEnvInfo){
+    for (auto &I : BB){
+      if (const CallInst *Call = dyn_cast<CallInst>(&I)){
+        auto CalledFunc = Call->getCalledFunction();
+        if (!CalledFunc->hasName())
+          continue;
+        // Ignore recursive calls
+        if (CalledFunc == BB.getParent()) continue;
+        if (EXISTSinMap(FuncNameMap, CalledFunc->getName()))
+          analyzeFunction(*CalledFunc, OmpEnvInfo);
+        OmpEnvInfo.processOmpRTLCall(*Call);
+      }
+    }
+}
+void OmpDiagnosticsGlobalAnalysis::analyzeFunction(const Function &F, OmpDiagnosticsInfo &OmpEnvInfo){
+  //SmallVector<const BasicBlock*, 10> BBVisitQ;
+  std::queue<const BasicBlock*> BBVisitQ;
+  std::set<const BasicBlock*> BBVisitedSet;
+  BBVisitQ.push(&F.getEntryBlock());
+  LLVM_DEBUG(dbgs()<<"\n AnalyzeFunction : "<<F.getName());
+  // Traverse the CFG in BFS
+  while (!BBVisitQ.empty()){
+    auto VisitBB = BBVisitQ.front(); 
+    BBVisitQ.pop();
+    if (EXISTSinMap(BBVisitedSet, VisitBB))
+      continue;
+    BBVisitedSet.insert(VisitBB);
+    for (auto SuccBB = succ_begin(VisitBB); SuccBB != succ_end(VisitBB); SuccBB++){
+      BBVisitQ.push(*SuccBB);
+    }
+    analyzeBasicBlock(*VisitBB, OmpEnvInfo);
+  }
+}
+OmpDiagnosticsGlobalAnalysis::Result
 OmpDiagnosticsGlobalAnalysis::run(Module &M, ModuleAnalysisManager &AM) {
-  OmpDiagnosticsGlobalInfo result; 
-  return result;
+  //OmpDiagnosticsGlobalInfo result; 
+  ThisModule = &M;
+  AnalysisManager = &AM;
+  OmpDiagnosticsInfo OmpEnvInfo;//new OmpDiagnosticsInfo;
+  LLVM_DEBUG(dbgs()<<"\n Analysis module:");
+  analyzeModule(OmpEnvInfo);
+
+//  OmpDiagnosticsLocalAnalysis OMPD(F);//.getResult<ScalarEvolutionAnalysis>(F));
+//  OmpEnvInfo = &OMPD.run(); 
+  //return result;
   //FunctionAnalysisManager &FAM =
   //    AM.getResult<FunctionAnalysisManagerModuleProxy>(M).getManager();
 
@@ -479,62 +549,39 @@ OmpDiagnosticsGlobalAnalysis::run(Module &M, ModuleAnalysisManager &AM) {
   //      return FAM.getResult<OmpDiagnosticsAnalysis>(F);
   //    });
   //return SSDFA.run();
+  return OmpEnvInfo;
 }
 
 PreservedAnalyses OmpDiagnosticsGlobalPrinterPass::run(Module &M,
                                                     ModuleAnalysisManager &AM) {
   OS << "'omp diagnostics Analysis' for module '" << M.getName() << "'\n";
-  //print(AM.getResult<OmpDiagnosticsGlobalAnalysis>(M), OS, M);
+  OmpDiagnosticsInfo Res = AM.getResult<OmpDiagnosticsGlobalAnalysis>(M);
+  Res.print(OS);
   return PreservedAnalyses::all();
 }
 
-char OmpDiagnosticsGlobalInfoWrapperPass::ID = 0;
 
-OmpDiagnosticsGlobalInfoWrapperPass::OmpDiagnosticsGlobalInfoWrapperPass()
-    : ModulePass(ID) {
-  initializeOmpDiagnosticsGlobalInfoWrapperPassPass(
-      *PassRegistry::getPassRegistry());
-}
-
-void OmpDiagnosticsGlobalInfoWrapperPass::print(raw_ostream &O,
-                                             const Module *M) const {
-  //::print(SSI, O, *M);
-}
-
-void OmpDiagnosticsGlobalInfoWrapperPass::getAnalysisUsage(
-    AnalysisUsage &AU) const {
-  AU.addRequired<OmpDiagnosticsInfoWrapperPass>();
-}
-
-bool OmpDiagnosticsGlobalInfoWrapperPass::runOnModule(Module &M) {
-  //OmpDiagnosticsDataFlowAnalysis SSDFA(
-  //    M, [this](Function &F) -> const OmpDiagnosticsInfo & {
-  //      return getAnalysis<OmpDiagnosticsInfoWrapperPass>(F).getResult();
-  //    });
-  //SSI = SSDFA.run();
-  std::map<std::string, Function *> FuncNameMap;
-  for (Function &Func : M) {
-    if (!Func.hasName() || 
-        Func.isIntrinsic() ||
-        Func.isDeclaration()) continue;
-    FuncNameMap[Func.getName()] = &Func;
-  }
-  if (EXISTSinMap(FuncNameMap, "main")){
-  }
-  return false;
-}
+//bool OmpDiagnosticsGlobalInfoWrapperPass::runOnModule(Module &M) {
+//  //OmpDiagnosticsDataFlowAnalysis SSDFA(
+//  //    M, [this](Function &F) -> const OmpDiagnosticsInfo & {
+//  //      return getAnalysis<OmpDiagnosticsInfoWrapperPass>(F).getResult();
+//  //    });
+//  //SSI = SSDFA.run();
+////bool OmpDiagnosticsInfoWrapperPass::runOnFunction(Function &F) {
+////  OmpDiagnosticsLocalAnalysis OMPD(F);//.getResult<ScalarEvolutionAnalysis>(F));
+////  OmpEnvInfo = &OMPD.run(); 
+//  std::map<std::string, Function *> FuncNameMap;
+//  for (Function &Func : M) {
+//    if (!Func.hasName() || 
+//        Func.isIntrinsic() ||
+//        Func.isDeclaration()) continue;
+//    FuncNameMap[Func.getName()] = &Func;
+//  }
+//  if (EXISTSinMap(FuncNameMap, "main")){
+//  }
+//  return false;
+//}
 
 static const char LocalPassArg[] = "omp-diagnostics-local";
 static const char LocalPassName[] = "omp diagnostics Local Analysis";
-INITIALIZE_PASS_BEGIN(OmpDiagnosticsInfoWrapperPass, LocalPassArg, LocalPassName,
-                      false, true)
-INITIALIZE_PASS_DEPENDENCY(ScalarEvolutionWrapperPass)
-INITIALIZE_PASS_END(OmpDiagnosticsInfoWrapperPass, LocalPassArg, LocalPassName,
-                    false, true)
-
 static const char GlobalPassName[] = "omp diagnostics Analysis";
-INITIALIZE_PASS_BEGIN(OmpDiagnosticsGlobalInfoWrapperPass, DEBUG_TYPE,
-                      GlobalPassName, false, false)
-INITIALIZE_PASS_DEPENDENCY(OmpDiagnosticsInfoWrapperPass)
-INITIALIZE_PASS_END(OmpDiagnosticsGlobalInfoWrapperPass, DEBUG_TYPE,
-                    GlobalPassName, false, false)
