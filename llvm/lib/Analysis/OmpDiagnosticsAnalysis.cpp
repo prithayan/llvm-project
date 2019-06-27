@@ -63,9 +63,12 @@ void OmpDiagnosticsInfoWrapperPass::print(raw_ostream &O, const Module *M) const
 }
 
 bool OmpDiagnosticsInfoWrapperPass::runOnFunction(Function &F) {
-  //OmpDiagnosticsLocalAnalysis SSLA(
-  //    F, getAnalysis<ScalarEvolutionWrapperPass>().getSE());
-  //SSI = OmpDiagnosticsInfo(SSLA.run());
+  for (auto I = inst_begin(F) , E = inst_end(F); I != E ; I++){
+    Instruction &Instr = *I;
+    if (dyn_cast<StoreInst>(&Instr)){
+    }
+    LLVM_DEBUG(dbgs()<<"\n Instruction::"<<*I);
+  }
   return false;
 }
 
