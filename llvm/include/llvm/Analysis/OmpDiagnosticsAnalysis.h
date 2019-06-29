@@ -15,6 +15,12 @@
 
 #include "llvm/IR/PassManager.h"
 #include "llvm/Pass.h"
+#include "llvm/Analysis/ScalarEvolutionExpressions.h"
+#include "llvm/IR/CallSite.h"
+#include "llvm/IR/InstIterator.h"
+#include "llvm/IR/IntrinsicInst.h"
+#include "llvm/Support/raw_ostream.h"
+#include <vector>
 
 namespace llvm {
 
@@ -42,7 +48,9 @@ class OmpDiagnosticsAnalysis : public AnalysisInfoMixin<OmpDiagnosticsAnalysis> 
   friend AnalysisInfoMixin<OmpDiagnosticsAnalysis>;
   static AnalysisKey Key;
 
-public:
+  int getSCEV_Max_value(std::vector<const SCEV *> &simplifySCEV, std::string &maxSCEV_string, const bool getMax=true);
+  ScalarEvolution *SE;
+  public:
   using Result = OmpDiagnosticsInfo;
   OmpDiagnosticsInfo run(Function &F, FunctionAnalysisManager &AM);
 };
@@ -56,63 +64,6 @@ public:
   PreservedAnalyses run(Function &F, FunctionAnalysisManager &AM);
 };
 
-/// OmpDiagnosticsInfo wrapper for the legacy pass manager
-class OmpDiagnosticsInfoWrapperPass : public FunctionPass {
-  OmpDiagnosticsInfo SSI;
-
-public:
-  static char ID;
-  OmpDiagnosticsInfoWrapperPass();
-
-  const OmpDiagnosticsInfo &getResult() const { return SSI; }
-
-  void print(raw_ostream &O, const Module *M) const override;
-  void getAnalysisUsage(AnalysisUsage &AU) const override;
-
-  bool runOnFunction(Function &F) override;
-};
-
-using OmpDiagnosticsGlobalInfo = std::map<const GlobalValue *, OmpDiagnosticsInfo>;
-
-/// This pass performs the global (interprocedural) stack safety analysis (new
-/// pass manager).
-class OmpDiagnosticsGlobalAnalysis
-    : public AnalysisInfoMixin<OmpDiagnosticsGlobalAnalysis> {
-  friend AnalysisInfoMixin<OmpDiagnosticsGlobalAnalysis>;
-  static AnalysisKey Key;
-
-public:
-  using Result = OmpDiagnosticsGlobalInfo;
-  Result run(Module &M, ModuleAnalysisManager &AM);
-};
-
-/// Printer pass for the \c OmpDiagnosticsGlobalAnalysis results.
-class OmpDiagnosticsGlobalPrinterPass
-    : public PassInfoMixin<OmpDiagnosticsGlobalPrinterPass> {
-  raw_ostream &OS;
-
-public:
-  explicit OmpDiagnosticsGlobalPrinterPass(raw_ostream &OS) : OS(OS) {}
-  PreservedAnalyses run(Module &M, ModuleAnalysisManager &AM);
-};
-
-/// This pass performs the global (interprocedural) stack safety analysis
-/// (legacy pass manager).
-class OmpDiagnosticsGlobalInfoWrapperPass : public ModulePass {
-  OmpDiagnosticsGlobalInfo SSI;
-
-public:
-  static char ID;
-
-  OmpDiagnosticsGlobalInfoWrapperPass();
-
-  const OmpDiagnosticsGlobalInfo &getResult() const { return SSI; }
-
-  void print(raw_ostream &O, const Module *M) const override;
-  void getAnalysisUsage(AnalysisUsage &AU) const override;
-
-  bool runOnModule(Module &M) override;
-};
 
 } // end namespace llvm
 
