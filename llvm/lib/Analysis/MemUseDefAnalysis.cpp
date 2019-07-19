@@ -370,13 +370,22 @@ bool MemoryLdStMapClass::isMalloc(ConstInstrPtr LdSt) const {
   return false;
 }
 
+  bool MemoryLdStMapClass::filterLoadOfAddress(ConstInstrPtr Ld)const {
+    if (auto L = dyn_cast<LoadInst> (Ld)){
+      if (L->getType()->isPointerTy())
+        return true;
+    }
+    return false;
+  }
 ConstValuePtr
 MemoryLdStMapClass::getMemoryForLdSt(ConstInstrPtr LdSt) const {
   LLVM_DEBUG(dbgs() << "\n Looking for memory for instr:" << *LdSt);
+  if (filterLoadOfAddress(LdSt)) 
+    return nullptr;
   isMalloc(LdSt);
   auto EntryIter = LdStPointsToMap.find(LdSt);
   if (EntryIter == LdStPointsToMap.end()) {
-  LLVM_DEBUG(dbgs() << "\n Returning nullptr:");
+    LLVM_DEBUG(dbgs() << "\n Returning nullptr:");
     return nullptr;
   }
   LLVM_DEBUG(dbgs() << "\n Returning Mem::"<<*EntryIter->second);
@@ -605,7 +614,18 @@ void MemoryLdStMapClass::print(raw_ostream &O) {
   }
 }
 
+
+  SetOfInstructions& MemoryLdStMapClass::getFuncGeneratingDefs(const Function *F) {
+    return FuncGeneratingDefs[F];
+  }
+  void MemoryLdStMapClass::addFuncGeneratingDefs(SetOfInstructions &ReachingDefs){
+    if (ReachingDefs.empty()) return;
+    auto I = ReachingDefs.begin();
+    auto F = (*I)->getFunction();
+    FuncGeneratingDefs[F].insert(ReachingDefs.begin(), ReachingDefs.end());
+  }
 void MemoryLdStMapClass::print() {
+  errs()<<"\n Printing usedef::\n";
   for (auto Iter : MemUseToReachingDefsMap) {
     auto MemUseInstr = Iter.first;
     if (EXISTSinMap(LdStPointsToMap, MemUseInstr)) {
@@ -1085,7 +1105,8 @@ void InterproceduralMemDFA::updateReachingDefsOfBB(BasicBlock &BB, bool &NewDefs
 
 SetOfInstructions&  InterproceduralMemDFA::getFuncGeneratingDefs(Function &CalledF){
   auto MemInfo = FuncToMemInfo[&CalledF];
-  return MemInfo->getFuncGeneratingDefs();
+  return MemInfo->getFuncGeneratingDefs(&CalledF);
+  //return MemInfo->getFuncGeneratingDefs();
 }
 
 void InterproceduralMemDFA::run(Function &F){
@@ -1132,6 +1153,7 @@ void InterproceduralMemDFA::run(Function &F){
     LLVM_DEBUG(dbgs()<<"\n Converged :?"<<NewDefsAdded);
     break;
   }while(NewDefsAdded);
+  FuncToMemInfo[&F]->print();
 }
 
 void MemUseDefGlobalAnalysis::analyzeBasicBlock(const BasicBlock &BB, Result &MemUseDefInfo) {

@@ -114,6 +114,7 @@ class MemoryLdStMapClass {
   /// accesses, then set \p Mem. Only the limited set of instructions are
   /// currently handled.
   bool backtrackFindMemoryInstr(ConstValuePtr Instr, ConstValuePtr &Mem);
+  bool filterLoadOfAddress(ConstInstrPtr Ld) const ;
 
 public:
 
@@ -123,10 +124,8 @@ public:
 SetOfInstructions &getUsersOfCall(const Instruction &Call);
   /// \p CallInstructions is a set of call instructions that reach the user. This function iterates over the set of call instruciton to add the user to each of the call instruciotns.
   void addReachingCall(Instruction &User, SetOfInstructions &CallInstructions);
-  SetOfInstructions& getFuncGeneratingDefs() {return FuncGeneratingDefs;}
-  void addFuncGeneratingDefs(SetOfInstructions &ReachingDefs){
-    FuncGeneratingDefs.insert(ReachingDefs.begin(), ReachingDefs.end());
-  }
+  SetOfInstructions& getFuncGeneratingDefs(const Function *F);// {return FuncGeneratingDefs;}
+  void addFuncGeneratingDefs(SetOfInstructions &ReachingDefs);
   /// Propagate all the defs in the set \p ReachingDefs, to all the BasicBlocks (within the function).
   bool propagateReachingDefsIntoFunc(SetOfInstructions &ReachingDefs);
   
