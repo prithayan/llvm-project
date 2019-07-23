@@ -65,6 +65,21 @@ void OmpDiagnosticsInfo::print() const {
   }
 }
 
+void OmpDiagnosticsInfo::printCopies(const InstructionToMemCopyMapType &ItoCopy, const std::string &CopyKind, raw_ostream &O) const{
+  for (auto Iter : ItoCopy) {
+    O << "\n " << getDebugLocStr(*Iter.first);
+    std::set<std::string> PrintedValNames;
+    for (auto Id : Iter.second) {
+      if (filterId(Id.MappedValue)) continue;
+      auto ValName = getName(Id.MappedValue);
+      if (EXISTSinMap(PrintedValNames, ValName)) continue;
+      PrintedValNames.insert(ValName);
+      O << "\n "<< CopyKind << " "<< ValName
+        << "[0:" << (Id.MappedSectionSize >0 ? Id.MappedSectionSize: -1) << "]";
+    }
+  }
+}
+
 void OmpDiagnosticsInfo::print(raw_ostream &O) const {
 
   for (auto Iter : DirectiveToDataMap) {
@@ -79,40 +94,47 @@ void OmpDiagnosticsInfo::print(raw_ostream &O) const {
   if (AllocatedItems.size()) {
     O << "\n =============== ";
     O << "\n Allocated on Device:";
-    for (auto Iter : AllocatedItems) {
-      O << "\n " << getDebugLocStr(*Iter.first);
-      for (auto Id : Iter.second) {
-        if (filterId(Id.MappedValue)) continue;
-        O << "\n Alloc:: " << getName(Id.MappedValue)
-          << "[0:" << Id.MappedSectionSize << "]";
-      }
-    }
+    printCopies(AllocatedItems, "Alloc", O);
+    //for (auto Iter : AllocatedItems) {
+    //  O << "\n " << getDebugLocStr(*Iter.first);
+    //  std::set<std::string> PrintedValNames;
+    //  for (auto Id : Iter.second) {
+    //    if (filterId(Id.MappedValue)) continue;
+    //    auto ValName = getName(Id.MappedValue);
+    //    if (EXISTSinMap(PrintedValNames, ValName)) continue;
+    //    PrintedValNames.insert(ValName);
+    //    O << "\n Alloc:: " << ValName
+    //      << "[0:" << Id.MappedSectionSize << "]";
+    //  }
+    //}
     O << "\n =============== \n ";
   }
   if (HostDeviceCopy.size()) {
     O << "\n =============== ";
     O << "\n Host to Device Copy:";
-    for (auto Iter : HostDeviceCopy) {
-      O << "\n " << getDebugLocStr(*Iter.first);
-      for (auto Id : Iter.second) {
-        if (filterId(Id.MappedValue)) continue;
-        O << "\n Copy:: " << getName(Id.MappedValue)
-          << "[0:" << Id.MappedSectionSize << "]";
-      }
-    }
+    printCopies(HostDeviceCopy, "Copy", O);
+    //for (auto Iter : HostDeviceCopy) {
+    //  O << "\n " << getDebugLocStr(*Iter.first);
+    //  for (auto Id : Iter.second) {
+    //    if (filterId(Id.MappedValue)) continue;
+    //    O << "\n Copy:: " << getName(Id.MappedValue)
+    //      << "[0:" << Id.MappedSectionSize << "]";
+    //  }
+    //}
     O << "\n =============== \n ";
   }
   if (DeviceHostCopy.size()) {
     O << "\n =============== \n ";
     O << "\n Device to Host Copy:";
-    for (auto Iter : DeviceHostCopy) {
-      O << "\n " << getDebugLocStr(*Iter.first);
-      for (auto Id : Iter.second) {
-        if (filterId(Id.MappedValue)) continue;
-        O << "\n Copy:: " << getName(Id.MappedValue)
-          << "[0:" << Id.MappedSectionSize << "]";
-      }
-    }
+    printCopies(DeviceHostCopy, "Copy", O);
+    //for (auto Iter : DeviceHostCopy) {
+    //  O << "\n " << getDebugLocStr(*Iter.first);
+    //  for (auto Id : Iter.second) {
+    //    if (filterId(Id.MappedValue)) continue;
+    //    O << "\n Copy:: " << getName(Id.MappedValue)
+    //      << "[0:" << Id.MappedSectionSize << "]";
+    //  }
+    //}
   }
   O << "\n =============== \n ";
   O << "\n Done \n";
@@ -120,11 +142,25 @@ void OmpDiagnosticsInfo::print(raw_ostream &O) const {
 
 bool OmpDiagnosticsInfo::filterId(const IdType &ID) const{
   auto IdName = getName(ID);
+  if (isa<ConstantData>(ID)) return true;
   if (IdName == "" || IdName.find(".sroa.") != std::string::npos) return true;
   return false;
 }
 
 std::string OmpDiagnosticsInfo::getName(const IdType &ID) const {
+  if (EXISTSinMap(Value2NameMap, ID)){
+    const std::string S = (Value2NameMap.find(ID))->second;
+    return S;
+  }
+  if (auto G = dyn_cast<GlobalVariable>(ID)){
+    SmallVector< DIGlobalVariableExpression *,1> GVs;
+    G->getDebugInfo (GVs) ;
+    for (DIGlobalVariableExpression *DIG : GVs){
+      DIGlobalVariable *Gvariable = DIG->getVariable();
+      if (Gvariable != nullptr)
+      return Gvariable->getDisplayName();
+    }
+  }
   if (!ID->hasName())
     return "";
   return ID->getName();
@@ -241,7 +277,11 @@ void OmpDiagnosticsInfo::processOmpRTLCall(const CallInst &CI) {
                                 //MapInfo.MappedSectionSize);
   }
 }
-
+void OmpDiagnosticsInfo::insertNameForVal(const Value *From, const Value *To){
+    if (EXISTSinMap(Value2NameMap,From)){
+      Value2NameMap[To] = Value2NameMap[From];
+    }
+}
 void OmpDiagnosticsInfo::insertNameForVal(const Value* V, const std::string &Name) {
     LLVM_DEBUG(dbgs()<<"\n Val::"<<*V<<" name::"<<Name);
     Value2NameMap[V] = Name;
@@ -427,12 +467,19 @@ void ValueFlowAtInstruction::updateInstr(const Instruction &ValuesAtInstruction)
     LLVM_DEBUG(dbgs()<<"\n bitcast:"<<getIdForValue(Src));
     LLVM_DEBUG(dbgs()<<"\n bitcast:"<<getIdForValue(I));
     ValueFlowMap[getIdForValue(I)] = getIdForValue(Src);
+    OmpEnvInfo.insertNameForVal(Src, I);
   } else if (isa<AllocaInst>(I) ){
     //ValueFlowMap[getIdForValue(I)] = 0;
   } else if (const DbgDeclareInst *DbgI = dyn_cast<DbgDeclareInst>(I)) {
   } else if (const DbgValueInst *DbgI = dyn_cast<DbgValueInst>(I)) {
     if (DbgI->getValue() != nullptr) {
-      OmpEnvInfo.insertNameForVal(DbgI->getValue(),DbgI->getVariable()->getName());
+      auto IRValue = DbgI->getValue();
+      OmpEnvInfo.insertNameForVal(IRValue,DbgI->getVariable()->getName());
+      if (auto I = dyn_cast<Instruction>(IRValue)){
+        if (I->isCast()){
+          OmpEnvInfo.insertNameForVal(I->getOperand(0),DbgI->getVariable()->getName());
+        }
+      }
       //Value2NameMap[DbgI->getValue()] =  DbgI->getVariable()->getName();
     }
   }
