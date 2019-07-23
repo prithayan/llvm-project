@@ -26,6 +26,7 @@
 
 namespace llvm {
 
+using namespace llvm;
 // Copied the enum for map type from openmp/libomptarget/include/omptarget.h
 // TODO: Can we include the above file ?
 enum tgt_map_type {
@@ -121,7 +122,7 @@ RTL2infoMapType TargetRTLMap = {
 /// The Value* that is mapped, the map type, and the array section size.
 struct OmpDataMapping {
   const Value *MappedValue;
-  const unsigned MapTypeInt;
+   unsigned MapTypeInt;
   const unsigned MappedSectionSize;
   OmpDataMapping(const Value *V, const unsigned T, const unsigned S)
       : MappedValue(V), MapTypeInt(T), MappedSectionSize(S) {}
@@ -154,12 +155,23 @@ private:
 
   /// Contains the reference count of every mapped  variable.
   DeviceEnvironmentsType DeviceEnvironments;
+  InstructionToMemCopyMapType AllocatedItems;
   /// The map of Omp RTL calls to the Value that is copied from host to device.
   InstructionToMemCopyMapType HostDeviceCopy;
   /// The map of Omp RTL calls to the Value that is copied from device to host.
   InstructionToMemCopyMapType DeviceHostCopy;
   /// Map of Omp RTL to the {Value*, MapType, and Array section size}.
   OmpDirectiveDataMapType DirectiveToDataMap;
+
+  std::map<const Value* , std::string> Value2NameMap;
+
+  bool alreadyInserted(DataMappingSetType &DM, OmpDataMapping &I){
+    for (auto D : DM){
+      if (D.MappedValue == I.MappedValue)
+        return true;
+    }
+    return false;
+  }
 
 public:
   OmpDiagnosticsInfo();
@@ -186,10 +198,12 @@ public:
   void addDirectiveDataMapping(const CallInst &CI, const Value *V,
                                const unsigned T, const unsigned S);
 
+  bool filterId(const IdType &ID) const;
   std::string getName(const IdType &ID) const;
   // TODO: Add useful for client methods.
   void print(raw_ostream &O) const;
   void print() const;
+  void insertNameForVal(const Value* V, const std::string &Name) ;
 };
 
 /// Used to analyze the last written contents of every Value* within the
@@ -198,10 +212,16 @@ public:
 class ValueFlowAtInstruction {
 public:
   using IdType = unsigned;
-  using VectorOfIdsType = std::vector<IdType>;
-  using Value2IdMapType = std::map<const Value *, VectorOfIdsType>;
-  using ValueFlowMapType = std::map<IdType, IdType>;
+  using ValueType = const Value*;
+  using VectorOfIdsType = std::map<unsigned, IdType>;
+  using VectorOfValuesType = std::vector<ValueType>;
+  //using AddressContentsdMapType = std::map<const Value *, VectorOfIdsType>;
+  //using ValueFlowMapType = std::map<IdType, IdType>;
+  //using Id2ValueMapType = std::map<IdType, const Value*>;//std::vector<const Value *>;
   using Id2ValueMapType = std::vector<const Value *>;
+  using Value2IdMapType = std::map<const Value*, VectorOfIdsType >;//std::vector<const Value *>;
+  //using ValueFlowMapType = std::map<IdType, VectorOfIdsType>;
+  using ValueFlowMapType = std::map<IdType, IdType>;
 
 private:
   // This is a map from a value to an array of Ids,
@@ -209,8 +229,9 @@ private:
   // corresponding offset from the Value,
   // So, A->[8,9,10], means,
   // A[0] has an id of 8, A[1] of 9 and so on.
-  Value2IdMapType Value2IdMap;
+  //AddressContentsdMapType Address2ContentMap;
   Id2ValueMapType Id2ValueMap;
+  Value2IdMapType Value2IdMap;
   // ValueFlowMap is used to store Identifiers whose contents are same
   // entry maybe a pointer, and ValueFlowMap[Ptr1] = Ptr2 means, both Ptr1 and
   // Ptr2 point to same address ValueFlowMap[Addres] = V, Means that the
@@ -218,17 +239,24 @@ private:
   // Address1 is a double pointer, and contains Address2
   ValueFlowMapType ValueFlowMap;
   // AddresContentType AddresContent;
-  const Instruction &ValuesAtInstruction;
+  //const Instruction *ValuesAtInstruction;
   OmpDiagnosticsInfo &OmpEnvInfo;
-  IdType getIdForValue(const Value *V, const unsigned Index = 0);
-  bool getIdForValue(IdType &Id, const Value *V, const unsigned Index);
-  void addAlias(const Value *, const Value *, unsigned Index = 0);
 
+  IdType getIdForValue(const Value *V, const unsigned Index = 0);
+  //bool getIdForValue(IdType &Id, const Value *V, const unsigned Index);
+  //void addAlias(const Value *, const Value *, unsigned Index = 0);
+  bool isMemory(ValueType V) ;
+  void getValueForId(IdType Id, ValueType &Val, unsigned &Index );
+
+bool getGep(const Value *GEP, ValueType &PtrOp, unsigned &Index);
 public:
-  ValueFlowAtInstruction(const Instruction &I, OmpDiagnosticsInfo &O)
-      : ValuesAtInstruction(I), OmpEnvInfo(O) {}
-  void run();
+  ValueFlowAtInstruction(OmpDiagnosticsInfo &O)
+      : OmpEnvInfo(O) {Id2ValueMap.resize(1);}
+  //ValueFlowAtInstruction(const Instruction &I, OmpDiagnosticsInfo &O)  : ValuesAtInstruction(&I), OmpEnvInfo(O) {}
+  void updateInstr(const Instruction &ValuesAtInstruction);
+  //void run(const Instruction &ValuesAtInstruction);
   void print();
+unsigned get_BaseElementTypeSize(const Type *eType) const;
   void parseArguments(const CallInst &, const unsigned NumVars,
                       const Value *BaseAddrArg, const Value *SizeArg,
                       const Value *MaptTypeArg);
@@ -249,7 +277,7 @@ class OmpDiagnosticsLocalAnalysis {
                      unsigned &MapTypePos);
   void analyzeRTLArguments(const CallInst &CI, const unsigned NumVarsPos,
                            const unsigned BaseAddrPos, const unsigned SizePos,
-                           const unsigned MapTypePos);
+                           const unsigned MapTypePos,ValueFlowAtInstruction &VFA);
 
 public:
   /// Updates the \p OInfo, with the mapping informa

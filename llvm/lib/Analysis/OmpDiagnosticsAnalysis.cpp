@@ -64,6 +64,7 @@ void OmpDiagnosticsInfo::print() const {
     }
   }
 }
+
 void OmpDiagnosticsInfo::print(raw_ostream &O) const {
 
   for (auto Iter : DirectiveToDataMap) {
@@ -75,32 +76,57 @@ void OmpDiagnosticsInfo::print(raw_ostream &O) const {
                         << DataMapping.MappedSectionSize);
     }
   }
+  if (AllocatedItems.size()) {
+    O << "\n =============== ";
+    O << "\n Allocated on Device:";
+    for (auto Iter : AllocatedItems) {
+      O << "\n " << getDebugLocStr(*Iter.first);
+      for (auto Id : Iter.second) {
+        if (filterId(Id.MappedValue)) continue;
+        O << "\n Alloc:: " << getName(Id.MappedValue)
+          << "[0:" << Id.MappedSectionSize << "]";
+      }
+    }
+    O << "\n =============== \n ";
+  }
   if (HostDeviceCopy.size()) {
     O << "\n =============== ";
     O << "\n Host to Device Copy:";
     for (auto Iter : HostDeviceCopy) {
       O << "\n " << getDebugLocStr(*Iter.first);
       for (auto Id : Iter.second) {
+        if (filterId(Id.MappedValue)) continue;
         O << "\n Copy:: " << getName(Id.MappedValue)
           << "[0:" << Id.MappedSectionSize << "]";
       }
     }
+    O << "\n =============== \n ";
   }
   if (DeviceHostCopy.size()) {
+    O << "\n =============== \n ";
     O << "\n Device to Host Copy:";
     for (auto Iter : DeviceHostCopy) {
       O << "\n " << getDebugLocStr(*Iter.first);
       for (auto Id : Iter.second) {
+        if (filterId(Id.MappedValue)) continue;
         O << "\n Copy:: " << getName(Id.MappedValue)
           << "[0:" << Id.MappedSectionSize << "]";
       }
     }
   }
   O << "\n =============== \n ";
+  O << "\n Done \n";
+}
+
+bool OmpDiagnosticsInfo::filterId(const IdType &ID) const{
+  auto IdName = getName(ID);
+  if (IdName == "" || IdName.find(".sroa.") != std::string::npos) return true;
+  return false;
 }
 
 std::string OmpDiagnosticsInfo::getName(const IdType &ID) const {
-  assert(ID->hasName());
+  if (!ID->hasName())
+    return "";
   return ID->getName();
 }
 void enterDataEnv(const Instruction &OmpCall, OmpDataMapping &MappedVar,
@@ -138,7 +164,13 @@ void OmpDiagnosticsInfo::enterDataEnv(const Instruction &OmpCall,
   if ((DEnvMap[ItemId] == 1 || (MapTypeInt & OMP_TGT_MAPTYPE_ALWAYS)) &&
       (MapTypeInt & OMP_TGT_MAPTYPE_TO)) {
     LLVM_DEBUG(dbgs() << " Copy Host to Device");
+    if (!alreadyInserted(AllocatedItems[&OmpCall], MappedVar))
     HostDeviceCopy[&OmpCall].push_back(MappedVar); //.insert(ItemId);
+  } else if (DEnvMap[ItemId] == 1){
+
+    LLVM_DEBUG(dbgs() << " Allocated to Device");
+    if (!alreadyInserted(AllocatedItems[&OmpCall], MappedVar))
+      AllocatedItems[&OmpCall].push_back(MappedVar); //.insert(ItemId);
   }
   LLVM_DEBUG(dbgs() << "\n Enter ItemID:" << ItemId
                     << " Count :" << DEnvMap[ItemId]);
@@ -182,6 +214,7 @@ void OmpDiagnosticsInfo::exitDataEnv(const Instruction &OmpCall,
   if ((DEnvMap[ItemId] == 0 || (MapTypeInt & OMP_TGT_MAPTYPE_ALWAYS)) &&
       (MapTypeInt & OMP_TGT_MAPTYPE_FROM)) {
     LLVM_DEBUG(dbgs() << " Copy Device to Host");
+    if (!alreadyInserted(AllocatedItems[&OmpCall], MappedVar))
     DeviceHostCopy[&OmpCall].push_back(MappedVar); // insert(ItemId);
   }
   if (DEnvMap[ItemId] == 0)
@@ -194,8 +227,12 @@ void OmpDiagnosticsInfo::processOmpRTLCall(const CallInst &CI) {
   auto RTLInfo = getRTLinfo(CI);
   assert(RTLInfo != nullptr && "Not a data mapping RTL call ");
   LLVM_DEBUG(dbgs() << "\n EnterEnv:: " << RTLInfo->IsEnterEnv
-                    << " Exit:: " << RTLInfo->IsExitEnv);
+                    << " Exit:: " << RTLInfo->IsExitEnv
+                    << " Call::"<< CI);
+  bool isUpdate =  (CI.getCalledFunction()->getName().find("udpate") != std::string::npos);
   for (auto &MapInfo : DataMappingList) {
+    if (isUpdate)
+      MapInfo.MapTypeInt = MapInfo.MapTypeInt & OMP_TGT_MAPTYPE_ALWAYS;
     if (RTLInfo->IsEnterEnv)
       enterDataEnv(CI, MapInfo); //.MappedValue, MapInfo.MapTypeInt,
                                  //MapInfo.MappedSectionSize);
@@ -204,101 +241,298 @@ void OmpDiagnosticsInfo::processOmpRTLCall(const CallInst &CI) {
                                 //MapInfo.MappedSectionSize);
   }
 }
+
+void OmpDiagnosticsInfo::insertNameForVal(const Value* V, const std::string &Name) {
+    LLVM_DEBUG(dbgs()<<"\n Val::"<<*V<<" name::"<<Name);
+    Value2NameMap[V] = Name;
+  }
 void OmpDiagnosticsInfo::addDirectiveDataMapping(const CallInst &CI,
                                                  const Value *V,
                                                  const unsigned T,
                                                  const unsigned S) {
   DirectiveToDataMap[&CI].push_back(OmpDataMapping(V, T, S));
 }
-bool ValueFlowAtInstruction::getIdForValue(IdType &Id, const Value *V,
-                                           const unsigned Index) {
-  if (!EXISTSinMap(Value2IdMap, V))
-    return false;
-  Id = Value2IdMap[V].at(Index);
-  return true;
-}
+//bool ValueFlowAtInstruction::getIdForValue(IdType &Id, const Value *V,
+//                                           const unsigned Index) {
+//  if (!EXISTSinMap(Address2ContentMap, V) || (Address2ContentMap[V].size() <= Index))
+//    return false;
+//  Id = Address2ContentMap[V].at(Index);
+//  return true;
+//}
+
 ValueFlowAtInstruction::IdType
 ValueFlowAtInstruction::getIdForValue(const Value *V, const unsigned Index) {
-  static unsigned IdCounter = 0;
-  if (EXISTSinMap(Value2IdMap, V))
-    if (Value2IdMap[V].size() > Index)
-      return Value2IdMap[V][Index];
-  // Now, create an id for all the entries till Index
-  // The following loop is required, so that we can
-  // create an entry for Value2IdMap[V][2] even before the entry for
-  // Value2IdMap[V][0] exists If the Size is less than Index+1, then create an
-  // entry for all the elements, Till Index, and assign a new Id to them
-  while (Value2IdMap[V].size() < (Index + 1)) {
-    // Last element at [index]
-    Value2IdMap[V].push_back(IdCounter++);
-    Id2ValueMap.push_back(V);
+  if (!EXISTSinMap(Value2IdMap, V) || !EXISTSinMap(Value2IdMap[V], Index)){
+    
+      // Insert a new entry, get the last Id. It is size +1 , to make sure the 0th entry is always empty, for unkown Ids.
+      auto NewId = Id2ValueMap.size();
+      Value2IdMap[V][Index] = NewId;
+      Id2ValueMap.resize(NewId+1);
+      Id2ValueMap[NewId] = V;
+    }
+    LLVM_DEBUG(dbgs()<<"\n Id :"<<Value2IdMap[V][Index]<<" for value: "<<*V);
+    return Value2IdMap[V][Index];
   }
-  // Now size = Index+1
-  return Value2IdMap[V][Index];
+  //static unsigned IdCounter = 0;
+  //if (EXISTSinMap(Address2ContentMap, V))
+  //  if (Address2ContentMap[V].size() > Index)
+  //    return Address2ContentMap[V][Index];
+  //// Now, create an id for all the entries till Index
+  //// The following loop is required, so that we can
+  //// create an entry for Address2ContentMap[V][2] even before the entry for
+  //// Address2ContentMap[V][0] exists If the Size is less than Index+1, then create an
+  //// entry for all the elements, Till Index, and assign a new Id to them
+  //while (Index >= Address2ContentMap[V].size() ) {
+  //  // Last element at [index]
+  //  Address2ContentMap[V].push_back(IdCounter);
+  //  Id2ValueMap[IdCounter] = V; // .push_back(V);
+  //  IdCounter++;
+  //  //LLVM_DEBUG(dbgs()<<"\n size of value2id:"<<Address2ContentMap[V].size()
+  //  //<< " size of id2valuemap:"<<Id2ValueMap.size());
+  //}
+  //// Now size = Index+1
+  //return Address2ContentMap[V][Index];
+
+bool ValueFlowAtInstruction::isMemory(ValueType V) {
+  if (V == nullptr) return false;
+  if (isa<GlobalVariable>(V) || isa<AllocaInst>(V) ) {
+    return true;
+  }
+  return false;
 }
-/// Lhs has the same contents as Rhs
-/// Depending on their types, it may either point to the same object or
-/// Have the same Value
-void ValueFlowAtInstruction::addAlias(const Value *Lhs, const Value *Rhs,
-                                      unsigned Index) {
-  IdType LhsId = getIdForValue(Lhs, Index);
-  IdType RhsId = getIdForValue(Rhs);
-  ValueFlowMap[LhsId] = RhsId;
-}
-void ValueFlowAtInstruction::run() {
-  for (auto I = &ValuesAtInstruction; I != nullptr;
-       I = I->getPrevNonDebugInstruction()) {
-    if (auto GEP = dyn_cast<GetElementPtrInst>(I)) {
-      auto PtrOp = GEP->getPointerOperand();
+
+bool ValueFlowAtInstruction::getGep(const Value *GEPI, ValueType &PtrOp, unsigned &Index){
+  if (GEPI  == nullptr) return false ;
+    if (auto GEP = dyn_cast<GetElementPtrInst>(GEPI)) {
+      PtrOp = GEP->getPointerOperand();
       // Since we are only concerned about the omp rtl function arguments,
       // We know that they will have constant indices
       // So, we only handle this case
-      if (GEP->hasAllConstantIndices()) {
-        auto IndexOpIt = (GEP->idx_end() - 1);
-        const Value *IndexOp = *IndexOpIt;
-        const unsigned ConstVal =
-            dyn_cast<Constant>(IndexOp)->getUniqueInteger().getZExtValue();
-        LLVM_DEBUG(dbgs() << "\n PtrOp:" << *PtrOp << "\n IndexOp: " << *IndexOp
-                          << "\n Const Index:" << ConstVal);
-        // This means that,
-        // after this instruction, contents of PtrOp same as I
-        // PtrOp[ConstVal] = I
-        addAlias(PtrOp, I, ConstVal);
+      if (!GEP->hasAllConstantIndices()) return false;
+
+      auto IndexOpIt = (GEP->idx_end() - 1);
+      const Value *IndexOp = *IndexOpIt;
+      const unsigned ConstInd =
+        dyn_cast<Constant>(IndexOp)->getUniqueInteger().getZExtValue();
+      LLVM_DEBUG(dbgs() << "\n PtrOp:" << *PtrOp << "\n IndexOp: " << *IndexOp
+          << "\n Const Index:" << ConstInd);
+      Index = ConstInd;
+      return true;
+    }
+  return false;
+}
+//IdType ValueFlowAtInstruction::getMemory(ValueType V) {
+//  if (V == nullptr) return 0;
+//  auto Id = getIdForValue(V);
+//  if (isMemory(V))
+//    return Id;
+//  if (EXISTSinMap(ValueFlowMap, V))
+//    return ValueFlowMap[Id][0];
+//  return 0;
+//}
+
+/// Lhs has the same contents as Rhs
+/// Depending on their types, it may either point to the same object or
+/// Have the same Value
+//void ValueFlowAtInstruction::addAlias(const Value *LhsVal, const Value *RhsVal,
+//    unsigned Index) {
+//  if (LhsVal == nullptr) return;
+//  auto Lhs = getIdForValue(LhsVal);
+//  IdType Rhs = 0; 
+//  if (RhsVal != nullptr ) 
+//    Rhs = getIdForValue(RhsVal);
+//  if (isMemory(LhsVal)){
+//    // Rhs is being stored at the address Lhs[Index].
+//    //ValueFlowMap[Lhs].resize(Index+1);
+//    ValueFlowMap[Lhs][Index] = Rhs;
+//  } else if (isMemory(RhsVal)) {
+//    // The Rhs is a memory, that means, Lhs = &Rhs[Index]. We can only index into an address.
+//    ValueFlowMap[Lhs][0] = getIdForValue(Rhs, Index);  //ValueFlowMap[Rhs][Index];
+//  } else if (EXISTSinMap(ValueFlowMap, Rhs )){
+//    // Recursively track the values to the address.
+//    RhsVal = getValueFromId(ValueFlowMap[Rhs][0]);
+//    addAlias(LhsVal,RhsVal, Index );
+//  } else {
+//    // Ignore the index, since it only makes sense in case of memories.
+//    ValueFlowMap[Lhs][0] = Rhs;
+//  }
+//
+//}
+
+void ValueFlowAtInstruction::updateInstr(const Instruction &ValuesAtInstruction) {
+  auto I = &ValuesAtInstruction;
+  LLVM_DEBUG(dbgs()<<"\n Analyze:"<< *I);
+  if (auto GEP = dyn_cast<GetElementPtrInst>(I)) {
+    //auto PtrOp = GEP->getPointerOperand();
+    //// Since we are only concerned about the omp rtl function arguments,
+    //// We know that they will have constant indices
+    //// So, we only handle this case
+    //if (GEP->hasAllConstantIndices()) {
+    //  auto IndexOpIt = (GEP->idx_end() - 1);
+    //  const Value *IndexOp = *IndexOpIt;
+    //  const unsigned ConstInd =
+    //    dyn_cast<Constant>(IndexOp)->getUniqueInteger().getZExtValue();
+    //  LLVM_DEBUG(dbgs() << "\n PtrOp:" << *PtrOp << "\n IndexOp: " << *IndexOp
+    //      << "\n Const Index:" << ConstInd);
+    //  // This means that,
+    //  // after this instruction, contents of PtrOp same as I
+    //  // I = PtrOp[ConstInd]
+    //  //addAlias(I, PtrOp, ConstInd);
+    //  ValueFlowMap[getIdForValue(I)] = getIdForValue(PtrOp,ConstInd);
+    //}
+    ValueType PtrOp = nullptr;
+    unsigned Index = 0;
+    if (getGep(GEP, PtrOp, Index)){
+      ValueFlowMap[getIdForValue(I)] = getIdForValue(PtrOp,Index);
+    }
+  } else if (auto LoadedValue = dyn_cast<LoadInst>(I)) {
+    auto LoadAddress = LoadedValue->getPointerOperand();
+    LLVM_DEBUG(dbgs()<<"\n load addr:"<<*LoadAddress);
+      unsigned Index = 0;
+      if (auto GEPop = dyn_cast<GEPOperator>(LoadAddress)){
+        LoadAddress = GEPop->getPointerOperand();
       }
-    } else if (auto LoadedValue = dyn_cast<LoadInst>(I)) {
-      auto LoadAddress = LoadedValue->getPointerOperand();
-      // LoadedValue = LoadAddress[0];
-      addAlias(LoadedValue, LoadAddress);
-    } else if (auto Store = dyn_cast<StoreInst>(I)) {
-      auto Address = (Store->getPointerOperand());
-      auto StoredVal = (Store->getValueOperand());
-      // Address[0] = StoredVal
-      addAlias(Address, StoredVal);
-      // AddresContent[Address] = StoredVal;
-    } else if (I->isCast()) {
-      // Only one operand
-      auto Src = I->getOperand(0);
-      // After this instruction, contents of Src same as I
-      // Src = I
-      addAlias(Src, I);
+    // LoadedValue = LoadAddress[0];
+    ValueFlowMap[getIdForValue(I)] = getIdForValue(LoadAddress, Index);
+  } else if (auto Store = dyn_cast<StoreInst>(I)) {
+    auto Address = (Store->getPointerOperand());
+      unsigned Index = 0;
+      if (auto GEPop = dyn_cast<GEPOperator>(Address)){
+        Address = GEPop->getPointerOperand();
+      }
+    if (isa<GetElementPtrInst>(Address)){
+      LLVM_DEBUG(dbgs()<<"\n is gep");
+      ValueType PtrOp = nullptr;
+      if (getGep(Address, PtrOp, Index)){
+        Address = PtrOp;
+      }
+    }
+    auto StoredVal = (Store->getValueOperand());
+    // Since the LHS is an address, trace back the entry for the address, and get the proper index.
+    // Address[0] = StoredVal
+    auto AddrId = getIdForValue(Address, Index);
+    while (EXISTSinMap(ValueFlowMap, AddrId)){
+      AddrId = ValueFlowMap[AddrId];
+    }
+    ValueType ValAddr = nullptr; 
+    getValueForId(AddrId, ValAddr, Index);
+    if (isMemory(ValAddr)){
+      ValueFlowMap[AddrId] = getIdForValue(StoredVal);
+    }
+  } else if (I->isCast()) {
+    // Only one operand
+    auto Src = I->getOperand(0);
+    // After this instruction, contents of Src same as I
+    // Src = I
+    LLVM_DEBUG(dbgs()<<"\n bitcast:"<<getIdForValue(Src));
+    LLVM_DEBUG(dbgs()<<"\n bitcast:"<<getIdForValue(I));
+    ValueFlowMap[getIdForValue(I)] = getIdForValue(Src);
+  } else if (isa<AllocaInst>(I) ){
+    //ValueFlowMap[getIdForValue(I)] = 0;
+  } else if (const DbgDeclareInst *DbgI = dyn_cast<DbgDeclareInst>(I)) {
+  } else if (const DbgValueInst *DbgI = dyn_cast<DbgValueInst>(I)) {
+    if (DbgI->getValue() != nullptr) {
+      OmpEnvInfo.insertNameForVal(DbgI->getValue(),DbgI->getVariable()->getName());
+      //Value2NameMap[DbgI->getValue()] =  DbgI->getVariable()->getName();
     }
   }
+  //print();
 }
+
+//void ValueFlowAtInstruction::run(const Instruction &ValuesAtInstruction) {
+//  for (auto I = &ValuesAtInstruction; I != nullptr;
+//       I = I->getPrevNonDebugInstruction()) {
+//    if (auto GEP = dyn_cast<GetElementPtrInst>(I)) {
+//      auto PtrOp = GEP->getPointerOperand();
+//      // Since we are only concerned about the omp rtl function arguments,
+//      // We know that they will have constant indices
+//      // So, we only handle this case
+//      if (GEP->hasAllConstantIndices()) {
+//        auto IndexOpIt = (GEP->idx_end() - 1);
+//        const Value *IndexOp = *IndexOpIt;
+//        const unsigned ConstVal =
+//            dyn_cast<Constant>(IndexOp)->getUniqueInteger().getZExtValue();
+//        LLVM_DEBUG(dbgs() << "\n PtrOp:" << *PtrOp << "\n IndexOp: " << *IndexOp
+//                          << "\n Const Index:" << ConstVal);
+//        // This means that,
+//        // after this instruction, contents of PtrOp same as I
+//        // PtrOp[ConstVal] = I
+//        addAlias(PtrOp, I, ConstVal);
+//      }
+//    } else if (auto LoadedValue = dyn_cast<LoadInst>(I)) {
+//      auto LoadAddress = LoadedValue->getPointerOperand();
+//      // LoadedValue = LoadAddress[0];
+//      addAlias(LoadedValue, LoadAddress);
+//    } else if (auto Store = dyn_cast<StoreInst>(I)) {
+//      auto Address = (Store->getPointerOperand());
+//      auto StoredVal = (Store->getValueOperand());
+//      // Address[0] = StoredVal
+//      addAlias(Address, StoredVal);
+//      // AddresContent[Address] = StoredVal;
+//    } else if (I->isCast()) {
+//      // Only one operand
+//      auto Src = I->getOperand(0);
+//      // After this instruction, contents of Src same as I
+//      // Src = I
+//      addAlias(Src, I);
+//    }
+//  }
+//}
+
+void ValueFlowAtInstruction::getValueForId(IdType Id, ValueType &Val, unsigned &Index ){
+  Val = nullptr;
+  if (Id2ValueMap.size() <= Id) return ;
+  Val = Id2ValueMap[Id];
+  for (auto Iter : Value2IdMap[Val]){
+    if (Iter.second == Id){
+      Index = Iter.first;
+      break;
+    }
+  }
+  return;
+}
+
 void ValueFlowAtInstruction::print() {
   LLVM_DEBUG(dbgs() << "\n ==== PRINTING ======");
-  for (auto Iter : Value2IdMap) {
-    LLVM_DEBUG(dbgs() << "\n Value::" << *Iter.first);
-    for (auto Id : Iter.second)
-      LLVM_DEBUG(dbgs() << "\t Id::" << Id);
+  for (auto Iter : ValueFlowMap){
+    auto IdLhs = Iter.first;
+    auto IdRhs = Iter.second;
+    ValueType ValLhs = nullptr, ValRhs = nullptr; 
+    unsigned IndexLhs = 0, IndexRhs = 0;
+    LLVM_DEBUG(dbgs()<<"\n LHS: "<<IdLhs << " => Rhs :"<< IdRhs);
+    getValueForId(IdLhs, ValLhs, IndexLhs);
+    getValueForId(IdRhs, ValRhs, IndexRhs);
+    if (ValLhs != nullptr)
+      LLVM_DEBUG(dbgs()<<"\n LHS: "<<*ValLhs << " Index:"<< IndexLhs);
+    if (ValRhs != nullptr)
+      LLVM_DEBUG(dbgs()<<"\n RHS: "<<*ValRhs << " Index:"<< IndexRhs);
   }
-  LLVM_DEBUG(dbgs() << "\n ==========");
-  for (auto Iter : ValueFlowMap) {
-    LLVM_DEBUG(dbgs() << " \n  " << Iter.first << "=>" << Iter.second);
-    LLVM_DEBUG(dbgs() << " \n  " << *Id2ValueMap[Iter.first] << "=>"
-                      << *Id2ValueMap[Iter.second]);
-  }
-  LLVM_DEBUG(dbgs() << "\n ==========");
+  //for (auto Iter : Address2ContentMap) {
+  //  LLVM_DEBUG(dbgs() << "\n Value::" << *Iter.first);
+  //  for (auto Id : Iter.second)
+  //    LLVM_DEBUG(dbgs() << "\t Id::" << Id);
+  //}
+  //LLVM_DEBUG(dbgs() << "\n ==========");
+  //for (auto Iter : ValueFlowMap) {
+  //  LLVM_DEBUG(dbgs() << " \n  " << Iter.first << "=>" << Iter.second);
+  //  LLVM_DEBUG(dbgs() << " \n  " << *Id2ValueMap[Iter.first] << "=>"
+  //                    << *Id2ValueMap[Iter.second]);
+  //}
+  //LLVM_DEBUG(dbgs() << "\n ==========");
 }
+unsigned ValueFlowAtInstruction::get_BaseElementTypeSize(const Type *eType) const{
+  LLVM_DEBUG(dbgs()<<"\n Type:"<<*eType);
+  if (unsigned s = eType->getPrimitiveSizeInBits()){
+    return s/8; 
+  }    
+  if (eType->isPointerTy()){
+    return get_BaseElementTypeSize(eType->getPointerElementType());
+  }    
+  if (eType->isArrayTy()){
+    return get_BaseElementTypeSize(eType->getArrayElementType());
+  }    
+  return 1;
+}    
 void ValueFlowAtInstruction::parseArguments(const CallInst &OmpCall,
                                             const unsigned NumVars,
                                             const Value *BaseAddrArg,
@@ -338,15 +572,26 @@ void ValueFlowAtInstruction::parseArguments(const CallInst &OmpCall,
   for (unsigned MappedVarNum = 0; MappedVarNum < NumVars; MappedVarNum++) {
     // If the pointer does not have an ID, then our analysis did not see it,
     // Cannot Handle, return
-    IdType BaseAddrId;
-    if (!getIdForValue(BaseAddrId, BaseAddr->getPointerOperand(), MappedVarNum))
+    
+      auto V = BaseAddr->getPointerOperand();
+      auto Index = MappedVarNum;
+      assert(EXISTSinMap(Value2IdMap,V) &&   EXISTSinMap(Value2IdMap[V], Index) );
+      IdType BaseAddrId = Value2IdMap[V][Index];
+    
+    //IdType BaseAddrId = getIdForValue(BaseAddr->getPointerOperand(), MappedVarNum);
+    //if (!getIdForValue(BaseAddrId, BaseAddr->getPointerOperand(), MappedVarNum))
+    assert(BaseAddrId != 0);
+    if (BaseAddrId == 0)
       return;
     LLVM_DEBUG(dbgs() << "\n Baseaddr: " << BaseAddrId);
     for (; EXISTSinMap(ValueFlowMap, BaseAddrId);) {
       LLVM_DEBUG(dbgs() << "\n Get alias for Baseaddr: " << BaseAddrId);
+      //bool ValIsMem = isMemory(Id2ValueMap[BaseAddrId]);
       BaseAddrId = ValueFlowMap[BaseAddrId];
       LLVM_DEBUG(dbgs() << " == > Baseaddr: " << BaseAddrId);
       LLVM_DEBUG(dbgs() << "\n Alias::" << *(Id2ValueMap[BaseAddrId]));
+      if (isMemory(Id2ValueMap[BaseAddrId]))
+        break;
     }
     ArrayVarsMapped[MappedVarNum] = BaseAddrId;
     const unsigned MapTypeInt = MapTypeAddr->getAggregateElement(MappedVarNum)
@@ -354,10 +599,15 @@ void ValueFlowAtInstruction::parseArguments(const CallInst &OmpCall,
                                     .getSExtValue();
     unsigned MappedSectionSize = 0;
     if (ConstSizeAddr != nullptr) {
+      auto V = Id2ValueMap[BaseAddrId];
+      //errs() <<"\n TYpe ::"<<*V->getType();
+      auto TypeSize = get_BaseElementTypeSize(V->getType());
       MappedSectionSize = ConstSizeAddr->getInitializer()
                               ->getAggregateElement(MappedVarNum)
                               ->getUniqueInteger()
                               .getSExtValue();
+      MappedSectionSize = MappedSectionSize / TypeSize;
+
     } // TODO: Handle when the section size is not a constant
     LLVM_DEBUG(dbgs() << "\n Variable:" << *(Id2ValueMap[BaseAddrId]) << "["
                       << MappedSectionSize << "]"
@@ -404,9 +654,10 @@ bool OmpDiagnosticsLocalAnalysis::getRTLArgsPos(const CallInst &CI,
   //}
   return false;
 }
+
 void OmpDiagnosticsLocalAnalysis::analyzeRTLArguments(
     const CallInst &CI, const unsigned NumVarsPos, const unsigned BaseAddrPos,
-    const unsigned SizePos, const unsigned MapTypePos) {
+    const unsigned SizePos, const unsigned MapTypePos,ValueFlowAtInstruction &VFA ) {
   auto NumVarsArg = CI.getArgOperand(NumVarsPos);
   auto BaseAddrArg = CI.getArgOperand(BaseAddrPos);
   auto SizeArg = CI.getArgOperand(SizePos);
@@ -420,17 +671,27 @@ void OmpDiagnosticsLocalAnalysis::analyzeRTLArguments(
   LLVM_DEBUG(dbgs() << "\n Num Var: " << NumVars->getSExtValue()
                     << "\n Baseaddr:: " << *BaseAddrArg << "\n SizeArg::"
                     << *SizeArg << "\n Maptype::" << *MaptTypeArg);
-  ValueFlowAtInstruction VFA(CI, OmpEnvInfo);
-  VFA.run();
+  //ValueFlowAtInstruction VFA(CI, OmpEnvInfo);
+  //VFA.run();
   VFA.print();
   VFA.parseArguments(CI, NumVars->getSExtValue(), BaseAddrArg, SizeArg,
                      MaptTypeArg);
   // DirectiveToDataMap[&CI] = MappedVarSet;
 }
+
 OmpDiagnosticsInfo &OmpDiagnosticsLocalAnalysis::run() {
 
   LLVM_DEBUG(dbgs() << "\n Run on func:" << Func2Analyze.getName());
+  ValueFlowAtInstruction VFA(OmpEnvInfo);
+  std::set<const BasicBlock*> VisitedBB;
   for (auto &I : instructions(Func2Analyze)) {
+    const BasicBlock* BB = I.getParent();
+    VFA.updateInstr(I);
+    //if (!EXISTSinMap(VisitedBB, BB)){
+    //  auto LastInstr = BB->getTerminator();
+    //  if (LastInstr != nullptr)
+    //  VFA.run(*LastInstr);
+    //}
     // TODO: Make sure that the order of traversing the call instructions
     // is strictly in the preorder,
     // Visit parents before traversing the chlid!
@@ -440,7 +701,7 @@ OmpDiagnosticsInfo &OmpDiagnosticsLocalAnalysis::run() {
                         MapTypePos)) {
         LLVM_DEBUG(dbgs() << "\n OMP RTL :" << *OmpCall << "\n");
         analyzeRTLArguments(*OmpCall, NumVarsPos, BaseAddrPos, SizePos,
-                            MapTypePos);
+                            MapTypePos, VFA);
       }
     }
   }
@@ -472,7 +733,7 @@ void OmpDiagnosticsGlobalAnalysis::analyzeBasicBlock(
   for (auto &I : BB) {
     if (const CallInst *Call = dyn_cast<CallInst>(&I)) {
       auto CalledFunc = Call->getCalledFunction();
-      if (!CalledFunc->hasName())
+      if (CalledFunc == nullptr || !CalledFunc->hasName())
         continue;
       // Ignore recursive calls
       if (CalledFunc == BB.getParent())
@@ -485,6 +746,8 @@ void OmpDiagnosticsGlobalAnalysis::analyzeBasicBlock(
 }
 void OmpDiagnosticsGlobalAnalysis::analyzeFunction(
     const Function &F, OmpDiagnosticsInfo &OmpEnvInfo) {
+  if (F.getName().find("__omp_offloading") != std::string::npos)
+    return;
   // SmallVector<const BasicBlock*, 10> BBVisitQ;
   std::queue<const BasicBlock *> BBVisitQ;
   std::set<const BasicBlock *> BBVisitedSet;
