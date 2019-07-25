@@ -1,6 +1,5 @@
 ; RUN: opt < %s -passes="print<mem-usedef-analysis-local>" -disable-output 2>&1 | FileCheck %s 
 
-; CHECK-DAG: Use::v At:: mg.c:262 Defined at: mg.c:123, 
 ; CHECK-DAG: Use::nx At:: mg.c:199 Defined at: mg.c:190, 
 ; CHECK-DAG: Use::lt At:: mg.c:199 Defined at: mg.c:188, 
 ; CHECK-DAG: Use::nz At:: mg.c:199 Defined at: mg.c:192, 
@@ -26,7 +25,6 @@
 ; CHECK-DAG: Use::nx At:: mg.c:203 Defined at: mg.c:190, 
 ; CHECK-DAG: Use::nit At:: mg.c:203 Defined at: mg.c:189, 
 ; CHECK-DAG: Use::lt At:: mg.c:205 Defined at: mg.c:188, 
-; CHECK-DAG: Use::ny At:: mg.c:262 Defined at: mg.c:191, 
 ; CHECK-DAG: Use::v At:: mg.c:264 Defined at: mg.c:123, 
 ; CHECK-DAG: Use::nit At:: mg.c:205 Defined at: mg.c:189, 
 ; CHECK-DAG: Use::lt At:: mg.c:207 Defined at: mg.c:188, 

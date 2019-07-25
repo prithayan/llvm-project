@@ -1,13 +1,12 @@
 ; RUN: opt < %s -passes="print<mem-usedef-analysis-local>" -disable-output 2>&1 | FileCheck %s 
 
-; CHECK: Use::t_names At:: lu.c:334 Defined at: lu.c:235, 
-; CHECK: Use::trecs At:: lu.c:334 Defined at: lu.c:326, 
-; CHECK: Use::timeron At:: lu.c:324 Defined at: lu.c:224, lu.c:238, 
-; CHECK: Use::trecs At:: lu.c:334 Defined at: lu.c:326, 
-; CHECK: Use::trecs At:: lu.c:336 Defined at: lu.c:326, 
-; CHECK: Use::trecs At:: lu.c:336 Defined at: lu.c:326, 
-; CHECK: Use::trecs At:: lu.c:336 Defined at: lu.c:326, 
-; CHECK: Use::trecs At:: lu.c:338 Defined at: lu.c:326, 
+; CHECK-DAG: Use::trecs At:: lu.c:334 Defined at: lu.c:326, 
+; CHECK-DAG: Use::timeron At:: lu.c:324 Defined at: lu.c:224, lu.c:238, 
+; CHECK-DAG: Use::trecs At:: lu.c:334 Defined at: lu.c:326, 
+; CHECK-DAG: Use::trecs At:: lu.c:336 Defined at: lu.c:326, 
+; CHECK-DAG: Use::trecs At:: lu.c:336 Defined at: lu.c:326, 
+; CHECK-DAG: Use::trecs At:: lu.c:336 Defined at: lu.c:326, 
+; CHECK-DAG: Use::trecs At:: lu.c:338 Defined at: lu.c:326, 
 
 ; ModuleID = 'omp-host.ll'
 source_filename = "lu.c"

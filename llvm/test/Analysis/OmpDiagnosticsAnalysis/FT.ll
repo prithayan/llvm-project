@@ -3,8 +3,6 @@
 ; CHECK-DAG: Use::start At:: ft.c:353 Defined at: ft.c:345, 
 ; CHECK-DAG: Use::start At:: ft.c:356 Defined at: ft.c:345, 
 ; CHECK-DAG: Use::starts At:: ft.c:367 Defined at: ft.c:353, ft.c:356, 
-; CHECK-DAG: Use::u0_real At:: ft.c:319 Defined at: ft.c:319, 
-; CHECK-DAG: Use::u0_imag At:: ft.c:321 Defined at: ft.c:321, 
 ; CHECK-DAG: Use::u0_real At:: ft.c:324 Defined at: ft.c:319, 
 ; CHECK-DAG: Use::u0_imag At:: ft.c:325 Defined at: ft.c:321, 
 
@@ -25,7 +23,6 @@
 
 ; CHECK-DAG: Use::niter At:: ft.c:458 Defined at: ft.c:454, 
 
-; CHECK-DAG: Use::tstrings At:: ft.c:554 Defined at: ft.c:547, 
 
 
 ; CHECK-DAG: Use::gty1_imag At:: ft.c:754 Defined at: ft.c:674, ft.c:713, ft.c:745, 

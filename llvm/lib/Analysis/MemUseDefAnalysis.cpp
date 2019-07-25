@@ -305,6 +305,7 @@ const std::string DebugLocation::getVarNameLocStr(const Instruction *Inst) {
   NameLocationStr += " At location:" + getDebugLocStr(seq);
   return NameLocationStr;
 }
+
 void MemoryLdStMapClass::insertEntry(ConstInstrPtr LdSt, ConstValuePtr Mem) {
   if (LdSt == nullptr || Mem == nullptr)
     return;
@@ -372,8 +373,28 @@ bool MemoryLdStMapClass::isMalloc(ConstInstrPtr LdSt) const {
 
   bool MemoryLdStMapClass::filterLoadOfAddress(ConstInstrPtr Ld)const {
     if (auto L = dyn_cast<LoadInst> (Ld)){
-      if (L->getType()->isPointerTy())
+      if (L->getType()->isPointerTy()) {
+        auto LoadLineNum = OmpDiagnosticsLocationInfo.getDebugLocSeq(L);
+        std::queue<const Value *> UsersQ;
+        UsersQ.push(L);
+        // Keep scaning the users of this load of pointer, to find if this is used in a function call. We keep scanning till the line numbers are same, that is the load and the call are at the same line.
+        while(!UsersQ.empty()){
+          auto Def = UsersQ.front();  UsersQ.pop(); 
+          for (auto U : Def->users()){
+            if (auto I = dyn_cast<Instruction>(U)){
+              // If the user instruction is still on the same line, then add to Queue. 
+              if (OmpDiagnosticsLocationInfo.getDebugLocSeq(I) == LoadLineNum ){
+                // If the address load is used in the call, then preserve the load as memuse. 
+                if (isa<CallInst>(I))
+                  return false;
+                UsersQ.push(I);
+              }
+            }
+          }
+        }
+        // If we could not find a call instr that uses the loaded address, then ignore the mem use. TODO: Other than a store, which other instruction can use the address?
         return true;
+      }
     }
     return false;
   }
@@ -545,14 +566,18 @@ bool MemoryLdStMapClass::insertReachingDef(ConstInstrPtr MemUse,
 
 bool MemoryLdStMapClass::insertReachingDef(ConstInstrPtr MemUse, SetOfInstructions MemDefSet, bool CheckAlias){
   bool NewElemInserted = false;
-  if (isa<CallInst>(MemUse))
+  if (auto C = dyn_cast<CallInst>(MemUse)) {
+    auto F = C->getCalledFunction();
+    if (F->isIntrinsic() || F->isDeclaration() )  return NewElemInserted;
     CheckAlias = false;
-  auto UserLocation = OmpDiagnosticsLocationInfo.getDebugLocSeq(MemUse);
+  }
+  //auto UserLocation = OmpDiagnosticsLocationInfo.getDebugLocSeq(MemUse);
   if ( !CheckAlias)  {
     for (auto DefInstr : MemDefSet){
       // If use and def same instruction ignore it.
-      if (UserLocation == OmpDiagnosticsLocationInfo.getDebugLocSeq(DefInstr))
-        continue;
+      //if (UserLocation == OmpDiagnosticsLocationInfo.getDebugLocSeq(DefInstr))
+      //if (DefInstr == MemUse)
+      //  continue;
       NewElemInserted = insertReachingDef(MemUse, DefInstr);
     }
   }else {
@@ -595,11 +620,15 @@ bool MemoryLdStMapClass::isDoublePointer(ConstInstrPtr Instr) {
 void MemoryLdStMapClass::print(raw_ostream &O) {
   for (auto Iter : MemUseToReachingDefsMap) {
     auto MemUseInstr = Iter.first;
+    if (Iter.second.empty())  continue;
+    if (!EXISTSinMap(LdStPointsToMap, MemUseInstr)) continue;
     auto PointsToMem = LdStPointsToMap[MemUseInstr];
     O << "\n Use::" << OmpDiagnosticsLocationInfo.getOrigVarName(PointsToMem)
       << " At:: " << OmpDiagnosticsLocationInfo.getDebugLocStr(*MemUseInstr)
       << " Defined at: ";
     for (auto MemDefInstr : Iter.second) {
+      if ( MemUseInstr == MemDefInstr ) continue;
+      if (isa<CallInst>(MemDefInstr)) continue;
       O << OmpDiagnosticsLocationInfo.getDebugLocStr(*MemDefInstr) << ", ";
       //<<"At :"<<OmpDiagnosticsLocationInfo.getVarNameLocStr(MemDefInstr);
     }
@@ -628,16 +657,19 @@ void MemoryLdStMapClass::print() {
   errs()<<"\n Printing usedef::\n";
   for (auto Iter : MemUseToReachingDefsMap) {
     auto MemUseInstr = Iter.first;
-    if (EXISTSinMap(LdStPointsToMap, MemUseInstr)) {
+    if (Iter.second.empty())  continue;
+    if (!EXISTSinMap(LdStPointsToMap, MemUseInstr)) continue;
       auto PointsToMem = LdStPointsToMap[MemUseInstr];
-      errs() << "\n Use::" << OmpDiagnosticsLocationInfo.getOrigVarName(PointsToMem);
-    }
+      errs() << "\n Use::"<< *MemUseInstr <<" AT::"
+        << OmpDiagnosticsLocationInfo.getOrigVarName(PointsToMem);
+    
     errs()  << " At:: " << OmpDiagnosticsLocationInfo.getDebugLocStr(*MemUseInstr)
       << " Defined at: ";
     for (auto MemDefInstr : Iter.second) {
-      if ( MemUseInstr == MemDefInstr) continue;
+      //if ( MemUseInstr == MemDefInstr ) continue;
+      if (isa<CallInst>(MemDefInstr)) continue;
       //errs() << OmpDiagnosticsLocationInfo.getDebugLocStr(*MemDefInstr) << ", ";
-      errs() << OmpDiagnosticsLocationInfo.getDebugLocStr(*MemDefInstr) << ", ";
+      errs() << " "<< *MemDefInstr << " At" <<OmpDiagnosticsLocationInfo.getDebugLocStr(*MemDefInstr) << ", ";
       //<<"At :"<<OmpDiagnosticsLocationInfo.getVarNameLocStr(MemDefInstr);
     }
   }
