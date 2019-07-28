@@ -191,13 +191,8 @@
 
 
 ; CHECK-DAG: Use::interp.z1 At:: mg.c:1260 Defined at: mg.c:924, mg.c:951, 
-; CHECK-DAG: Use::interp.z2 At:: mg.c:953 Defined at: mg.c:953, 
-; CHECK-DAG: Use::interp.z1 At:: mg.c:951 Defined at: mg.c:924, mg.c:951, 
 ; CHECK-DAG: Use::interp.z1 At:: mg.c:1002 Defined at: mg.c:924, mg.c:951, 
-; CHECK-DAG: Use::interp.z1 At:: mg.c:957 Defined at: mg.c:951, 
-; CHECK-DAG: Use::interp.z1 At:: mg.c:957 Defined at: mg.c:951, 
-; CHECK-DAG: Use::interp.z3 At:: mg.c:955 Defined at: mg.c:955, 
-; CHECK-DAG: Use::interp.z2 At:: mg.c:1028 Defined at: mg.c:925, mg.c:953, 
+; CHECK-DAG: Use::interp.z2 At:: mg.c:1028 Defined at: mg.c:953, 
 ; CHECK-DAG: Use::interp.z2 At:: mg.c:1028 Defined at: mg.c:925, mg.c:953, 
 ; CHECK-DAG: Use::interp.z2 At:: mg.c:1029 Defined at: mg.c:925, mg.c:953, 
 ; CHECK-DAG: Use::interp.z1 At:: mg.c:1002 Defined at: mg.c:924, mg.c:951, 

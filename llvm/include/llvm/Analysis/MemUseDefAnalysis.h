@@ -34,6 +34,7 @@ using ConstCallNameType = const std::string;
 using ConstInstrPtr = const Instruction *;
 using ConstValuePtr = const Value *;
 using SetOfInstructions = std::set<ConstInstrPtr>;
+using SetOfValues = std::set<ConstValuePtr>;
 
 #define EXISTSinMap(MAP, ELEM) (MAP.find(ELEM) != MAP.end())
 
@@ -89,13 +90,22 @@ public:
   void setSymbolName(const Instruction *Instr, const Value *Val);
 };
 
+class FuncParamInfoClass {
+  std::map<ConstValuePtr, unsigned> ValueToIdMap; 
+  unsigned UniqueIdCounter;
+  public:
+  FuncParamInfoClass(): UniqueIdCounter(0){}
+
+};
+
 class MemoryLdStMapClass {
   /// Map of instruction, to the memory value, that it accesses.
   using InstrPointsToMapType = std::map<ConstInstrPtr, ConstValuePtr>;
   using MemUseToReachingDefsMapType =
-      std::map<ConstInstrPtr, SetOfInstructions>;
+    std::map<ConstInstrPtr, SetOfInstructions>;
+  //std::map<ConstInstrPtr, SetOfValues>;
   using BBtoReachingDefsMapType =
-      std::map<const BasicBlock *, SetOfInstructions>;
+    std::map<const BasicBlock *, SetOfInstructions>;
   using CallInstToUsersMapType = std::map<ConstInstrPtr , SetOfInstructions>;
   using FuncGenDefsType = std::map<const Function *, SetOfInstructions>;
 
@@ -104,6 +114,9 @@ class MemoryLdStMapClass {
   BBtoReachingDefsMapType BBtoReachingDefsMap;
   FuncGenDefsType FuncGeneratingDefs;
   CallInstToUsersMapType CallInstToUsersMap;
+  SetOfInstructions LiveInUses;
+  static std::map<ConstInstrPtr, const CallInst*> MemdefToCall;
+
 
   /// Record that the Instruction \p LdSt accesses the Memory \p Mem.
   void insertEntry(ConstInstrPtr LdSt, ConstValuePtr Mem);
@@ -116,19 +129,20 @@ class MemoryLdStMapClass {
   bool backtrackFindMemoryInstr(ConstValuePtr Instr, ConstValuePtr &Mem);
   bool filterLoadOfAddress(ConstInstrPtr Ld) const ;
 
-public:
+  public:
 
   void addReachingCall(Instruction &Call, Instruction &User);
 
+  void addLiveOnEntryUse(ConstInstrPtr I);
 
-SetOfInstructions &getUsersOfCall(const Instruction &Call);
+  SetOfInstructions &getUsersOfCall(const Instruction &Call);
   /// \p CallInstructions is a set of call instructions that reach the user. This function iterates over the set of call instruciton to add the user to each of the call instruciotns.
   void addReachingCall(Instruction &User, SetOfInstructions &CallInstructions);
-  SetOfInstructions& getFuncGeneratingDefs(const Function *F);// {return FuncGeneratingDefs;}
+  SetOfInstructions& getFuncGeneratingDefs(const Function *F);
   void addFuncGeneratingDefs(SetOfInstructions &ReachingDefs);
   /// Propagate all the defs in the set \p ReachingDefs, to all the BasicBlocks (within the function).
-  bool propagateReachingDefsIntoFunc(SetOfInstructions &ReachingDefs);
-  
+  bool propagateReachingDefsIntoFunc(SetOfInstructions &ReachingDefs, const int argNum=-1);
+
   /// Check if the map has the memory use to reaching defs entry.
   bool existsReachingDefForUser(Instruction &AtInstr);
 
@@ -142,7 +156,7 @@ SetOfInstructions &getUsersOfCall(const Instruction &Call);
   bool isMalloc(ConstInstrPtr LdSt) const;
 
   /// Return the Memory that this instruction \p LdSt accesses.
-  ConstValuePtr getMemoryForLdSt(ConstInstrPtr LdSt) const;
+  ConstValuePtr getMemoryForLdSt(ConstInstrPtr LdSt, ConstValuePtr CalledParam=nullptr) const;
 
   /// Get the source level name for the variable this instruction updates.
   void setSymbolName(const Instruction *LdSt);
@@ -151,6 +165,7 @@ SetOfInstructions &getUsersOfCall(const Instruction &Call);
   /// and also return the memory.
   ConstValuePtr insertLoadStore(ConstInstrPtr LdSt);
 
+  bool areValuesSame(ConstInstrPtr MemDef, ConstValuePtr V);
 
   /// Add an empty entry for MemUse, that is no memdef inserted yet.
   void insertReachingDef(ConstInstrPtr MemUse);
@@ -158,7 +173,7 @@ SetOfInstructions &getUsersOfCall(const Instruction &Call);
   /// Add \p MemDef to the set of reaching defs for the instruction \p MemUse,
   /// if SingleReachingDef is true, then update the set to be a single element.
   bool insertReachingDef(ConstInstrPtr MemUse, ConstInstrPtr MemDef,
-                         bool SingleReachingDef = false);
+      bool SingleReachingDef = false);
 
   /// Add each def from the set \p MemDefSet to the set of reaching defs for the instruction \p MemUse,
   /// If the CheckAlias is true, then update the reaching def only if the Memory accessed by user and def are the same. CheckAlias will be false for some instructions which donot have a single memory accessed, like call instructions and return instructions.
@@ -258,6 +273,9 @@ private:
   /// defs, till we find a MemPhi, or the LiveOnEntry Node.
   const MemoryPhi *getParentPhi(const MemoryAccess *MemAccss);
 
+  // Return true if the memory use is live on entry.
+  //bool isLiveOnEntry(const MemoryAccess *MemAccss)
+
   /// Update the reaching definitions for this \p MemUse. Update the record in
   /// "MemUseToReachingDefsMap", which maps every mem use to a set of mem defs.
   void updateClobberingAccess(const MemoryUse *MemUse);
@@ -315,8 +333,10 @@ class InterproceduralMemDFA {
   /// For all call instructions within the function, propagate the reaching defs at the function call into the body, and return back the defs generated within the function body, to be propagated to the blocks following the call instruction.
   void updateReachingDefsOfBB(BasicBlock &BB, bool &HasConvergedFlagged, std::queue<Function*> &FuncQueue);
   /// Propagate all the reaching defs at the call instruction into the function body. Return true if any new def was added.
-  bool propagateReachingDefsIntoFunc(Function &F, SetOfInstructions &ReachingDefs);
+  bool propagateReachingDefsIntoFunc(const CallInst &CI, SetOfInstructions &ReachingDefs, const int argNum=-1);
   SetOfInstructions&  getFuncGeneratingDefs(Function &CalledF);
+
+void getParamNumber(const CallInst &CI, SetOfInstructions &ReachingDefs, MemoryLdStMapClass &LdStToMemFunc);
   public:
   InterproceduralMemDFA(FuncToMemInfoType &M):FuncToMemInfo(M){}
 
