@@ -17,6 +17,7 @@
 #ifndef LLVM_ANALYSIS_OmpDiagnosticsANALYSIS_H
 #define LLVM_ANALYSIS_OmpDiagnosticsANALYSIS_H
 
+#include "llvm/IR/CallSite.h"
 #include "llvm/Analysis/MemorySSA.h"
 #include "llvm/Analysis/ScalarEvolutionExpressions.h"
 #include "llvm/IR/DebugInfoMetadata.h"
@@ -90,13 +91,6 @@ public:
   void setSymbolName(const Instruction *Instr, const Value *Val);
 };
 
-class FuncParamInfoClass {
-  std::map<ConstValuePtr, unsigned> ValueToIdMap; 
-  unsigned UniqueIdCounter;
-  public:
-  FuncParamInfoClass(): UniqueIdCounter(0){}
-
-};
 
 class MemoryLdStMapClass {
   /// Map of instruction, to the memory value, that it accesses.
@@ -109,6 +103,17 @@ class MemoryLdStMapClass {
   using CallInstToUsersMapType = std::map<ConstInstrPtr , SetOfInstructions>;
   using FuncGenDefsType = std::map<const Function *, SetOfInstructions>;
 
+
+  class FuncParamInfoClass {
+    std::map<ConstValuePtr, unsigned> ValueToIdMap; 
+    unsigned UniqueIdCounter;
+    public:
+    void setValuesAlias(ConstValuePtr Arg, ConstValuePtr Param);
+    FuncParamInfoClass(): UniqueIdCounter(0){}
+    void handleFuncCall(const CallInst &CI, const MemoryLdStMapClass &MemInfo);
+    bool doValuesAlias(ConstValuePtr Arg, ConstValuePtr Param) const ;
+    void print();
+  };
   InstrPointsToMapType LdStPointsToMap;
   MemUseToReachingDefsMapType MemUseToReachingDefsMap;
   BBtoReachingDefsMapType BBtoReachingDefsMap;
@@ -121,16 +126,19 @@ class MemoryLdStMapClass {
   /// Record that the Instruction \p LdSt accesses the Memory \p Mem.
   void insertEntry(ConstInstrPtr LdSt, ConstValuePtr Mem);
 
-  /// Check if \p Val is a memory operand.
-  bool isMemory(ConstValuePtr Val);
   /// Keep going up from \p Instr till we find the memory operand, that Instr
   /// accesses, then set \p Mem. Only the limited set of instructions are
   /// currently handled.
-  bool backtrackFindMemoryInstr(ConstValuePtr Instr, ConstValuePtr &Mem);
+  bool backtrackFindMemoryInstr(ConstValuePtr Instr, ConstValuePtr &Mem) const;
   bool filterLoadOfAddress(ConstInstrPtr Ld) const ;
+  Type * getType(ConstInstrPtr LdSt);
 
   public:
 
+  static FuncParamInfoClass FuncParamInfo;
+  void handleCallArguments(const CallInst &CI);
+  /// Check if \p Val is a memory operand.
+  bool isMemory(ConstValuePtr Val) const;
   void addReachingCall(Instruction &Call, Instruction &User);
 
   void addLiveOnEntryUse(ConstInstrPtr I);
@@ -139,7 +147,7 @@ class MemoryLdStMapClass {
   /// \p CallInstructions is a set of call instructions that reach the user. This function iterates over the set of call instruciton to add the user to each of the call instruciotns.
   void addReachingCall(Instruction &User, SetOfInstructions &CallInstructions);
   SetOfInstructions& getFuncGeneratingDefs(const Function *F);
-  void addFuncGeneratingDefs(SetOfInstructions &ReachingDefs);
+  void addFuncGeneratingDefs(SetOfInstructions &ReachingDefs, const Function *F=nullptr);
   /// Propagate all the defs in the set \p ReachingDefs, to all the BasicBlocks (within the function).
   bool propagateReachingDefsIntoFunc(SetOfInstructions &ReachingDefs, const int argNum=-1);
 
@@ -156,7 +164,9 @@ class MemoryLdStMapClass {
   bool isMalloc(ConstInstrPtr LdSt) const;
 
   /// Return the Memory that this instruction \p LdSt accesses.
-  ConstValuePtr getMemoryForLdSt(ConstInstrPtr LdSt, ConstValuePtr CalledParam=nullptr) const;
+  ConstValuePtr getMemoryForLdSt(ConstInstrPtr LdSt) const;
+  /// Return the Memory that this instruction \p LdSt accesses.
+  ConstValuePtr getMemoryForLdSt(ConstValuePtr LdSt) const;
 
   /// Get the source level name for the variable this instruction updates.
   void setSymbolName(const Instruction *LdSt);
@@ -333,10 +343,11 @@ class InterproceduralMemDFA {
   /// For all call instructions within the function, propagate the reaching defs at the function call into the body, and return back the defs generated within the function body, to be propagated to the blocks following the call instruction.
   void updateReachingDefsOfBB(BasicBlock &BB, bool &HasConvergedFlagged, std::queue<Function*> &FuncQueue);
   /// Propagate all the reaching defs at the call instruction into the function body. Return true if any new def was added.
-  bool propagateReachingDefsIntoFunc(const CallInst &CI, SetOfInstructions &ReachingDefs, const int argNum=-1);
+  bool propagateReachingDefsIntoFunc(SetOfInstructions &ReachingDefs, Function &CalledF, const int argNum=-1);
   SetOfInstructions&  getFuncGeneratingDefs(Function &CalledF);
 
 void getParamNumber(const CallInst &CI, SetOfInstructions &ReachingDefs, MemoryLdStMapClass &LdStToMemFunc);
+  void handleCallSite(CallInst &CI);
   public:
   InterproceduralMemDFA(FuncToMemInfoType &M):FuncToMemInfo(M){}
 
@@ -361,7 +372,9 @@ class MemUseDefGlobalAnalysis
   void analyzeBasicBlock(const BasicBlock &BB, Result &MemUseDefInfo);
   std::map<std::string, Function *> FuncNameMap;
 
+  void setIndirectCallMap(Function &Func);
 public:
+  static std::map<const CallInst*, std::map<ConstValuePtr, Argument *> > IndirectCallsMap;
   Result run(Module &M, ModuleAnalysisManager &AM);
 };
 
