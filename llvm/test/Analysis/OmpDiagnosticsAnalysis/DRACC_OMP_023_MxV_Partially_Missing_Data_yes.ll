@@ -2,12 +2,12 @@
 
 ; CHECK: Host to Device Copy:
 ; CHECK-NEXT: DRACC_OMP_023_MxV_Partially_Missing_Data_yes.c:30
-; CHECK-NEXT: Copy:: c[0:2048]
-; CHECK-NEXT: Copy:: b[0:2048]
-; CHECK-NEXT: Copy:: a[0:2048]
+; CHECK-NEXT: Copy:: c[0:512]
+; CHECK-NEXT: Copy:: b[0:512]
+; CHECK-NEXT: Copy:: a[0:512]
 ; CHECK-NEXT: Device to Host Copy:
 ; CHECK-NEXT: DRACC_OMP_023_MxV_Partially_Missing_Data_yes.c:30
-; CHECK-NEXT: Copy:: c[0:2048]
+; CHECK-NEXT: Copy:: c[0:512]
 
 ;int Mult(){
 ;    

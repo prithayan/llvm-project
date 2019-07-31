@@ -78,7 +78,7 @@ void OmpDiagnosticsInfo::printCopies(const InstructionToMemCopyMapType &ItoCopy,
       if (EXISTSinMap(PrintedValNames, ValName))
         continue;
       PrintedValNames.insert(ValName);
-      O << "\n " << CopyKind << " " << ValName
+      O << "\n " << CopyKind << ":: " << ValName
         << "[0:" << (Id.MappedSectionSize > 0 ? Id.MappedSectionSize : -1)
         << "]";
     }
@@ -117,7 +117,7 @@ void OmpDiagnosticsInfo::print(raw_ostream &O) const {
   if (HostDeviceCopy.size()) {
     O << "\n =============== ";
     O << "\n Host to Device Copy:";
-    printCopies(HostDeviceCopy, "Copy", O);
+    printCopies(HostDeviceCopy, "H-D Copy", O);
     // for (auto Iter : HostDeviceCopy) {
     //  O << "\n " << getDebugLocStr(*Iter.first);
     //  for (auto Id : Iter.second) {
@@ -131,7 +131,7 @@ void OmpDiagnosticsInfo::print(raw_ostream &O) const {
   if (DeviceHostCopy.size()) {
     O << "\n =============== \n ";
     O << "\n Device to Host Copy:";
-    printCopies(DeviceHostCopy, "Copy", O);
+    printCopies(DeviceHostCopy, "D-H Copy", O);
     // for (auto Iter : DeviceHostCopy) {
     //  O << "\n " << getDebugLocStr(*Iter.first);
     //  for (auto Id : Iter.second) {
@@ -489,7 +489,8 @@ void ValueFlowAtInstruction::updateInstr(
     OmpEnvInfo.insertNameForVal(Src, I);
   } else if (isa<AllocaInst>(I)) {
     // ValueFlowMap[getIdForValue(I)] = 0;
-  } else if (const DbgDeclareInst *DbgI = dyn_cast<DbgDeclareInst>(I)) {
+  } else if (dyn_cast<DbgDeclareInst>(I)) {
+    //TODO: Find if we need to handle this.
   } else if (const DbgValueInst *DbgI = dyn_cast<DbgValueInst>(I)) {
     if (DbgI->getValue() != nullptr) {
       auto IRValue = DbgI->getValue();
@@ -758,7 +759,7 @@ OmpDiagnosticsInfo &OmpDiagnosticsLocalAnalysis::run() {
   ValueFlowAtInstruction VFA(OmpEnvInfo);
   std::set<const BasicBlock *> VisitedBB;
   for (auto &I : instructions(Func2Analyze)) {
-    const BasicBlock *BB = I.getParent();
+    //const BasicBlock *BB = I.getParent();
     VFA.updateInstr(I);
     // if (!EXISTSinMap(VisitedBB, BB)){
     //  auto LastInstr = BB->getTerminator();
