@@ -1182,7 +1182,7 @@ void MemorySSAUseDefWalker::reachingDefAnalysis() {
     HasConvergedFlagged = true;
     std::set<const BasicBlock *> VisitedBBSet;
     std::queue<const BasicBlock *> BBQueue;
-    // Analysis starts from the NetryBlock.
+    // Analysis starts from the EntryBlock.
     BBQueue.push(EntryBlock);
     // BFS traversal.
     while (!BBQueue.empty()) {
@@ -1328,7 +1328,6 @@ void MemUseDefGlobalAnalysis::analyzeModule(Result &MemUseDefInfo) {
  //   Iter.second->print();
  // }
 }
-
 
 void InterproceduralMemDFA::getParamNumber(const CallInst &CI, SetOfInstructions &ReachingDefs, MemoryLdStMapClass &LdStToMemFunc){
   for (auto I : ReachingDefs) {
