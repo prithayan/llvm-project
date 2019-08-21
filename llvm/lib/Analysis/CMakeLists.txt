@@ -75,6 +75,7 @@ add_llvm_library(LLVMAnalysis
   PostDominators.cpp
   ProfileSummaryInfo.cpp
   MemUseDefAnalysis.cpp
+  OmpDiagnosticsAnalysis.cpp
   PtrUseVisitor.cpp
   RegionInfo.cpp
   RegionPass.cpp
