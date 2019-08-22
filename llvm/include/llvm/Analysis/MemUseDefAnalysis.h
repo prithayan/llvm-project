@@ -14,8 +14,8 @@
 // RTL is an acronym for "Run Time Library"
 //===----------------------------------------------------------------------===//
 
-#ifndef LLVM_ANALYSIS_OmpDiagnosticsANALYSIS_H
-#define LLVM_ANALYSIS_OmpDiagnosticsANALYSIS_H
+#ifndef LLVM_ANALYSIS_MemUseDefANALYSIS_H
+#define LLVM_ANALYSIS_MemUseDefANALYSIS_H
 
 #include "llvm/IR/CallSite.h"
 #include "llvm/Analysis/MemorySSA.h"
@@ -314,7 +314,7 @@ public:
   void reachingDefAnalysis();
 };
 
-/// OmpDiagnosticsInfo wrapper for the new pass manager.
+/// MemUseDefInfo wrapper for the new pass manager.
 class MemUseDefLocalAnalysis
     : public AnalysisInfoMixin<MemUseDefLocalAnalysis> {
   friend AnalysisInfoMixin<MemUseDefLocalAnalysis>;
@@ -391,15 +391,15 @@ public:
 
 /// This pass performs the global (interprocedural) Omp Data Mapping Analysis.
 /// (legacy pass manager).
-// class OmpDiagnosticsGlobalInfoWrapperPass : public ModulePass {
-//  OmpDiagnosticsGlobalInfo SSI;
+// class MemUseDefGlobalInfoWrapperPass : public ModulePass {
+//  MemUseDefGlobalInfo SSI;
 //
 // public:
 //  static char ID;
 //
-//  OmpDiagnosticsGlobalInfoWrapperPass();
+//  MemUseDefGlobalInfoWrapperPass();
 //
-//  const OmpDiagnosticsGlobalInfo &getResult() const { return SSI; }
+//  const MemUseDefGlobalInfo &getResult() const { return SSI; }
 //
 //  void print(raw_ostream &O, const Module *M) const override;
 //  void getAnalysisUsage(AnalysisUsage &AU) const override;
@@ -409,4 +409,4 @@ public:
 
 } // end namespace llvm
 
-#endif // LLVM_ANALYSIS_OmpDiagnosticsANALYSIS_H
+#endif // LLVM_ANALYSIS_MemUseDefANALYSIS_H
