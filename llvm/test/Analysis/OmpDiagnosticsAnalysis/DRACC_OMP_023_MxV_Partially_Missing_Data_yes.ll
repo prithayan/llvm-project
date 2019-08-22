@@ -1,13 +1,14 @@
 ; RUN: opt < %s -passes='print-omp-diagnostics' -disable-output 2>&1 | FileCheck %s --check-prefixes=NUF,CHECK
 
+
 ; CHECK: Host to Device Copy:
-; CHECK-NEXT: DRACC_OMP_023_MxV_Partially_Missing_Data_yes.c:30
-; CHECK-NEXT: Copy:: c[0:512]
-; CHECK-NEXT: Copy:: b[0:512]
-; CHECK-NEXT: Copy:: a[0:512]
-; CHECK-NEXT: Device to Host Copy:
-; CHECK-NEXT: DRACC_OMP_023_MxV_Partially_Missing_Data_yes.c:30
-; CHECK-NEXT: Copy:: c[0:512]
+; CHECK: DRACC_OMP_023_MxV_Partially_Missing_Data_yes.c:30
+; CHECK: H-D Copy:: c[0:512]
+; CHECK: H-D Copy:: b[0:512]
+; CHECK: H-D Copy:: a[0:512]
+; CHECK: Device to Host Copy:
+; CHECK: DRACC_OMP_023_MxV_Partially_Missing_Data_yes.c:30
+; CHECK: D-H Copy:: c[0:512]
 
 ;int Mult(){
 ;    

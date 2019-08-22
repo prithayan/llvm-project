@@ -155,11 +155,15 @@ private:
 
   /// Contains the reference count of every mapped  variable.
   DeviceEnvironmentsType DeviceEnvironments;
+  /// The map of Omp RTL calls to the Value that is allocated on device.
   InstructionToMemCopyMapType AllocatedItems;
   /// The map of Omp RTL calls to the Value that is copied from host to device.
   InstructionToMemCopyMapType HostDeviceCopy;
   /// The map of Omp RTL calls to the Value that is copied from device to host.
   InstructionToMemCopyMapType DeviceHostCopy;
+  /// The map of Omp RTL calls to the Value that is persistent on device.
+  InstructionToMemCopyMapType DevicePersistentIn;
+
   /// Map of Omp RTL to the {Value*, MapType, and Array section size}.
   OmpDirectiveDataMapType DirectiveToDataMap;
 
@@ -206,6 +210,22 @@ public:
 void printCopies(const InstructionToMemCopyMapType &ItoCopy, const std::string &CopyKind, raw_ostream &O) const;
   void insertNameForVal(const Value *V, const std::string &Name);
   void insertNameForVal(const Value *From, const Value *To);
+  /// Get the map of Omp RTL calls to the Value that is allocated on device.
+  void getAllocatedItems(InstructionToMemCopyMapType &Allocated){
+    Allocated = AllocatedItems;
+  }
+  /// Get the map of Omp RTL calls to the Value that is copied from host to device.
+  void getHostDeviceCopy(InstructionToMemCopyMapType &HostDeviceC){
+    HostDeviceC = HostDeviceCopy;
+  }
+  /// Get the map of Omp RTL calls to the Value that is copied from device to host.
+  void getDeviceHostCopy(InstructionToMemCopyMapType &DeviceHostC){
+    DeviceHostC = DeviceHostCopy;
+  }
+  /// Get the map of Omp RTL calls to the Value that is persistent on device.
+  void getDevicePersistentIn(InstructionToMemCopyMapType &DevicePersistent){
+    DevicePersistent = DevicePersistentIn;
+  }
 };
 
 /// Used to analyze the last written contents of every Value* within the

@@ -141,6 +141,11 @@ void OmpDiagnosticsInfo::print(raw_ostream &O) const {
     //  }
     //}
   }
+  if (DevicePersistentIn.size()) {
+    O << "\n =============== \n ";
+    O << "\n Persistent on Device :";
+    printCopies(DevicePersistentIn, "Persistent on Device", O);
+  }
   O << "\n =============== \n ";
   O << "\n Done \n";
 }
@@ -214,7 +219,11 @@ void OmpDiagnosticsInfo::enterDataEnv(const Instruction &OmpCall,
     LLVM_DEBUG(dbgs() << " Allocated to Device");
     if (!alreadyInserted(AllocatedItems[&OmpCall], MappedVar))
       AllocatedItems[&OmpCall].push_back(MappedVar); //.insert(ItemId);
+  } else if (DEnvMap[ItemId] > 1){
+    DevicePersistentIn[&OmpCall].push_back(MappedVar);
+    LLVM_DEBUG(dbgs() << " Persistent to Device");
   }
+
   LLVM_DEBUG(dbgs() << "\n Enter ItemID:" << ItemId
                     << " Count :" << DEnvMap[ItemId]);
 }
@@ -605,6 +614,7 @@ ValueFlowAtInstruction::get_BaseElementTypeSize(const Type *eType) const {
   }
   return 1;
 }
+
 void ValueFlowAtInstruction::parseArguments(const CallInst &OmpCall,
                                             const unsigned NumVars,
                                             const Value *BaseAddrArg,
