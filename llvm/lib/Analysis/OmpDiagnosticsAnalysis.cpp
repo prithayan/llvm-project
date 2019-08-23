@@ -177,8 +177,6 @@ std::string OmpDiagnosticsInfo::getName(const IdType &ID) const {
     return "";
   return ID->getName();
 }
-void enterDataEnv(const Instruction &OmpCall, OmpDataMapping &MappedVar,
-                  unsigned deviceid = 0);
 void OmpDiagnosticsInfo::enterDataEnv(const Instruction &OmpCall,
                                       OmpDataMapping &MappedVar,
                                       unsigned DeviceId) {

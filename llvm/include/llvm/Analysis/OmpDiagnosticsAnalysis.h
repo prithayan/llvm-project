@@ -135,14 +135,6 @@ struct OmpDataMapping {
 
 #define EXISTSinMap(MAP, ELEM) (MAP.find(ELEM) != MAP.end())
 
-/// This is the type of object that our analysis returns.
-/// It contains the mapping information for every Omp RTL call.
-/// It contains the host-device and device-host memory copies introduced.
-/// Note for future:This might be too much information to be returned.
-class OmpDiagnosticsInfo {
-  // friend class ValueFlowAtInstruction;
-private:
-  // using IdType = ValueFlowAtInstruction::IdType;
   using IdType = const Value *;
   /// Map of an Item represented by the Id to its reference count
   using ItemsRefCountType = std::map<IdType, unsigned>;
@@ -152,6 +144,13 @@ private:
       std::map<const Instruction *, DataMappingSetType>;
   using OmpDirectiveDataMapType =
       std::map<const CallInst *, DataMappingSetType>;
+/// This is the type of object that our analysis returns.
+/// It contains the mapping information for every Omp RTL call.
+/// It contains the host-device and device-host memory copies introduced.
+/// Note for future:This might be too much information to be returned.
+class OmpDiagnosticsInfo {
+  // friend class ValueFlowAtInstruction;
+private:
 
   /// Contains the reference count of every mapped  variable.
   DeviceEnvironmentsType DeviceEnvironments;
