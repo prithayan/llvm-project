@@ -13,37 +13,47 @@
 #include "llvm/Analysis/OMPSanitizer.h"
 using namespace llvm;
 
-#define DEBUG_TYPE "omp-diagnostics"
+#define DEBUG_TYPE "omp-sanitizer"
 
 void ValidateOmpReachingDefs::analyzeBasicBlock(const BasicBlock &BB){
   for (auto &I : BB) {
     if (const CallInst *Call = dyn_cast<CallInst>(&I)) {
-      auto CalledFunc = Call->getCalledFunction();
+      const Function *CalledFunc = Call->getCalledFunction();
+      for (auto &A : Call->args()){
+        if (auto F = dyn_cast<Function>(A->stripPointerCastsAndInvariantGroups())){
+          LLVM_DEBUG(dbgs()<<" Arg ::"<<A<<":"<<*(A->stripPointerCastsAndInvariantGroups()));
+          CalledFunc = F;
+        }
+      }
       if (CalledFunc == nullptr || !CalledFunc->hasName())
         continue;
       // Ignore recursive calls
       if (CalledFunc == BB.getParent())
         continue;
-    if (!CalledFunc->hasName() || CalledFunc->isIntrinsic() || CalledFunc->isDeclaration())
-      continue;
-        analyzeFunction(*CalledFunc);
+      if (CalledFunc->isIntrinsic() || CalledFunc->isDeclaration())
+        continue;
+      CalledFuncLocationMap[CalledFunc] = MemInfo.OmpDiagnosticsLocationInfo.getDebugLocSeq(Call);
+      analyzeFunction(*CalledFunc);
     }
   }
 }
 
-void ValidateOmpReachingDefs::analyzeFunction(Function &F) {
+void ValidateOmpReachingDefs::analyzeFunction(const Function &F) {
   if (EXISTSinMap(FuncEnvMap, &F)) return;
   bool TargetRegBeginCall = false;
-  if (F.getName().find("__omp_offloading") != std::string::npos && !InsideTargetEnv) {
+  if (F.getName().find("__omp_offloading") != std::string::npos && InsideOMPCall == nullptr) {
     TargetRegBeginCall = true;
-    InsideTargetEnv = true;
+    InsideOMPCall = &F;
   }
-  FuncEnvMap[&F] = InsideTargetEnv;
+  if (InsideOMPCall != nullptr) {
+      LLVM_DEBUG(dbgs()<<"\n Target Called at Line:"<<MemInfo.OmpDiagnosticsLocationInfo.getDebugLocStr(CalledFuncLocationMap[InsideOMPCall]));
+  }
+  FuncEnvMap[&F] = InsideOMPCall;
   // SmallVector<const BasicBlock*, 10> BBVisitQ;
   std::queue<const BasicBlock *> BBVisitQ;
   std::set<const BasicBlock *> BBVisitedSet;
   BBVisitQ.push(&F.getEntryBlock());
-  LLVM_DEBUG(dbgs() << "\n AnalyzeFunction : " << F.getName());
+  LLVM_DEBUG(dbgs() << "\n AnalyzeFunction : " << F.getName()<< " is Target region?"<<InsideOMPCall <<"\n");
   // Traverse the CFG in BFS
   while (!BBVisitQ.empty()) {
     auto VisitBB = BBVisitQ.front();
@@ -59,7 +69,45 @@ void ValidateOmpReachingDefs::analyzeFunction(Function &F) {
   }
   // Once we return from the function that was the target region begin, we are out of the Target environment and back to host environment.
   if (TargetRegBeginCall)
-    InsideTargetEnv = false;
+    InsideOMPCall = nullptr;
+}
+
+void ValidateOmpReachingDefs::recordOmpMaps(){
+  for (auto Iter : OmpInfo.getAllocatedItems()){
+    auto LocSeq = MemInfo.OmpDiagnosticsLocationInfo.getDebugLocSeq(Iter.first); 
+    for (auto MapTypeIter : Iter.second ){
+      AllocatedOnDeviceMap[LocSeq].insert(MapTypeIter.MappedValue);
+      LLVM_DEBUG(dbgs()<<"\n Allocated on line:"<<MemInfo.OmpDiagnosticsLocationInfo.getDebugLocStr(LocSeq) <<" val:"<<MapTypeIter.MappedValue << "= "<<*MapTypeIter.MappedValue);
+    }
+  }
+  for (auto Iter : OmpInfo.getHostDeviceCopy()){
+    auto LocSeq = MemInfo.OmpDiagnosticsLocationInfo.getDebugLocSeq(Iter.first); 
+    for (auto MapTypeIter : Iter.second ){
+      HostToDeviceMap[LocSeq].insert(MapTypeIter.MappedValue);
+      LLVM_DEBUG(dbgs()<<"\n Host to Device copy on line:"<<MemInfo.OmpDiagnosticsLocationInfo.getDebugLocStr(LocSeq) <<" val:"<<MapTypeIter.MappedValue<< "= "<<*MapTypeIter.MappedValue);
+    }
+  }
+  for (auto Iter : OmpInfo.getDeviceHostCopy()){
+    auto LocSeq = MemInfo.OmpDiagnosticsLocationInfo.getDebugLocSeq(Iter.first); 
+    for (auto MapTypeIter : Iter.second ){
+      DeviceToHostMap[LocSeq].insert(MapTypeIter.MappedValue);
+      LLVM_DEBUG(dbgs()<<"\n Device to Host copy on line:"<<MemInfo.OmpDiagnosticsLocationInfo.getDebugLocStr(LocSeq) <<" val:"<<MapTypeIter.MappedValue<< "= "<<*MapTypeIter.MappedValue);
+    }
+  }
+  for (auto Iter : OmpInfo.getDevicePersistentIn()){
+    auto LocSeq = MemInfo.OmpDiagnosticsLocationInfo.getDebugLocSeq(Iter.first); 
+    for (auto MapTypeIter : Iter.second ){
+      PersistentInMap[LocSeq].insert(MapTypeIter.MappedValue);
+      LLVM_DEBUG(dbgs()<<"\n Persistent in on line:"<<MemInfo.OmpDiagnosticsLocationInfo.getDebugLocStr(LocSeq) <<" val:"<<MapTypeIter.MappedValue<< "= "<<*MapTypeIter.MappedValue);
+    }
+  }
+  for (auto Iter : OmpInfo.getDevicePersistentOut()){
+    auto LocSeq = MemInfo.OmpDiagnosticsLocationInfo.getDebugLocSeq(Iter.first); 
+    for (auto MapTypeIter : Iter.second ){
+      PersistentOutMap[LocSeq].insert(MapTypeIter.MappedValue);
+      LLVM_DEBUG(dbgs()<<"\n Persistent out on line:"<<MemInfo.OmpDiagnosticsLocationInfo.getDebugLocStr(LocSeq) <<" val:"<<MapTypeIter.MappedValue<< "= "<<*MapTypeIter.MappedValue);
+    }
+  }
 }
 
 void ValidateOmpReachingDefs::analyzeModule(Module &M){
@@ -74,8 +122,48 @@ void ValidateOmpReachingDefs::analyzeModule(Module &M){
       break;
     }
   }
+
+  MemUseToReachingDefsMapType MemUseToReachingDefsMap;
+  MemInfo.getMemUseToReachingDefsMap(MemUseToReachingDefsMap);
+  for (auto Iter : MemUseToReachingDefsMap) {
+    bool UseOnDevice = false;
+    auto MemUseInstr = Iter.first;
+    auto Func = MemUseInstr->getFunction();
+    if (EXISTSinMap(FuncEnvMap, Func)) {
+      //LLVM_DEBUG(dbgs()<<"\n ENV ::"<<FuncEnvMap[Func]);
+      if (FuncEnvMap[Func] != nullptr && EXISTSinMap(CalledFuncLocationMap, Func)){
+        LLVM_DEBUG(dbgs()<<"Use Target env Func Called at line :"<<MemInfo.OmpDiagnosticsLocationInfo.getDebugLocStr(CalledFuncLocationMap[FuncEnvMap[Func]]));
+        UseOnDevice = true;
+      }
+    } else 
+      continue;
+    LLVM_DEBUG(dbgs()<<"\n Use:"<<*MemUseInstr);
+    auto BB = MemUseInstr->getParent();
+    for (auto RDefs : MemInfo.BBReachingCalls[BB]){
+      LLVM_DEBUG(dbgs()<<"\n Reaching Def: "<<*RDefs);
+    }
+
+    if (Iter.second.empty())  continue;
+    for (auto MemDefInstr : Iter.second) {
+    bool DefOnDevice = false;
+      if ( MemUseInstr == MemDefInstr ) continue;
+      LLVM_DEBUG(dbgs()<<"\n Def :"<<*MemDefInstr);
+      //if (isa<CallInst>(MemDefInstr)) continue;
+      auto Func = MemDefInstr->getFunction();
+      if (EXISTSinMap(FuncEnvMap, Func)) {
+        //LLVM_DEBUG(dbgs()<<"\n ENV ::"<<FuncEnvMap[Func]);
+        if (FuncEnvMap[Func] && EXISTSinMap(CalledFuncLocationMap, Func)){
+          LLVM_DEBUG(dbgs()<<"Def Target env Func Called at line :"<<MemInfo.OmpDiagnosticsLocationInfo.getDebugLocStr(CalledFuncLocationMap[FuncEnvMap[Func]]));
+          DefOnDevice = true;
+        }
+      } else 
+      continue;
+      //<<"At :"<<OmpDiagnosticsLocationInfo.getVarNameLocStr(MemDefInstr);
+    }
+  }
 }
 
+AnalysisKey OmpSanitizerGlobalAnalysis::Key;
 OmpSanitizerGlobalAnalysis::Result OmpSanitizerGlobalAnalysis::run(Module &M, ModuleAnalysisManager &AM) {
   // OmpDiagnosticsGlobalInfo result;
   ThisModule = &M;
@@ -83,16 +171,11 @@ OmpSanitizerGlobalAnalysis::Result OmpSanitizerGlobalAnalysis::run(Module &M, Mo
   AnalysisManager = &AM;
   OmpDiagnosticsInfo OmpInfo = AM.getResult<OmpDiagnosticsGlobalAnalysis>(M);
   auto MemInfo = AM.getResult<MemUseDefGlobalAnalysis>(M);
-  //MemInfo.
-  InstructionToMemCopyMapType AllocatedDevice, HostToDeviceCopy, DeviceToHostCopy, DevicePersistent;
-  OmpInfo.getAllocatedItems(AllocatedDevice); 
-  OmpInfo.getHostDeviceCopy(HostToDeviceCopy); 
-  OmpInfo.getDeviceHostCopy(DeviceToHostCopy);
-  OmpInfo.getDevicePersistentIn(DevicePersistent);
-  ValidateOmpReachingDefs ValidateObj(AllocatedDevice, HostToDeviceCopy, DeviceToHostCopy, DevicePersistent);
+  MemUseToReachingDefsMapType MemUseToReachingDefsMap;
+  MemInfo.getMemUseToReachingDefsMap(MemUseToReachingDefsMap);
+  ValidateOmpReachingDefs ValidateObj( MemInfo, OmpInfo);//, MemUseToReachingDefsMap);
   ValidateObj.analyzeModule(M);
-  return 0;
-
+  return ValidateObj;
 }
 
 PreservedAnalyses

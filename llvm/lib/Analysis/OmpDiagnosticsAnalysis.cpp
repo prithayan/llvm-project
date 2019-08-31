@@ -269,6 +269,8 @@ void OmpDiagnosticsInfo::exitDataEnv(const Instruction &OmpCall,
   }
   if (DEnvMap[ItemId] == 0)
     DeviceEnvironments[DeviceId].erase(ItemId);
+  else 
+    DevicePersistentOut[&OmpCall].push_back(MappedVar);
 }
 void OmpDiagnosticsInfo::processOmpRTLCall(const CallInst &CI) {
   if (!EXISTSinMap(DirectiveToDataMap, &CI))

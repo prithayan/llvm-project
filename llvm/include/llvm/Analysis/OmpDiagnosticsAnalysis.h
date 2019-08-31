@@ -162,6 +162,7 @@ private:
   InstructionToMemCopyMapType DeviceHostCopy;
   /// The map of Omp RTL calls to the Value that is persistent on device.
   InstructionToMemCopyMapType DevicePersistentIn;
+  InstructionToMemCopyMapType DevicePersistentOut;
 
   /// Map of Omp RTL to the {Value*, MapType, and Array section size}.
   OmpDirectiveDataMapType DirectiveToDataMap;
@@ -210,20 +211,24 @@ void printCopies(const InstructionToMemCopyMapType &ItoCopy, const std::string &
   void insertNameForVal(const Value *V, const std::string &Name);
   void insertNameForVal(const Value *From, const Value *To);
   /// Get the map of Omp RTL calls to the Value that is allocated on device.
-  void getAllocatedItems(InstructionToMemCopyMapType &Allocated){
-    Allocated = AllocatedItems;
+  const InstructionToMemCopyMapType &getAllocatedItems(){
+    return AllocatedItems;
   }
   /// Get the map of Omp RTL calls to the Value that is copied from host to device.
-  void getHostDeviceCopy(InstructionToMemCopyMapType &HostDeviceC){
-    HostDeviceC = HostDeviceCopy;
+  const InstructionToMemCopyMapType &getHostDeviceCopy(){
+    return  HostDeviceCopy;
   }
   /// Get the map of Omp RTL calls to the Value that is copied from device to host.
-  void getDeviceHostCopy(InstructionToMemCopyMapType &DeviceHostC){
-    DeviceHostC = DeviceHostCopy;
+  const InstructionToMemCopyMapType &getDeviceHostCopy(){
+    return  DeviceHostCopy;
   }
   /// Get the map of Omp RTL calls to the Value that is persistent on device.
-  void getDevicePersistentIn(InstructionToMemCopyMapType &DevicePersistent){
-    DevicePersistent = DevicePersistentIn;
+  const InstructionToMemCopyMapType &getDevicePersistentIn(){
+    return  DevicePersistentIn;
+  }
+
+  const InstructionToMemCopyMapType &getDevicePersistentOut(){
+    return DevicePersistentOut;
   }
 };
 

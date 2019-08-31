@@ -13,7 +13,7 @@
 using namespace llvm;
 
 #define DEBUG_TYPE "mem-usedef-analysis"
-
+static StringRef TargetRTLToken = "__tgt_target_";
 
 Function *getCalledFunction(const CallInst &CI){
   auto CalledF = CI.getCalledFunction();
@@ -306,7 +306,7 @@ void DebugLocation::initFunc(Function &F) {
   }
 }
 
-DebugLocation OmpDiagnosticsLocationInfo;
+DebugLocation MemoryLdStMapClass::OmpDiagnosticsLocationInfo;
 const std::string DebugLocation::getVarNameLocStr(const Instruction *Inst) {
   const unsigned seq = getDebugLocSeq(Inst);
   std::string NameLocationStr;
@@ -322,10 +322,22 @@ void MemoryLdStMapClass::FuncParamInfoClass::print(){
     LLVM_DEBUG(dbgs()<<"\n "<< Iter.first );
   }
 }
+
 bool MemoryLdStMapClass::FuncParamInfoClass::doValuesAlias(ConstValuePtr Arg, ConstValuePtr Param) const{
   if (Arg == nullptr || Param == nullptr) return false;
   LLVM_DEBUG(dbgs()<<"\n lookionf for "<<*Arg<<","<<*Param);
   LLVM_DEBUG(dbgs()<<"\n lookionf for "<<Arg<<","<<Param);
+  const CallInst *CI = nullptr;
+  if (isa<CallInst>(Arg))
+    CI = dyn_cast<CallInst>(Arg);
+  if (CI != nullptr && CI->getCalledFunction()->getName().contains(TargetRTLToken))
+    return true;
+  if (isa<CallInst>(Param))
+    CI = dyn_cast<CallInst>(Param);
+  if (CI != nullptr && CI->getCalledFunction()->getName().contains(TargetRTLToken))
+    return true;
+
+
   if (EXISTSinMap(ValueToIdMap, Arg) && EXISTSinMap(ValueToIdMap, Param)){
     unsigned ArgID = ValueToIdMap.at(Arg);
     unsigned ParamID = ValueToIdMap.at(Param);
@@ -509,6 +521,14 @@ ConstValuePtr
 MemoryLdStMapClass::getMemoryForLdSt(ConstInstrPtr LdSt) const {
   if (LdSt == nullptr || filterLoadOfAddress(LdSt)) 
     return nullptr;
+  if (auto C = dyn_cast<CallInst>(LdSt)){
+    if (auto CalledF = C->getCalledFunction()){
+      if (CalledF->hasName()){
+        if (CalledF->getName().contains( TargetRTLToken))
+          return LdSt;
+      }
+    }
+  }
   LLVM_DEBUG(dbgs() << "\n Looking for memory for instr:" << *LdSt);
   isMalloc(LdSt);
   auto EntryIter = LdStPointsToMap.find(LdSt);
@@ -532,7 +552,7 @@ void DebugLocation::setSymbolName(const Instruction *Instr, const Value *Val) {
 }
 /// Get the source level name for this Value.
 std::string DebugLocation::getSymbolName(const Value *Val) {
-  if (OmpDiagnosticsLocationInfo.IrToSrcLocMap.find(Val) != IrToSrcLocMap.end())
+  if (MemoryLdStMapClass::OmpDiagnosticsLocationInfo.IrToSrcLocMap.find(Val) != IrToSrcLocMap.end())
     return IrToSrcLocMap[Val];
   if (Val->hasName()) {
     return Val->getName();
@@ -548,7 +568,7 @@ std::string DebugLocation::getSymbolName(const Value *Val) {
 }
 
 std::string DebugLocation::getSymbolName(const Instruction *LdSt) {
-  if (OmpDiagnosticsLocationInfo.IrToSrcLocMap.find(LdSt) !=
+  if (MemoryLdStMapClass::OmpDiagnosticsLocationInfo.IrToSrcLocMap.find(LdSt) !=
       IrToSrcLocMap.end())
     return IrToSrcLocMap[LdSt];
   if (auto StoreI = dyn_cast<StoreInst>(LdSt)) {
@@ -571,7 +591,7 @@ std::string DebugLocation::getSymbolName(const Instruction *LdSt) {
 }
 
 void MemoryLdStMapClass::setSymbolName(ConstInstrPtr LdSt) {
-  auto SymName = OmpDiagnosticsLocationInfo.getSymbolName(LdSt);
+  auto SymName = MemoryLdStMapClass::OmpDiagnosticsLocationInfo.getSymbolName(LdSt);
   if (SymName != "")
     return;
   if (LdStPointsToMap.find(LdSt) != LdStPointsToMap.end()) {
@@ -733,11 +753,11 @@ bool MemoryLdStMapClass::insertReachingDef(ConstInstrPtr MemUse,
 //  return false;
 //}
 
-bool MemoryLdStMapClass::insertReachingDef(ConstInstrPtr MemUse, SetOfInstructions MemDefSet, bool CheckAlias){
+bool MemoryLdStMapClass::insertReachingDef(ConstInstrPtr MemUseInstr, SetOfInstructions MemDefSet, bool CheckAlias){
   bool NewElemInserted = false;
-  if (auto C = dyn_cast<CallInst>(MemUse)) {
+  if (auto C = dyn_cast<CallInst>(MemUseInstr)) {
     auto F = getCalledFunction(*C);//C->getCalledFunction();
-    if (F->isIntrinsic() || F->isDeclaration() )  return NewElemInserted;
+    if (F->isIntrinsic() /*|| F->isDeclaration()*/ )  return NewElemInserted;
     CheckAlias = false;
   }
   //auto UserLocation = OmpDiagnosticsLocationInfo.getDebugLocSeq(MemUse);
@@ -747,20 +767,20 @@ bool MemoryLdStMapClass::insertReachingDef(ConstInstrPtr MemUse, SetOfInstructio
       //if (UserLocation == OmpDiagnosticsLocationInfo.getDebugLocSeq(DefInstr))
       //if (DefInstr == MemUse)
       //  continue;
-      NewElemInserted = insertReachingDef(MemUse, DefInstr);
+      NewElemInserted = insertReachingDef(MemUseInstr, DefInstr);
     }
   }else {
-    auto UsedMem = getMemoryForLdSt(MemUse);
+    auto UsedMem = getMemoryForLdSt(MemUseInstr);
     for (auto DefInstr : MemDefSet){
       // If use and def same instruction ignore it.
-      if (DefInstr == MemUse) continue;
+      if (DefInstr == MemUseInstr) continue;
       //if (UserLocation == OmpDiagnosticsLocationInfo.getDebugLocSeq(DefInstr))
       //  continue;
       auto WrittenMem = getMemoryForLdSt(DefInstr);
       //if (UsedMem == WrittenMem ) 
       //if (areValuesSame(DefInstr, UsedMem))
       if (FuncParamInfo.doValuesAlias(UsedMem, WrittenMem))
-        NewElemInserted = insertReachingDef(MemUse, DefInstr);
+        NewElemInserted = insertReachingDef(MemUseInstr, DefInstr);
     }
   }
   return NewElemInserted;
@@ -832,7 +852,7 @@ void MemoryLdStMapClass::print(raw_ostream &O) {
     return LdSt->getType();
   }
 void MemoryLdStMapClass::print() {
-  errs()<<"\n Printing usedef::\n";
+  LLVM_DEBUG(dbgs()<<"\n Printing usedef::\n");
   FuncParamInfo.print();
   for (auto Iter : MemUseToReachingDefsMap) {
     auto MemUseInstr = Iter.first;
@@ -840,31 +860,31 @@ void MemoryLdStMapClass::print() {
     if (!EXISTSinMap(LdStPointsToMap, MemUseInstr)) continue;
       auto PointsToMem = LdStPointsToMap[MemUseInstr];
       auto UseType = getType(MemUseInstr);
-      errs() << "\n Use::"<< *MemUseInstr <<" AT::"
+      LLVM_DEBUG(dbgs() << "\n Use::"<< *MemUseInstr <<" AT::"
         << OmpDiagnosticsLocationInfo.getOrigVarName(PointsToMem)
-        << " Type:: "<<*UseType ;
+        << " Type:: "<<*UseType );
     
-    errs()  << " At:: " << OmpDiagnosticsLocationInfo.getDebugLocStr(*MemUseInstr)
-      << " Defined at: ";
+    LLVM_DEBUG(dbgs()  << " At:: " << OmpDiagnosticsLocationInfo.getDebugLocStr(*MemUseInstr)
+      << " Defined at: ");
     for (auto MemDefInstr : Iter.second) {
       //if ( MemUseInstr == MemDefInstr ) continue;
       if (isa<CallInst>(MemDefInstr) || UseType != getType(MemDefInstr)) continue;
       //errs() << OmpDiagnosticsLocationInfo.getDebugLocStr(*MemDefInstr) << ", ";
-      errs() << " "<< *MemDefInstr << " At" <<OmpDiagnosticsLocationInfo.getDebugLocStr(*MemDefInstr) <<    ", ";
+      LLVM_DEBUG(dbgs() << " "<< *MemDefInstr << " At" <<OmpDiagnosticsLocationInfo.getDebugLocStr(*MemDefInstr) <<    ", ");
       //<<"At :"<<OmpDiagnosticsLocationInfo.getVarNameLocStr(MemDefInstr);
     }
   }
   for (auto Iter : FuncGeneratingDefs) {
-    errs()<<"\n Func generating::"<<Iter.first->getName();
+    LLVM_DEBUG(dbgs()<<"\n Func generating::"<<Iter.first->getName());
     for (auto D : Iter.second)
-      errs()<<"\n "<<OmpDiagnosticsLocationInfo.getDebugLocStr(*D);
+      LLVM_DEBUG(dbgs()<<"\n "<<OmpDiagnosticsLocationInfo.getDebugLocStr(*D));
   }
   return;
   for (auto Iter : CallInstToUsersMap) {
     auto Call = Iter.first;
-    errs() << "\n Call :"<<*Call;
+    LLVM_DEBUG(dbgs() << "\n Call :"<<*Call);
     for (auto User : Iter.second){
-      errs() << "::"<<*User<<",";
+      LLVM_DEBUG(dbgs() << "::"<<*User<<",");
     }
   }
 }
@@ -893,8 +913,8 @@ void MemorySSAUseDefWalker::addToGeneratingDefs(
   const BasicBlock *parentBB = Instr->getParent();
 
   if (CallInst * Call  = dyn_cast<CallInst>(MemDef->getMemoryInst())){
-    LLVM_DEBUG(dbgs()<<"\n Call instruction::"<<*Call);
-    BBReachingCalls[parentBB].insert(Call);
+    LLVM_DEBUG(dbgs()<<"\n Adding reaching Call instruction::"<<*Call);
+    LdStToMem.BBReachingCalls[parentBB].insert(Call);
   }
   auto memVal = LdStToMem.insertLoadStore(Instr);
   if (memVal == nullptr)
@@ -954,7 +974,7 @@ void MemorySSAUseDefWalker::updateReachingDefsOfBB(const BasicBlock *PredBB,
   LLVM_DEBUG(dbgs() << " \n phi :"
                     << "\n incoming bb:" << *PredBB);
   // Add all the reaching call instructions from the pred to this block also.
-  BBReachingCalls[BB].insert(BBReachingCalls[PredBB].begin(),BBReachingCalls[PredBB].end());
+  LdStToMem.BBReachingCalls[BB].insert(LdStToMem.BBReachingCalls[PredBB].begin(),LdStToMem.BBReachingCalls[PredBB].end());
   // If this PredBB generates any defs, then
   // then add all the genrated defs from predecessor to the reaching defs of the
   // BB. Also, record all the defs killed by the predecessor.
@@ -1141,10 +1161,10 @@ void MemorySSAUseDefWalker::updateBasicBlock(const BasicBlock *BB) {
         updateClobberingAccess(MemUse);
       }
       if (MemInstr != nullptr) LdStToMem.insertLoadStore(MemInstr);
-      if (MemInstr != nullptr && EXISTSinMap(BBReachingCalls,BB)) {
+      if (MemInstr != nullptr && EXISTSinMap(LdStToMem.BBReachingCalls,BB)) {
         LLVM_DEBUG(dbgs()<<"\n user::"<<*MemInstr);
         // If there are call instructions that reach the BB, then record it.
-        LdStToMem.addReachingCall(*MemInstr, BBReachingCalls[BB]);
+        LdStToMem.addReachingCall(*MemInstr, LdStToMem.BBReachingCalls[BB]);
       }
     }
   if (ReturnBlock) {
@@ -1243,7 +1263,7 @@ MemUseDefLocalAnalysis::Result
 MemUseDefLocalAnalysis::run(Function &F, FunctionAnalysisManager &AM) {
   MemorySSA &MSSA = AM.getResult<MemorySSAAnalysis>(F).getMSSA();
   LLVM_DEBUG(MSSA.dump());
-  OmpDiagnosticsLocationInfo.initFunc(F);
+  MemoryLdStMapClass::OmpDiagnosticsLocationInfo.initFunc(F);
   MemoryLdStMapClass LdStToMem;
   MemorySSAUseDefWalker useDefWalker(MSSA, LdStToMem);
   useDefWalker.reachingDefAnalysis();
@@ -1401,10 +1421,10 @@ void InterproceduralMemDFA::updateReachingDefsOfBB(BasicBlock &BB, bool &NewDefs
       for (auto User : LdStToMemFunc->getUsersOfCall(*CallInstr)){
         // This adds reaching defs to instructions outside this current basic block also. 
         // TODO: need to set NewDefsAdded
-        LLVM_DEBUG(dbgs()<<"\n User of call :"<<OmpDiagnosticsLocationInfo.getDebugLocStr(*User)
+        LLVM_DEBUG(dbgs()<<"\n User of call :"<<MemoryLdStMapClass::OmpDiagnosticsLocationInfo.getDebugLocStr(*User)
             <<"\n FuncGen defs are : "); 
         for (auto D : FuncGen) {
-          LLVM_DEBUG(dbgs()<<"\n "<<OmpDiagnosticsLocationInfo.getDebugLocStr(*D));
+          LLVM_DEBUG(dbgs()<<"\n "<<MemoryLdStMapClass::OmpDiagnosticsLocationInfo.getDebugLocStr(*D));
         }
         LLVM_DEBUG(dbgs()<<"\n DONE \n   Inserting the funcgen into the user \n");
         NewDefsAdded |= LdStToMemFunc->insertReachingDef(User, FuncGen);
@@ -1486,9 +1506,10 @@ void MemUseDefGlobalAnalysis::analyzeBasicBlock(const BasicBlock &BB, Result &Me
 }
 
 void MemUseDefGlobalAnalysis::analyzeFunction(Function &F, Result &MemUseDefInfo) {
+  if (F.isDeclaration()) return;
   MemorySSA &MSSA = FunctionAM->getResult<MemorySSAAnalysis>(F).getMSSA();
   LLVM_DEBUG(MSSA.dump());
-  OmpDiagnosticsLocationInfo.initFunc(F);
+  MemoryLdStMapClass::OmpDiagnosticsLocationInfo.initFunc(F);
   MemorySSAUseDefWalker useDefWalker(MSSA, MemUseDefInfo);
   useDefWalker.reachingDefAnalysis();
 }

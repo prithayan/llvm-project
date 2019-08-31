@@ -36,14 +36,33 @@ namespace llvm {
 using namespace llvm;
 class ValidateOmpReachingDefs {
 
-  const InstructionToMemCopyMapType &AllocatedDevice, &HostToDeviceCopy, &DeviceToHostCopy, &DevicePersistent;
+  //const InstructionToMemCopyMapType &AllocatedDevice, &HostToDeviceCopy, &DeviceToHostCopy, &DevicePersistent;
 
-  std::map<Function *, bool> FuncEnvMap;
-  bool InsideTargetEnv;
-  public: 
-  ValidateOmpReachingDefs(InstructionToMemCopyMapType &A, InstructionToMemCopyMapType &B, InstructionToMemCopyMapType &C, InstructionToMemCopyMapType &D): AllocatedDevice(A), HostToDeviceCopy(B), DeviceToHostCopy(C), DevicePersistent(D), InsideTargetEnv(false){}
+  //const MemUseToReachingDefsMapType &MemUseToReachingDefsMap;
+
+  MemoryLdStMapClass &MemInfo;
+  OmpDiagnosticsInfo &OmpInfo;
+  std::map<const Function *, const Function *> FuncEnvMap;
+  std::map<const Function *, unsigned> CalledFuncLocationMap;
+  //std::map<unsigned , std::set<const Function *>> LocationToCalledFuncMap;
+  //DebugLocation OmpDiagnosticsLocationInfo;
+  std::map<unsigned, SetOfValues> AllocatedOnDeviceMap;
+  std::map<unsigned, SetOfValues> HostToDeviceMap;
+  std::map<unsigned, SetOfValues> DeviceToHostMap;
+  std::map<unsigned, SetOfValues> PersistentInMap;
+  std::map<unsigned, SetOfValues> PersistentOutMap;
+  const Function *InsideOMPCall;
+  //bool InsideTargetEnv;
+
+  void recordOmpMaps();
+  public:
+  ValidateOmpReachingDefs(MemoryLdStMapClass &M, OmpDiagnosticsInfo &O): MemInfo(M), OmpInfo(O), InsideOMPCall(nullptr){
+    recordOmpMaps();
+  }
+
+  //ValidateOmpReachingDefs(InstructionToMemCopyMapType &A, InstructionToMemCopyMapType &B, InstructionToMemCopyMapType &C, InstructionToMemCopyMapType &D, MemUseToReachingDefsMapType &E, DebugLocation &F): AllocatedDevice(A), HostToDeviceCopy(B), DeviceToHostCopy(C), DevicePersistent(D), MemUseToReachingDefsMap(E), OmpDiagnosticsLocationInfo(F), InsideTargetEnv(false) {}
   void analyzeModule(Module &M);
-  void analyzeFunction(Function &F);
+  void analyzeFunction(const Function &F);
   void analyzeBasicBlock(const BasicBlock &BB);
 
 };
@@ -58,7 +77,7 @@ class OmpSanitizerGlobalAnalysis
   ModuleAnalysisManager *AnalysisManager;
 
 public:
-  using Result = unsigned;
+  using Result = ValidateOmpReachingDefs;
   Result run(Module &M, ModuleAnalysisManager &AM);
 };
 

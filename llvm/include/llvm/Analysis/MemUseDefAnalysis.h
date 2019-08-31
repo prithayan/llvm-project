@@ -28,6 +28,7 @@
 #include <queue>
 #include <set>
 
+//TODO: Verify if the analysis converge mechanism works, if we can identify when no new defs are aded.
 namespace llvm {
 
 /// Represents the string type of Omp RTL call names
@@ -43,6 +44,9 @@ using LocationSequenceNumType = unsigned;
 using LineNumberType = unsigned;
 using LocationStringType = std::string;
 using FileNameType = std::string;
+using InstrPointsToMapType = std::map<ConstInstrPtr, ConstValuePtr>;
+using MemUseToReachingDefsMapType =
+  std::map<ConstInstrPtr, SetOfInstructions>;
 
 
 class DebugLocation {
@@ -94,15 +98,13 @@ public:
 
 class MemoryLdStMapClass {
   /// Map of instruction, to the memory value, that it accesses.
-  using InstrPointsToMapType = std::map<ConstInstrPtr, ConstValuePtr>;
-  using MemUseToReachingDefsMapType =
-    std::map<ConstInstrPtr, SetOfInstructions>;
   //std::map<ConstInstrPtr, SetOfValues>;
   using BBtoReachingDefsMapType =
     std::map<const BasicBlock *, SetOfInstructions>;
   using CallInstToUsersMapType = std::map<ConstInstrPtr , SetOfInstructions>;
   using FuncGenDefsType = std::map<const Function *, SetOfInstructions>;
-
+  using BBReachingCallInstrMapType = 
+    std::map<const BasicBlock *, SetOfInstructions>;
 
   class FuncParamInfoClass {
     std::map<ConstValuePtr, unsigned> ValueToIdMap; 
@@ -135,7 +137,11 @@ class MemoryLdStMapClass {
 
   public:
 
+  /// Record the call instructions that reach this basic block. It is updated whenever a memdef is generated in a basic block that is a call instruction. And whenever a memdef is added at a phi operator at the join point.
+  BBReachingCallInstrMapType BBReachingCalls;
+  static DebugLocation OmpDiagnosticsLocationInfo;
   static FuncParamInfoClass FuncParamInfo;
+  void getMemUseToReachingDefsMap(MemUseToReachingDefsMapType &R){R = MemUseToReachingDefsMap;}
   void handleCallArguments(const CallInst &CI);
   /// Check if \p Val is a memory operand.
   bool isMemory(ConstValuePtr Val) const;
@@ -220,8 +226,6 @@ public:
       std::map<const BasicBlock *, MemToSetofDefsMapType>;
   using MemUseToReachingDefsMapType =
       std::map<const MemoryUse *, SetOfMemoryDefsType>;
-  using BBReachingCallInstrMapType = 
-    std::map<const BasicBlock *, SetOfInstructions>;
 
 private:
   const MemorySSA *MSSA;
@@ -237,8 +241,6 @@ private:
   BBReachingDefsType BBReachingDefs;
   MemoryLdStMapClass &LdStToMem;
 
-  /// Record the call instructions that reach this basic block. It is updated whenever a memdef is generated in a basic block that is a call instruction. And whenever a memdef is added at a phi operator at the join point.
-  BBReachingCallInstrMapType BBReachingCalls;
   /// Map of a MemoryUse to a set of reaching MemDefs, that clobber the same
   /// memory that the MemoryUse reads. This is the final output of our dataflow
   /// analysis.
