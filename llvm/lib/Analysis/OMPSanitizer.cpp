@@ -128,16 +128,21 @@ void ValidateOmpReachingDefs::analyzeModule(Module &M){
   for (auto Iter : MemUseToReachingDefsMap) {
     bool UseOnDevice = false;
     auto MemUseInstr = Iter.first;
-    auto Func = MemUseInstr->getFunction();
-    if (EXISTSinMap(FuncEnvMap, Func)) {
+    auto UseDefArray = MemInfo.getMemoryForLdSt(MemUseInstr);
+    if (UseDefArray == nullptr) continue;
+    if (!isa<LoadInst>(MemUseInstr)) continue;
+    auto Ld = dyn_cast<LoadInst>(MemUseInstr);
+    if (Ld->getType()->isPointerTy()) continue;
+    auto UseFunc = MemUseInstr->getFunction();
+    if (EXISTSinMap(FuncEnvMap, UseFunc)) {
       //LLVM_DEBUG(dbgs()<<"\n ENV ::"<<FuncEnvMap[Func]);
-      if (FuncEnvMap[Func] != nullptr && EXISTSinMap(CalledFuncLocationMap, Func)){
-        LLVM_DEBUG(dbgs()<<"Use Target env Func Called at line :"<<MemInfo.OmpDiagnosticsLocationInfo.getDebugLocStr(CalledFuncLocationMap[FuncEnvMap[Func]]));
+      if (FuncEnvMap[UseFunc] != nullptr && EXISTSinMap(CalledFuncLocationMap, UseFunc)){
+        LLVM_DEBUG(dbgs()<<"Use Target env Use Func Called at line :"<<MemInfo.OmpDiagnosticsLocationInfo.getDebugLocStr(CalledFuncLocationMap[FuncEnvMap[UseFunc]]));
         UseOnDevice = true;
       }
     } else 
       continue;
-    LLVM_DEBUG(dbgs()<<"\n Use:"<<*MemUseInstr);
+    LLVM_DEBUG(dbgs()<<"\n Use:"<<*MemUseInstr << " At: "<<MemInfo.OmpDiagnosticsLocationInfo.getDebugLocStr(*MemUseInstr)<<" of : "<<UseDefArray);
     auto BB = MemUseInstr->getParent();
     for (auto RDefs : MemInfo.BBReachingCalls[BB]){
       LLVM_DEBUG(dbgs()<<"\n Reaching Def: "<<*RDefs);
@@ -147,15 +152,37 @@ void ValidateOmpReachingDefs::analyzeModule(Module &M){
     for (auto MemDefInstr : Iter.second) {
     bool DefOnDevice = false;
       if ( MemUseInstr == MemDefInstr ) continue;
-      LLVM_DEBUG(dbgs()<<"\n Def :"<<*MemDefInstr);
+      if (!isa<StoreInst>(MemDefInstr)) continue;
+
+      LLVM_DEBUG(dbgs()<<"\n Def :"<<*MemDefInstr<< " At: "<<MemInfo.OmpDiagnosticsLocationInfo.getDebugLocStr(*MemDefInstr));
       //if (isa<CallInst>(MemDefInstr)) continue;
-      auto Func = MemDefInstr->getFunction();
-      if (EXISTSinMap(FuncEnvMap, Func)) {
-        //LLVM_DEBUG(dbgs()<<"\n ENV ::"<<FuncEnvMap[Func]);
-        if (FuncEnvMap[Func] && EXISTSinMap(CalledFuncLocationMap, Func)){
-          LLVM_DEBUG(dbgs()<<"Def Target env Func Called at line :"<<MemInfo.OmpDiagnosticsLocationInfo.getDebugLocStr(CalledFuncLocationMap[FuncEnvMap[Func]]));
+      auto DefFunc = MemDefInstr->getFunction();
+      if (EXISTSinMap(FuncEnvMap, DefFunc)) {
+        //LLVM_DEBUG(dbgs()<<"\n ENV ::"<<FuncEnvMap[DefFunc]);
+        if (FuncEnvMap[DefFunc] && EXISTSinMap(CalledFuncLocationMap, DefFunc)){
+          LLVM_DEBUG(dbgs()<<"Def Target env DeFunc Called at line :"<<MemInfo.OmpDiagnosticsLocationInfo.getDebugLocStr(CalledFuncLocationMap[FuncEnvMap[DefFunc]]));
           DefOnDevice = true;
+        } else {
+          LLVM_DEBUG(dbgs()<<"Def outside target");
         }
+        if (UseOnDevice && DefOnDevice){
+          // If not within same target region, then persistent out and in. 
+        }else if (DefOnDevice && !UseOnDevice){
+          // Must be copy out or persistent out from target.
+          if (EXISTSinMap(DeviceToHostMap[CalledFuncLocationMap[DefFunc]], UseDefArray ) ){
+            LLVM_DEBUG(dbgs()<<"\n exists in device to host copy:"<<*UseDefArray);
+          } else {
+            LLVM_DEBUG(dbgs()<<"\n Error not copied out"<<*UseDefArray);
+          }
+        }else if (!DefOnDevice && UseOnDevice){
+          // Must be Copy in or persistent in to the target.
+          if (EXISTSinMap(HostToDeviceMap[CalledFuncLocationMap[UseFunc]], UseDefArray ) ){
+            LLVM_DEBUG(dbgs()<<"\n exists in device to host copy:"<<*UseDefArray);
+          } else {
+            LLVM_DEBUG(dbgs()<<"\n Error not copied out"<<*UseDefArray);
+          }
+        }
+
       } else 
       continue;
       //<<"At :"<<OmpDiagnosticsLocationInfo.getVarNameLocStr(MemDefInstr);

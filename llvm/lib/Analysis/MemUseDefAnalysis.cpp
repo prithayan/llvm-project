@@ -327,17 +327,6 @@ bool MemoryLdStMapClass::FuncParamInfoClass::doValuesAlias(ConstValuePtr Arg, Co
   if (Arg == nullptr || Param == nullptr) return false;
   LLVM_DEBUG(dbgs()<<"\n lookionf for "<<*Arg<<","<<*Param);
   LLVM_DEBUG(dbgs()<<"\n lookionf for "<<Arg<<","<<Param);
-  const CallInst *CI = nullptr;
-  if (isa<CallInst>(Arg))
-    CI = dyn_cast<CallInst>(Arg);
-  if (CI != nullptr && CI->getCalledFunction()->getName().contains(TargetRTLToken))
-    return true;
-  if (isa<CallInst>(Param))
-    CI = dyn_cast<CallInst>(Param);
-  if (CI != nullptr && CI->getCalledFunction()->getName().contains(TargetRTLToken))
-    return true;
-
-
   if (EXISTSinMap(ValueToIdMap, Arg) && EXISTSinMap(ValueToIdMap, Param)){
     unsigned ArgID = ValueToIdMap.at(Arg);
     unsigned ParamID = ValueToIdMap.at(Param);
@@ -521,14 +510,6 @@ ConstValuePtr
 MemoryLdStMapClass::getMemoryForLdSt(ConstInstrPtr LdSt) const {
   if (LdSt == nullptr || filterLoadOfAddress(LdSt)) 
     return nullptr;
-  if (auto C = dyn_cast<CallInst>(LdSt)){
-    if (auto CalledF = C->getCalledFunction()){
-      if (CalledF->hasName()){
-        if (CalledF->getName().contains( TargetRTLToken))
-          return LdSt;
-      }
-    }
-  }
   LLVM_DEBUG(dbgs() << "\n Looking for memory for instr:" << *LdSt);
   isMalloc(LdSt);
   auto EntryIter = LdStPointsToMap.find(LdSt);
@@ -622,6 +603,10 @@ MemoryLdStMapClass::insertLoadStore(ConstInstrPtr LdSt) {
 }
 
 void MemoryLdStMapClass::addReachingCall(Instruction &Call, Instruction &User){
+  auto C = dyn_cast<CallInst>(&Call);
+  auto F = getCalledFunction(*C);//C->getCalledFunction();
+  // No need to track intrinsic functions.
+  if (F->isIntrinsic() /*|| F->isDeclaration()*/ )  return ;
   CallInstToUsersMap[&Call].insert(&User);
 }
 
@@ -824,7 +809,6 @@ void MemoryLdStMapClass::print(raw_ostream &O) {
       //<<"At :"<<OmpDiagnosticsLocationInfo.getVarNameLocStr(MemDefInstr);
     }
   }
-  return;
   for (auto Iter : CallInstToUsersMap) {
     auto Call = Iter.first;
     O << "\n Call :"<<*Call;
@@ -914,7 +898,9 @@ void MemorySSAUseDefWalker::addToGeneratingDefs(
 
   if (CallInst * Call  = dyn_cast<CallInst>(MemDef->getMemoryInst())){
     LLVM_DEBUG(dbgs()<<"\n Adding reaching Call instruction::"<<*Call);
-    LdStToMem.BBReachingCalls[parentBB].insert(Call);
+    // No need to track intrinsic functions.
+    if (!Call->getCalledFunction()->isIntrinsic())
+      LdStToMem.BBReachingCalls[parentBB].insert(Call);
   }
   auto memVal = LdStToMem.insertLoadStore(Instr);
   if (memVal == nullptr)
@@ -1211,8 +1197,9 @@ void MemorySSAUseDefWalker::reachingDefAnalysis() {
       // Ignore if already visited.
       if (VisitedBBSet.find(BB) != VisitedBBSet.end())
         continue;
+      //Clear the BBGen set every time, to remove the entries from last iteration, otherwise, later memdefs in the BB, get added to earlier uses in the same BB.
+      BBGeneratingDefs.clear();
       VisitedBBSet.insert(BB);
-      LLVM_DEBUG(dbgs() << "\n Basic Block:" << BB);
       // Perform the join operator at the entry of this basicblock.
       reachingDefJoinOp(BB);
       // Now update all the reaching definitions for every memory use in this
