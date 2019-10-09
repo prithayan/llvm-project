@@ -334,6 +334,7 @@ bool MemoryLdStMapClass::FuncParamInfoClass::doValuesAlias(ConstValuePtr Arg, Co
     if ( ArgID == ParamID)
       return true;
   }
+  if (Arg == Param) return true;
   return false;
 }
 
@@ -533,6 +534,7 @@ void DebugLocation::setSymbolName(const Instruction *Instr, const Value *Val) {
 }
 /// Get the source level name for this Value.
 std::string DebugLocation::getSymbolName(const Value *Val) {
+  if (Val == nullptr) return "";
   if (MemoryLdStMapClass::OmpDiagnosticsLocationInfo.IrToSrcLocMap.find(Val) != IrToSrcLocMap.end())
     return IrToSrcLocMap[Val];
   if (Val->hasName()) {
@@ -549,6 +551,7 @@ std::string DebugLocation::getSymbolName(const Value *Val) {
 }
 
 std::string DebugLocation::getSymbolName(const Instruction *LdSt) {
+  if (LdSt == nullptr) return "";
   if (MemoryLdStMapClass::OmpDiagnosticsLocationInfo.IrToSrcLocMap.find(LdSt) !=
       IrToSrcLocMap.end())
     return IrToSrcLocMap[LdSt];
@@ -616,7 +619,7 @@ void MemoryLdStMapClass::addLiveOnEntryUse(ConstInstrPtr I){
 
 void MemoryLdStMapClass::addReachingCall(Instruction &User, SetOfInstructions &CallInstructions){
   for (auto Call : CallInstructions) {
-    LLVM_DEBUG(dbgs()<<"\n User::"<<*Call);
+    LLVM_DEBUG(dbgs()<<"\n User::"<<User<<"\n Call: "<<*Call);
     CallInstToUsersMap[Call].insert(&User);
   }
 }
@@ -633,6 +636,8 @@ bool MemoryLdStMapClass::propagateReachingDefsIntoFunc(SetOfInstructions &Reachi
   LLVM_DEBUG(dbgs()<<"\n DONE\n ");
   // Iterate over all the basic blocks and add  the def to its reaching defs. The reaching defs at the entry to the function reach all the basic blocks also.
   for (auto Iter :  BBtoReachingDefsMap) {
+    // This loop maynot execute, since the BB maynot exist in the map. So, ignore this loop.
+    LLVM_DEBUG(dbgs()<<"\n propagate into BB:"<<*Iter.first);
     auto BeforeSize = Iter.second.size();
     Iter.second.insert(ReachingDefs.begin(), ReachingDefs.end());
     if (BeforeSize != Iter.second.size())
@@ -827,6 +832,10 @@ void MemoryLdStMapClass::print(raw_ostream &O) {
     auto I = ReachingDefs.begin();
     if (F == nullptr)
       F = (*I)->getFunction();
+    errs()<<"\n addFuncGeneratingDefs :"<<F->getName();
+    for (auto D : ReachingDefs){
+      errs()<<"\n Def:"<<*D;
+    }
     FuncGeneratingDefs[F].insert(ReachingDefs.begin(), ReachingDefs.end());
   }
   Type * MemoryLdStMapClass::getType(ConstInstrPtr LdSt){
@@ -895,6 +904,9 @@ void MemorySSAUseDefWalker::addToGeneratingDefs(
   auto Instr = MemDef->getMemoryInst();
   assert(Instr != nullptr);
   const BasicBlock *parentBB = Instr->getParent();
+  const Function *parentF = parentBB->getParent();
+  SetOfInstructions SingleDef = {MemDef->getMemoryInst()};
+  LdStToMem.addFuncGeneratingDefs(SingleDef, parentF);
 
   if (CallInst * Call  = dyn_cast<CallInst>(MemDef->getMemoryInst())){
     LLVM_DEBUG(dbgs()<<"\n Adding reaching Call instruction::"<<*Call);
@@ -956,11 +968,11 @@ void MemorySSAUseDefWalker::print() {
 void MemorySSAUseDefWalker::updateReachingDefsOfBB(const BasicBlock *PredBB,
                                                    const BasicBlock *BB) {
   assert(PredBB != nullptr && BB != nullptr);
-  std::set<MemoryWrittenToType> KilledDefs;
   LLVM_DEBUG(dbgs() << " \n phi :"
                     << "\n incoming bb:" << *PredBB);
   // Add all the reaching call instructions from the pred to this block also.
   LdStToMem.BBReachingCalls[BB].insert(LdStToMem.BBReachingCalls[PredBB].begin(),LdStToMem.BBReachingCalls[PredBB].end());
+  std::set<MemoryWrittenToType> KilledDefs;
   // If this PredBB generates any defs, then
   // then add all the genrated defs from predecessor to the reaching defs of the
   // BB. Also, record all the defs killed by the predecessor.
@@ -1190,6 +1202,8 @@ void MemorySSAUseDefWalker::reachingDefAnalysis() {
     std::queue<const BasicBlock *> BBQueue;
     // Analysis starts from the EntryBlock.
     BBQueue.push(EntryBlock);
+    //Clear the BBGen set every time, to remove the entries from last iteration, otherwise, later memdefs in the BB, get added to earlier uses in the same BB.
+    BBGeneratingDefs.clear();
     // BFS traversal.
     while (!BBQueue.empty()) {
       auto BB = BBQueue.front();
@@ -1197,8 +1211,6 @@ void MemorySSAUseDefWalker::reachingDefAnalysis() {
       // Ignore if already visited.
       if (VisitedBBSet.find(BB) != VisitedBBSet.end())
         continue;
-      //Clear the BBGen set every time, to remove the entries from last iteration, otherwise, later memdefs in the BB, get added to earlier uses in the same BB.
-      BBGeneratingDefs.clear();
       VisitedBBSet.insert(BB);
       // Perform the join operator at the entry of this basicblock.
       reachingDefJoinOp(BB);
@@ -1207,7 +1219,7 @@ void MemorySSAUseDefWalker::reachingDefAnalysis() {
       updateBasicBlock(BB);
       // print();
       for (auto Succ = succ_begin(BB), End = succ_end(BB); Succ != End;
-           Succ++) {
+          Succ++) {
         // LLVM_DEBUG(dbgs()<<"\n Enqueue block:"<<*succ);
         BBQueue.push(*Succ);
       }
@@ -1267,6 +1279,7 @@ MemUseDefLocalAnalysisPrinterPass::run(Function &F,
 }
 
 void MemUseDefGlobalAnalysis::setIndirectCallMap(Function &Func){
+  // Iterate over the instructions that use the address of the Func, that means they may call this function. This is used to track indirect calls, and their parameter mappings.
   for (Use &U : Func.uses()) {
     User *UR = U.getUser();
     for (auto &UseofUser : UR->uses()){
@@ -1520,7 +1533,7 @@ PreservedAnalyses
 MemUseDefGlobalAnalysisPrinterPass::run(Module &M, ModuleAnalysisManager &AM) {
   OS << "'omp diagnostics Analysis' for module '" << M.getName() << "'\n";
   auto Res = AM.getResult<MemUseDefGlobalAnalysis>(M);
-  //Res.print(OS);
+  Res.print(OS);
   return PreservedAnalyses::all();
 }
 

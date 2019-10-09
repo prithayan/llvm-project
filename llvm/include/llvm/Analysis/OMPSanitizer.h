@@ -34,6 +34,7 @@
 namespace llvm {
 
 using namespace llvm;
+using SetOfValNames = std::set<std::string>;
 class ValidateOmpReachingDefs {
 
   //const InstructionToMemCopyMapType &AllocatedDevice, &HostToDeviceCopy, &DeviceToHostCopy, &DevicePersistent;
@@ -46,11 +47,11 @@ class ValidateOmpReachingDefs {
   std::map<const Function *, unsigned> CalledFuncLocationMap;
   //std::map<unsigned , std::set<const Function *>> LocationToCalledFuncMap;
   //DebugLocation OmpDiagnosticsLocationInfo;
-  std::map<unsigned, SetOfValues> AllocatedOnDeviceMap;
-  std::map<unsigned, SetOfValues> HostToDeviceMap;
-  std::map<unsigned, SetOfValues> DeviceToHostMap;
-  std::map<unsigned, SetOfValues> PersistentInMap;
-  std::map<unsigned, SetOfValues> PersistentOutMap;
+  std::map<unsigned, SetOfValNames> AllocatedOnDeviceMap;
+  std::map<unsigned, SetOfValNames> HostToDeviceMap;
+  std::map<unsigned, SetOfValNames> DeviceToHostMap;
+  std::map<unsigned, SetOfValNames> PersistentInMap;
+  std::map<unsigned, SetOfValNames> PersistentOutMap;
   const Function *InsideOMPCall;
   //bool InsideTargetEnv;
 
