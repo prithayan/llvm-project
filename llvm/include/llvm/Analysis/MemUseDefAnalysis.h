@@ -18,6 +18,7 @@
 #define LLVM_ANALYSIS_MemUseDefANALYSIS_H
 
 #include "llvm/IR/CallSite.h"
+#include "llvm/ADT/BreadthFirstIterator.h"
 #include "llvm/Analysis/MemorySSA.h"
 #include "llvm/Analysis/ScalarEvolutionExpressions.h"
 #include "llvm/IR/DebugInfoMetadata.h"
@@ -37,6 +38,7 @@ using ConstInstrPtr = const Instruction *;
 using ConstValuePtr = const Value *;
 using SetOfInstructions = std::set<ConstInstrPtr>;
 using SetOfValues = std::set<ConstValuePtr>;
+using ListOfInstructions = std::vector<ConstInstrPtr>;
 
 #define EXISTSinMap(MAP, ELEM) (MAP.find(ELEM) != MAP.end())
 
@@ -145,7 +147,7 @@ class MemoryLdStMapClass {
   void handleCallArguments(const CallInst &CI);
   /// Check if \p Val is a memory operand.
   bool isMemory(ConstValuePtr Val) const;
-  void addReachingCall(Instruction &Call, Instruction &User);
+  void addReachingCall(ConstInstrPtr User, ConstInstrPtr Call);
 
   void addLiveOnEntryUse(ConstInstrPtr I);
 
@@ -153,15 +155,15 @@ class MemoryLdStMapClass {
   /// \p CallInstructions is a set of call instructions that reach the user. This function iterates over the set of call instruciton to add the user to each of the call instruciotns.
   void addReachingCall(Instruction &User, SetOfInstructions &CallInstructions);
   SetOfInstructions& getFuncGeneratingDefs(const Function *F);
-  void addFuncGeneratingDefs(SetOfInstructions &ReachingDefs, const Function *F=nullptr);
+  bool addFuncGeneratingDefs(SetOfInstructions &ReachingDefs, const Function *F=nullptr);
   /// Propagate all the defs in the set \p ReachingDefs, to all the BasicBlocks (within the function).
   bool propagateReachingDefsIntoFunc(SetOfInstructions &ReachingDefs, const int argNum=-1);
 
   /// Check if the map has the memory use to reaching defs entry.
-  bool existsReachingDefForUser(Instruction &AtInstr);
+  bool existsReachingDefAt(const Instruction &AtInstr);
 
   /// Get the reaching defs at user \p AtInstr.
-  SetOfInstructions &getReachingDefsAt(Instruction &AtInstr);
+  SetOfInstructions &getReachingDefsAt(const Instruction &AtInstr);
 
   /// Get the reaching defs at entry of basic block \p BB.
   SetOfInstructions &getReachingDefsAt(BasicBlock &BB);
@@ -224,6 +226,7 @@ public:
   /// MemDefs.
   using BBReachingDefsType =
       std::map<const BasicBlock *, MemToSetofDefsMapType>;
+  using BBToGenCallsType = std::map<const BasicBlock*, SetOfInstructions >;
   using MemUseToReachingDefsMapType =
       std::map<const MemoryUse *, SetOfMemoryDefsType>;
 
@@ -235,7 +238,9 @@ private:
   /// write. But for the purpose of our analysis, we only consider the last
   /// write to a memory, so just like scalars, every basic block can generate a
   /// single def for a memory.
-  BBtoMemoryGenMapType BBGeneratingDefs;
+
+  //std::map<const BasicBlock*, SetOfInstructions > BBGeneratingCalls;
+
   /// This is the set of reaching defs at the entry of every basic block, final
   /// result of our analysis.
   BBReachingDefsType BBReachingDefs;
@@ -256,7 +261,10 @@ private:
                   const SetOfMemoryDefsType::iterator &begin,
                   const SetOfMemoryDefsType::iterator &end);
 
-  void addToGeneratingDefs(DefiningMemoryAccessType memDef);
+void initReachingDefs(const BasicBlock *PredBB, const BasicBlock *BB, BBtoMemoryGenMapType &BBGeneratingDefs, BBToGenCallsType  &BBGeneratingCalls) ;
+void initReachingDefs(const BasicBlock *EntryBlock) ;
+void computeGenDefs(const BasicBlock *BB, BBtoMemoryGenMapType &BBGeneratingDefs, BBToGenCallsType  &BBGeneratingCalls) ;
+  void addToGeneratingDefs(DefiningMemoryAccessType memDef, BBtoMemoryGenMapType &BBGeneratingDefs, BBToGenCallsType  &BBGeneratingCalls);
   void print();
 
   /// IncomingBB is the predecessor block of BB, this function updates the
@@ -337,10 +345,11 @@ public:
   PreservedAnalyses run(Function &F, FunctionAnalysisManager &AM);
 };
 
-  using FuncToMemInfoType = std::map<Function*, MemoryLdStMapClass*>;
+  //using FuncToMemInfoType = std::map<const Function*, MemoryLdStMapClass*>;
 class InterproceduralMemDFA {
   /// Map of function to the intraprocedural reaching defs analysis information.
-  FuncToMemInfoType &FuncToMemInfo;
+  //FuncToMemInfoType &FuncToMemInfo;
+  MemoryLdStMapClass &LdStToMem;
 
   /// For all call instructions within the function, propagate the reaching defs at the function call into the body, and return back the defs generated within the function body, to be propagated to the blocks following the call instruction.
   void updateReachingDefsOfBB(BasicBlock &BB, bool &HasConvergedFlagged, std::queue<Function*> &FuncQueue);
@@ -350,8 +359,13 @@ class InterproceduralMemDFA {
 
 void getParamNumber(const CallInst &CI, SetOfInstructions &ReachingDefs, MemoryLdStMapClass &LdStToMemFunc);
   void handleCallSite(CallInst &CI);
+  bool getCallInstructions(Function &F, std::queue<Function *> &FuncQueue, bool &NewDefsAdded);
+void updateReachingDefsDueToCall(const ListOfInstructions &CallInstructions);
+void handleReachingDefsIntoCall(const CallInst &CallInstr, bool &NewDefsAdded);
+void handleReachingDefsFromCall(const CallInst &CallInstr, bool &NewDefsAdded);
   public:
-  InterproceduralMemDFA(FuncToMemInfoType &M):FuncToMemInfo(M){}
+  //InterproceduralMemDFA(FuncToMemInfoType &M):FuncToMemInfo(M){}
+  InterproceduralMemDFA(MemoryLdStMapClass &M):LdStToMem(M){}
 
   /// Start the interprocedural dataflow analysis from the function \p F.
   void run(Function &F);
