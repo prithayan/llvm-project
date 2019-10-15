@@ -1,3 +1,8 @@
+; RUN: opt < %s -passes="print-mem-usedef-analysis"  -disable-output 2>&1 | FileCheck %s 
+; CHECK-DAG:Use::a At:: DRACC_OMP_022_MxV_Missing_Data_yes.c:34 Defined at: DRACC_OMP_022_MxV_Missing_Data_yes.c:20, , DRACC_OMP_022_MxV_Missing_Data_yes.c:57, 
+; CHECK-DAG:Use::b At:: DRACC_OMP_022_MxV_Missing_Data_yes.c:34 Defined at: DRACC_OMP_022_MxV_Missing_Data_yes.c:18, , DRACC_OMP_022_MxV_Missing_Data_yes.c:58, 
+; CHECK-DAG:Use::c At:: DRACC_OMP_022_MxV_Missing_Data_yes.c:34 Defined at: DRACC_OMP_022_MxV_Missing_Data_yes.c:21, , DRACC_OMP_022_MxV_Missing_Data_yes.c:34, DRACC_OMP_022_MxV_Missing_Data_yes.c:59, 
+; CHECK-DAG:Use::c At:: DRACC_OMP_022_MxV_Missing_Data_yes.c:45 Defined at: DRACC_OMP_022_MxV_Missing_Data_yes.c:21, , DRACC_OMP_022_MxV_Missing_Data_yes.c:34, DRACC_OMP_022_MxV_Missing_Data_yes.c:59, 
 ; ModuleID = 'omp-host.ll'
 source_filename = "DRACC_OMP_022_MxV_Missing_Data_yes.c"
 target datalayout = "e-m:e-i64:64-f80:128-n8:16:32:64-S128"
