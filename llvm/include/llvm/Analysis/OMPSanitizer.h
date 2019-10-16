@@ -43,6 +43,7 @@ class ValidateOmpReachingDefs {
 
   MemoryLdStMapClass &MemInfo;
   OmpDiagnosticsInfo &OmpInfo;
+  /// Map of a function to the enclosing "omp" RTL function, that is if a function is called within an OMP RTL function, then record the parent RTL, else just store nullptr. So, if a function is mapped to nullptr, that means it is executed on host, and if a function is mapped to a valid function, it is executed on the device.
   std::map<const Function *, const Function *> FuncEnvMap;
   std::map<const Function *, unsigned> CalledFuncLocationMap;
   //std::map<unsigned , std::set<const Function *>> LocationToCalledFuncMap;
