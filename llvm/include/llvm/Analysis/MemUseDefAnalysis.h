@@ -438,24 +438,28 @@ public:
   PreservedAnalyses run(Module &M, ModuleAnalysisManager &AM);
 };
 
-/// This pass performs the global (interprocedural) Omp Data Mapping Analysis.
-/// (legacy pass manager).
-// class MemUseDefGlobalInfoWrapperPass : public ModulePass {
-//  MemUseDefGlobalInfo SSI;
-//
-// public:
-//  static char ID;
-//
-//  MemUseDefGlobalInfoWrapperPass();
-//
-//  const MemUseDefGlobalInfo &getResult() const { return SSI; }
-//
-//  void print(raw_ostream &O, const Module *M) const override;
-//  void getAnalysisUsage(AnalysisUsage &AU) const override;
-//
-//  bool runOnModule(Module &M) override;
-//};
+class MemAccessRangeAnalysis
+    : public AnalysisInfoMixin<MemAccessRangeAnalysis> {
+  friend AnalysisInfoMixin<MemAccessRangeAnalysis>;
+  static AnalysisKey Key;
 
+  GetElementPtrInst *getGEP(Instruction *Ptr);
+void handleInstruction(Instruction &Inst, ScalarEvolution &SE);
+  void analyzeFunc(Function &F, ScalarEvolution &SE);
+public:
+  using Result = MemoryLdStMapClass;
+  Result run(Function &F, FunctionAnalysisManager &AM);
+};
+
+/// Printer pass for the \c MemUseDefLocalAnalysis results.
+class MemAccessRangeAnalysisPrinterPass
+    : public PassInfoMixin<MemAccessRangeAnalysisPrinterPass> {
+  raw_ostream &OS;
+
+public:
+  explicit MemAccessRangeAnalysisPrinterPass(raw_ostream &OS) : OS(OS) {}
+  PreservedAnalyses run(Function &F, FunctionAnalysisManager &AM);
+};
 } // end namespace llvm
 
 #endif // LLVM_ANALYSIS_MemUseDefANALYSIS_H

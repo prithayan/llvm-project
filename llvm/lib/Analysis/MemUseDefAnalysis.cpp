@@ -1936,28 +1936,303 @@ MemUseDefGlobalAnalysisPrinterPass::run(Module &M, ModuleAnalysisManager &AM) {
   return PreservedAnalyses::all();
 }
 
-// bool OmpDiagnosticsGlobalInfoWrapperPass::runOnModule(Module &M) {
-//  //OmpDiagnosticsDataFlowAnalysis SSDFA(
-//  //    M, [this](Function &F) -> const OmpDiagnosticsInfo & {
-//  //      return getAnalysis<OmpDiagnosticsInfoWrapperPass>(F).getResult();
-//  //    });
-//  //SSI = SSDFA.run();
-////bool OmpDiagnosticsInfoWrapperPass::runOnFunction(Function &F) {
-////  MemUseDefLocalAnalysis
-/// OMPD(F);//.getResult<ScalarEvolutionAnalysis>(F)); /  OmpEnvInfo =
-///&OMPD.run();
-//  std::map<std::string, Function *> FuncNameMap;
-//  for (Function &Func : M) {
-//    if (!Func.hasName() ||
-//        Func.isIntrinsic() ||
-//        Func.isDeclaration()) continue;
-//    FuncNameMap[Func.getName()] = &Func;
-//  }
-//  if (EXISTSinMap(FuncNameMap, "main")){
-//  }
-//  return false;
-//}
+GetElementPtrInst *MemAccessRangeAnalysis::getGEP(Instruction *Ptr){
+  if (Ptr == nullptr) 
+    return nullptr ;
+  if (auto G = dyn_cast<GetElementPtrInst>(Ptr))
+    return G;
+  SetOfInstructions VisitedSet;
+  std::queue<Instruction *> InstrQ;
+  InstrQ.push(Ptr);
+  while (!InstrQ.empty()){
+    auto I = InstrQ.front();
+    InstrQ.pop();
+    if (EXISTSinMap(VisitedSet, I))
+      continue;
+    VisitedSet.insert(I);
+    errs()<<"\n searching gep I:"<<*I;
+    for (auto &Op:  I->operands()){
+      if (auto OpI = dyn_cast<Instruction>(Op)){
+        InstrQ.push(OpI);
+        if (auto G = dyn_cast<GetElementPtrInst>(OpI)){
+          return G;
+        }
+      }
+    }
+  }
+  return nullptr;
+}
 
+int getSCEVMaxValue(std::vector<const SCEV *> &SimplifySCEVStack, std::string &maxSCEV_string, ScalarEvolution &SE){
+  if (SimplifySCEVStack.empty()) return 0;
+  const SCEV * inst_scev = SimplifySCEVStack.back();
+  SimplifySCEVStack.pop_back();
+  static bool foundUnkown = false;
+  LLVM_DEBUG(dbgs()<<"\n simplify scev:"<<*inst_scev);
+  //<<"\n scev vec size:"<<SimplifySCEVStack.size()
+  //<<"\n "<<maxSCEV_string);
+  switch (static_cast<SCEVTypes>(inst_scev->getSCEVType())) {
+    case scConstant: {
+                       const ConstantInt *constInt = dyn_cast<SCEVConstant>(inst_scev)->getValue();
+                       LLVM_DEBUG(dbgs()<<"\n Constant scev:"<<*constInt);
+                       maxSCEV_string += constInt->getValue().toString(10, true) ;
+                       SimplifySCEVStack.push_back(inst_scev);
+                       /*if constant then itself is the max value,*/
+                       return 1;
+                     }
+    case scTruncate: {
+                       LLVM_DEBUG(dbgs()<<"\n Truncate scev:");
+                       const SCEVTruncateExpr *Trunc = cast<SCEVTruncateExpr>(inst_scev);
+                       const SCEV *Op = Trunc->getOperand();
+                       SimplifySCEVStack.push_back(Op);
+                       getSCEVMaxValue(SimplifySCEVStack,maxSCEV_string, SE);
+                       return -1;
+                     }
+    case scZeroExtend: {
+                         LLVM_DEBUG(dbgs()<<"\n ZeroExnt scev:");
+                         const SCEVZeroExtendExpr *ZExt = cast<SCEVZeroExtendExpr>(inst_scev);
+                         const SCEV *Op = ZExt->getOperand();
+                         SimplifySCEVStack.push_back(Op);
+                         getSCEVMaxValue(SimplifySCEVStack, maxSCEV_string, SE);
+                         return -1;
+                       }
+    case scSignExtend: {
+                         LLVM_DEBUG(dbgs()<<"\n ZeroExnt scev:");
+                         const SCEVSignExtendExpr *SExt = cast<SCEVSignExtendExpr>(inst_scev);
+                         const SCEV *Op = SExt->getOperand();
+                         SimplifySCEVStack.push_back(Op);
+                         getSCEVMaxValue(SimplifySCEVStack,  maxSCEV_string, SE);
+                         return -1;
+                       }
+    case scAddRecExpr: {
+                         LLVM_DEBUG(dbgs()<<"\n add rec expr  scev:");
+                         const SCEVAddRecExpr *AR = cast<SCEVAddRecExpr>(inst_scev);
+                         const Loop *fLoop = AR->getLoop();
+                         auto beCountScev = SE.getBackedgeTakenCount(fLoop);
+                         LLVM_DEBUG(dbgs()<< "\n TRIP COUNT ::"<<SE.getSmallConstantMaxTripCount(fLoop)
+                             <<" \n be count::"<<*beCountScev
+                             <<"bescev count: "<<beCountScev->getSCEVType()
+                             <<"\n Max BE Count: "<< *SE.getMaxBackedgeTakenCount(fLoop));
+                         if (beCountScev->getSCEVType() !=  scUnknown 
+                             && beCountScev->getSCEVType() != scCouldNotCompute
+                            ) {
+                           beCountScev = SE.getMinusSCEV(beCountScev, SE.getOne(beCountScev->getType()));
+                           const SCEV *maxVal = AR->evaluateAtIteration(beCountScev, SE);
+                           SimplifySCEVStack.push_back(maxVal);
+                           getSCEVMaxValue(SimplifySCEVStack, maxSCEV_string, SE);
+                         } else 
+                           foundUnkown = true;
+                         /*for add rec, simply get the maximum possible 
+                          * value for the last iteration of the for loop*/
+                         return -1;
+                       }
+    case scAddExpr: {
+                      LLVM_DEBUG(dbgs()<<"\n Add  scev:");
+                      const SCEVAddExpr *Sadd = cast<SCEVAddExpr>(inst_scev);
+                      const SCEV *Op= Sadd->getOperand(0);
+                      SimplifySCEVStack.push_back(Op);//simplify first op
+                      maxSCEV_string += "(";
+                      getSCEVMaxValue(SimplifySCEVStack, maxSCEV_string, SE);
+                      if (foundUnkown) {
+                        maxSCEV_string += ")";
+                        return -1;
+                      }
+                      maxSCEV_string += "+";
+                      const SCEV *lhs = SimplifySCEVStack.back();
+                      SimplifySCEVStack.pop_back();
+                      Op= Sadd->getOperand(1);
+                      SimplifySCEVStack.push_back(Op);//simplify second op
+                      getSCEVMaxValue(SimplifySCEVStack, maxSCEV_string, SE);
+                      maxSCEV_string += ")";
+                      if (!foundUnkown) {
+                        const SCEV *rhs = SimplifySCEVStack.back();
+                        SimplifySCEVStack.pop_back();
+                        auto addSCEV  = SE.getAddExpr(lhs, rhs);
+                        SimplifySCEVStack.push_back(addSCEV);
+                      }
+                      //          getSCEVMaxValue(SimplifySCEVStack, SE, LI);
+                      return -1;
+                    }
+    case scMulExpr: {
+                      LLVM_DEBUG(dbgs()<<"\n mul scev:");
+                      const SCEVMulExpr *Smul = cast<SCEVMulExpr>(inst_scev);
+                      const SCEV *Op= Smul->getOperand(0);
+                      SimplifySCEVStack.push_back(Op);//simplify first op
+                      maxSCEV_string += "(";
+                      getSCEVMaxValue(SimplifySCEVStack, maxSCEV_string, SE);
+                      if (foundUnkown) {
+                        maxSCEV_string += ")";
+                        return -1;
+                      }
+                      LLVM_DEBUG(dbgs()<<"\n size:"<<SimplifySCEVStack.size()<<"\n");
+                      const SCEV *lhs = SimplifySCEVStack.back();
+                      SimplifySCEVStack.pop_back();
+                      Op= Smul->getOperand(1);
+                      SimplifySCEVStack.push_back(Op);//simplify second op
+                      maxSCEV_string += "*";
+                      getSCEVMaxValue(SimplifySCEVStack, maxSCEV_string, SE);
+                      LLVM_DEBUG(dbgs()<<"\n size:"<<SimplifySCEVStack.size()<<"\n");
+                      maxSCEV_string += ")";
+                      if (!foundUnkown) {
+                        const SCEV *rhs = SimplifySCEVStack.back();
+                        SimplifySCEVStack.pop_back();
+                        auto mulSCEV  = SE.getMulExpr(lhs, rhs);
+                        SimplifySCEVStack.push_back(mulSCEV);
+                      }
+                      //            getSCEVMaxValue(SimplifySCEVStack, SE, LI);
+                      return -1;
+                    }
+    case scUMaxExpr:
+    case scSMaxExpr: {
+                       LLVM_DEBUG(dbgs()<<"\n max scev:");
+                       const SCEVNAryExpr *SExt = cast<SCEVNAryExpr>(inst_scev);
+                       //const SCEVSMaxExpr *SExt = cast<SCEVSMaxExpr>(inst_scev);
+                       //ignore the first operator in maxexpr, example:(0 smax %p) 
+                       //TODO Generalize it
+                       LLVM_DEBUG(dbgs()<<"\n Ignoring SMax first op:"<<*SExt);
+                       const SCEV *Op = SExt->getOperand(1);
+                       SimplifySCEVStack.push_back(Op);
+                       getSCEVMaxValue(SimplifySCEVStack, maxSCEV_string, SE);
+                       return -1;
+                     }
+    case scUMinExpr:
+    case scSMinExpr:{
+                       LLVM_DEBUG(dbgs()<<"\n min scev:");
+                       const SCEVNAryExpr *SExt = cast<SCEVNAryExpr>(inst_scev);
+                       //const SCEVSMaxExpr *SExt = cast<SCEVSMaxExpr>(inst_scev);
+                       //ignore the first operator in maxexpr, example:(0 smax %p) 
+                       //TODO Generalize it
+                       LLVM_DEBUG(dbgs()<<"\n Ignoring SMin first op:"<<*SExt);
+                       const SCEV *Op = SExt->getOperand(1);
+                       SimplifySCEVStack.push_back(Op);
+                       getSCEVMaxValue(SimplifySCEVStack, maxSCEV_string, SE);
+                       return -1;
+                    }
+    case scUDivExpr: {
+                       LLVM_DEBUG(dbgs()<<"\n div scev:");
+                       const SCEVUDivExpr *UDiv = cast<SCEVUDivExpr>(inst_scev);
+                       const SCEV *Op= UDiv->getLHS() ;
+                       SimplifySCEVStack.push_back(Op);//simplify first op
+                       maxSCEV_string += "(";
+                       getSCEVMaxValue(SimplifySCEVStack, maxSCEV_string, SE);
+                       if (foundUnkown) {
+                         maxSCEV_string += ")";
+                         return -1;
+                       }
+                       const SCEV *lhs = SimplifySCEVStack.back();
+                       SimplifySCEVStack.pop_back();
+                       Op= UDiv->getRHS();
+                       SimplifySCEVStack.push_back(Op);//simplify second op
+                       maxSCEV_string += "/";
+                       getSCEVMaxValue(SimplifySCEVStack, maxSCEV_string, SE);
+                       maxSCEV_string += ")";
+                       if (!foundUnkown) {
+                         const SCEV *rhs = SimplifySCEVStack.back();
+                         SimplifySCEVStack.pop_back();
+                         auto divSCEV  = SE.getUDivExpr(lhs, rhs);
+                         SimplifySCEVStack.push_back(divSCEV);
+                       }
+                       //              getSCEVMaxValue(SimplifySCEVStack, SE, LI);
+                       return -1;
+                     }
+    case scUnknown: {
+                      LLVM_DEBUG(dbgs()<<"\n unknown scev:");
+                      const SCEVUnknown *U = cast<SCEVUnknown>(inst_scev);
+                      SimplifySCEVStack.push_back(inst_scev);
+                      const Value *v = U->getValue();
+                      maxSCEV_string +=   v->getName().str();
+                      foundUnkown = true;
+                      //Type *AllocTy;
+                      //if (U->isSizeOf(AllocTy)) {
+                      //  OS << "sizeof(" << *AllocTy << ")";
+                      //  return;
+                      //}
+                      //if (U->isAlignOf(AllocTy)) {
+                      //  OS << "alignof(" << *AllocTy << ")";
+                      //  return;
+                      //}
+
+                      //Type *CTy;
+                      //Constant *FieldNo;
+                      //if (U->isOffsetOf(CTy, FieldNo)) {
+                      //  OS << "offsetof(" << *CTy << ", ";
+                      //  FieldNo->printAsOperand(OS, false);
+                      //  OS << ")";
+                      //  return;
+                      //}
+
+                      // Otherwise just print it normally.
+
+                      return 1;
+                    }
+    case scCouldNotCompute:
+                    return -1;
+  }
+  llvm_unreachable("Unknown SCEV kind!");
+}
+
+void MemAccessRangeAnalysis::handleInstruction(Instruction &Inst, ScalarEvolution &SE){
+  Value *Ptr = nullptr;
+  // We are only interested in memory load/store instructions, ignore other instructions.
+  if (auto St = dyn_cast<StoreInst>(&Inst)){
+    Ptr = St->getPointerOperand();
+  }else if (auto Ld = dyn_cast<LoadInst>(&Inst) ){
+    Ptr = Ld->getPointerOperand();
+  } else 
+    return;
+  assert(Ptr != nullptr);
+  // If the address operand is not an instruction, that means it is a const address, ignore it.
+  if (!isa<Instruction>(Ptr))
+    return;
+  GetElementPtrInst *GEP = getGEP(dyn_cast<Instruction>(Ptr));
+  if (GEP == nullptr) 
+    return;
+  // Find the interesting operand of the GEP, which is the index operand.
+  errs()<<"\n GEP:"<<*GEP;
+  unsigned IndexOperand = 0;
+  for (unsigned I= 1, E = GEP->getNumOperands() ; I != E ; ++I){
+    if (!isa<ConstantInt>(GEP->getOperand(I))) {
+      IndexOperand = I;
+      break;
+    }
+  }
+  if (IndexOperand == 0 ) return; //all indices constant, no need of scev analysis
+  auto PtrScev = SE.getSCEV(GEP);
+  Value *GepIndex = GEP->getOperand(IndexOperand);
+  if (isa<Instruction>(GepIndex)){
+    PtrScev = SE.getSCEV(GepIndex);
+  }
+  LLVM_DEBUG(dbgs()<<"\n SCEV of :"<<Inst <<" is:"<<*PtrScev<<"\n");
+  std::vector<const SCEV*> SimplifySCEV = {PtrScev};
+  std::string MaxSCEVStr = "";
+  getSCEVMaxValue(SimplifySCEV, MaxSCEVStr, SE);
+  LLVM_DEBUG(dbgs()<<"\n MaxSCEV:"<<MaxSCEVStr <<" ");
+}
+
+void MemAccessRangeAnalysis::analyzeFunc(Function &F, ScalarEvolution &SE){
+
+  for (inst_iterator IIter = inst_begin(&F), E = inst_end(&F); IIter != E; ++IIter) {
+    Instruction &Inst = *IIter;
+    handleInstruction(Inst, SE);
+  }
+}
+
+MemAccessRangeAnalysis::Result MemAccessRangeAnalysis::run(Function &F, FunctionAnalysisManager &AM){
+  auto &SE = AM.getResult<ScalarEvolutionAnalysis>(F);
+  analyzeFunc(F, SE);
+  MemoryLdStMapClass R;
+  return R;
+}
+
+PreservedAnalyses
+MemAccessRangeAnalysisPrinterPass::run(Function &F, FunctionAnalysisManager &AM) {
+
+  OS << "\n 'omp diagnostics Local Analysis' for function '" << F.getName()
+     << "'\n";
+  auto R = AM.getResult<MemAccessRangeAnalysis>(F);
+  return PreservedAnalyses::all();
+}
+AnalysisKey MemAccessRangeAnalysis::Key;
 static const char LocalPassArg[] = "omp-diagnostics-local";
 static const char LocalPassName[] = "omp diagnostics Local Analysis";
 static const char GlobalPassName[] = "omp diagnostics Analysis";
