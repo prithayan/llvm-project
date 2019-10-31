@@ -18,6 +18,7 @@
 #define LLVM_ANALYSIS_MemUseDefANALYSIS_H
 
 #include "llvm/ADT/BreadthFirstIterator.h"
+#include "llvm/ADT/BitVector.h"
 #include "llvm/Analysis/MemorySSA.h"
 #include "llvm/Analysis/ScalarEvolutionExpressions.h"
 #include "llvm/IR/CallSite.h"
@@ -96,6 +97,60 @@ public:
   void setSymbolName(const Instruction *Instr, const Value *Val);
 };
 
+class FuncArraySSAClass {
+  //std::map<MemoryAccess*,unsigned > Nodes;
+  SmallVector<const MemoryAccess*, 10> Nodes;
+  using AdjMatTy = SmallVector<BitVector,10> ; 
+  using ArrayGraphMapTy = std::map<const Value*, AdjMatTy>;
+  ArrayGraphMapTy ArraySSA;
+  const Function *Func;
+  const MemorySSA *MSSA;
+
+  public:
+  FuncArraySSAClass(Function *F, const MemorySSA *MSSA ):MSSA(MSSA) {
+    Func = F;
+    const MemoryAccess *LiveOnEntry = MSSA->getLiveOnEntryDef();
+    setLiveIn(LiveOnEntry);
+    const BasicBlock *EntryBlock = LiveOnEntry->getBlock();
+    for (const BasicBlock *BB : breadth_first(EntryBlock)) 
+      for (auto &MA : *MSSA->getBlockAccesses(BB))
+        Nodes.push_back(&MA);
+
+    for (auto Iter : ArraySSA)
+      for (unsigned I = 0 ; I < Nodes.size() ; I++ )
+        Iter.second[I].resize(Nodes.size());
+
+
+  }
+  void setLiveIn(const MemoryAccess *LiveIn){
+    Nodes[0] = LiveIn;
+  }
+  unsigned searchNode(const Instruction *MA){
+    return searchNode(MSSA->getMemoryAccess(MA));
+  }
+  unsigned searchNode(const MemoryAccess *MA){
+    assert(MA != nullptr);
+    for (unsigned I = 0 ; I < Nodes.size() ; I++ ){
+      if (MA == Nodes[I] ) 
+        return I;
+    }
+    assert(0 && "Node does not exist in Mem SSA");
+    return 0;
+    //Nodes.push_back(MA);
+    //for (auto Iter : ArraySSA)
+    //  for (unsigned I = 0 ; I < Nodes.size() ; I++ ){
+    //    Iter.second[I].resize(Nodes.size());
+    //  }
+    //return Nodes.size()-1;
+  }
+  //void addPredecessor(const MemoryAccess *Node, const MemoryAccess *Pred, const Value *Array)
+  void addPredecessor(const Instruction *Node, const Instruction *Pred, const Value *Array){
+    unsigned N = searchNode(Node);
+    unsigned P = searchNode(Pred);
+    ArraySSA[Array][P].set(N);
+  }
+};
+
 class MemoryLdStMapClass {
   /// Map of instruction, to the memory value, that it accesses.
   // std::map<ConstInstrPtr, SetOfValues>;
@@ -105,6 +160,7 @@ class MemoryLdStMapClass {
   using FuncGenDefsType = std::map<const Function *, SetOfInstructions>;
   using BBReachingCallInstrMapType =
       std::map<const BasicBlock *, SetOfInstructions>;
+
 
   class FuncParamInfoClass {
     std::map<ConstValuePtr, unsigned> ValueToIdMap;
@@ -125,6 +181,7 @@ class MemoryLdStMapClass {
   SetOfInstructions LiveInUses;
   static std::map<ConstInstrPtr, const CallInst *> MemdefToCall;
 
+  std::map<const Function *,FuncArraySSAClass*> FArraySSA;
   /// Record that the Instruction \p LdSt accesses the Memory \p Mem.
   void insertEntry(ConstInstrPtr LdSt, ConstValuePtr Mem);
 
