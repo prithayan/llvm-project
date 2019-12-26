@@ -42,6 +42,7 @@
 #include "llvm/Analysis/MemUseDefAnalysis.h"
 #include "llvm/Analysis/OmpDiagnosticsAnalysis.h"
 #include "llvm/Analysis/OMPSanitizer.h"
+#include "llvm/Analysis/OmpOptiMem.h"
 #include "llvm/Analysis/OptimizationRemarkEmitter.h"
 #include "llvm/Analysis/PhiValues.h"
 #include "llvm/Analysis/PostDominators.h"

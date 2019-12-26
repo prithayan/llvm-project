@@ -40,6 +40,8 @@ using ConstValuePtr = const Value *;
 using SetOfInstructions = std::set<ConstInstrPtr>;
 using SetOfValues = std::set<ConstValuePtr>;
 using ListOfInstructions = std::vector<ConstInstrPtr>;
+using ListOfBasicBlocks = std::vector<const BasicBlock*>;
+using SetOfBasicBlocks = std::set<const BasicBlock*>;
 
 #define EXISTSinMap(MAP, ELEM) (MAP.find(ELEM) != MAP.end())
 
@@ -74,7 +76,10 @@ public:
   void getFile_Line_fromStr(const LocationStringType &location,
                             FileNameType &fileName, LineNumberType &lineNum);
   bool hasDebugLoc(const Instruction *instr);
+
+  void recordDebugLoc(const DebugLoc &Loc) ;
   LocationSequenceNumType getDebugLocSeq(const Instruction *inst);
+  LocationSequenceNumType getDebugLocSeq(const DebugLoc &Loc);
   const std::string getDebugLocStr(const Instruction &inst);
   const std::string getDebugLocStr(const DebugLoc *loc,
                                    unsigned &seperatorPosition);
@@ -143,7 +148,7 @@ public:
   BBReachingCallInstrMapType BBReachingCalls;
   static DebugLocation OmpDiagnosticsLocationInfo;
   static FuncParamInfoClass FuncParamInfo;
-  void getMemUseToReachingDefsMap(MemUseToReachingDefsMapType &R) {
+  void getMemUseToReachingDefsMap(MemUseToReachingDefsMapType &R) const {
     R = MemUseToReachingDefsMap;
   }
   void handleCallArguments(const CallInst &CI);
@@ -158,8 +163,9 @@ public:
   /// This function iterates over the set of call instruciton to add the user to
   /// each of the call instruciotns.
   void addReachingCall(Instruction &User, SetOfInstructions &CallInstructions);
-  SetOfInstructions &getFuncGeneratingDefs(const Function *F);
-  bool addFuncGeneratingDefs(SetOfInstructions &ReachingDefs,
+  const SetOfInstructions &getFuncGeneratingDefs(const Function *F) const;
+  SetOfInstructions &getFuncGeneratingDefs(const Function *F) ;
+  bool addFuncGeneratingDefs(SetOfInstructions &ReachingDefs, const BasicBlock *ReachableBlock,
                              const Function *F = nullptr);
   /// Propagate all the defs in the set \p ReachingDefs, to all the BasicBlocks
   /// (within the function).
@@ -173,7 +179,7 @@ public:
   SetOfInstructions &getReachingDefsAt(const Instruction &AtInstr);
 
   /// Get the reaching defs at entry of basic block \p BB.
-  SetOfInstructions &getReachingDefsAt(BasicBlock &BB);
+  const SetOfInstructions &getReachingDefsAt(const BasicBlock &BB)const;
 
   /// Check if this insturction belongs to a malloc call in the user code.
   bool isMalloc(ConstInstrPtr LdSt) const;
@@ -211,6 +217,7 @@ public:
   /// Insert the MemDef to the set of reaching defs at the entry of the
   /// basicblock.
   bool insertReachingDef(const BasicBlock *, ConstInstrPtr MemDef);
+  bool insertReachingDef(const BasicBlock *, SetOfInstructions &MemDefSet);
 
   /// Does the instruction load the address of a pointer.
   bool isDoublePointer(ConstInstrPtr Instr);
@@ -265,7 +272,7 @@ private:
 
   bool HasConvergedFlagged;
 
-  void getReachingDefs(const BasicBlock *BB, SetOfInstructions &ReachingDefs);
+  void getReachingDefs(const BasicBlock *BB, SetOfInstructions &ReachingDefs)const;
   void insertDefs(MemoryToDefAccessMapType &S,
                   const MemoryToDefAccessMapType::iterator &begin,
                   const MemoryToDefAccessMapType::iterator &end);
@@ -369,6 +376,7 @@ class InterproceduralMemDFA {
   // FuncToMemInfoType &FuncToMemInfo;
   MemoryLdStMapClass &LdStToMem;
 
+  void propagateReachingDefsOfCItoBBs(const CallInst &CI);
   /// For all call instructions within the function, propagate the reaching defs
   /// at the function call into the body, and return back the defs generated
   /// within the function body, to be propagated to the blocks following the

@@ -77,6 +77,7 @@ add_llvm_library(LLVMAnalysis
   MemUseDefAnalysis.cpp
   OmpDiagnosticsAnalysis.cpp
   OMPSanitizer.cpp
+  OmpOptiMem.cpp
   PtrUseVisitor.cpp
   RegionInfo.cpp
   RegionPass.cpp

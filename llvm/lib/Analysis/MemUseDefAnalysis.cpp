@@ -97,6 +97,25 @@ DebugLocation::recordDebugLoc(LocationStringType &locStr) {
   LocationStringType baseStr = fileName + ":" + std::to_string(baseLineNum);
   return DebugLoc2SeqNumMap[baseStr];
 }
+
+void DebugLocation::recordDebugLoc(const DebugLoc &Loc) {
+  static LocationStringType lastLocationStr = "";
+  unsigned seperatorPosition;
+  LocationStringType locStr =
+      getDebugLocStr(&Loc, seperatorPosition);
+  if (DebugLoc2SeqNumMap.find(locStr) != DebugLoc2SeqNumMap.end())
+    return; // already added this location to map
+  LLVM_DEBUG(dbgs() << "\n position:" << locStr
+                    << "\n seq:" << DebugLoc2SeqNumMap.size());
+  FileNameType fileName;
+  LineNumberType line = 0;
+  getFile_Line_fromStr(locStr, fileName, line, seperatorPosition);
+  DebugLoc2SeqNumMap[locStr] = DebugLoc2SeqNumMap.size();
+  FileLinesMap[fileName].insert(line);
+  lastLocationStr = locStr;
+  printDebugLocation();
+}
+
 void DebugLocation::recordDebugLoc(const Instruction &inst) {
   if (!inst.getDebugLoc())
     return;
@@ -142,6 +161,7 @@ bool DebugLocation::hasDebugLoc(const Instruction *instr) {
     return true;
   return false;
 }
+
 LocationSequenceNumType DebugLocation::getDebugLocSeq(const Instruction *inst) {
   LocationSequenceNumType invalidRet = (LocationSequenceNumType)(-1);
   if (!inst->getDebugLoc())
@@ -158,6 +178,22 @@ LocationSequenceNumType DebugLocation::getDebugLocSeq(const Instruction *inst) {
   }
   return iter->second;
 }
+
+LocationSequenceNumType DebugLocation::getDebugLocSeq(const DebugLoc &Loc) {
+//  LocationSequenceNumType invalidRet = (LocationSequenceNumType)(-1);
+  // const DebugLoc *locStr = &inst->getDebugLoc();
+  unsigned dummySep;
+  auto locStr = getDebugLocStr(&Loc, dummySep);
+  auto iter = DebugLoc2SeqNumMap.find(locStr);
+  if (iter == DebugLoc2SeqNumMap.end()) {
+    // if doesnot exist, then new instruction, insert in map
+    recordDebugLoc(Loc);
+    iter = DebugLoc2SeqNumMap.find(locStr);
+    // return invalidRet ;
+  }
+  return iter->second;
+}
+
 const std::string DebugLocation::getDebugLocStr(const Instruction &inst) {
   const std::string invalidRet = ""; //(unsigned)(-1);
   if (!inst.getDebugLoc())
@@ -364,9 +400,9 @@ void MemoryLdStMapClass::FuncParamInfoClass::handleFuncCall(
         continue;
       if (!MemInfo.isMemory(Arg))
         Arg = MemInfo.getMemoryForLdSt((Arg));
-      LLVM_DEBUG(dbgs() << "\n Arg :" << *Arg);
       if (Arg == nullptr)
         continue;
+      LLVM_DEBUG(dbgs() << "\n Arg :" << *Arg);
       auto Param = FParams[ArgNum];
       if (Param == nullptr)
         continue;
@@ -418,6 +454,13 @@ bool MemoryLdStMapClass::isMemory(ConstValuePtr Val) const {
   }
   if (isa<Argument>(Val))
     return true;
+
+ // if (auto C = dyn_cast<CallInst>(Val)) {
+ //   if (auto F = C->getCalledFunction()){
+ //     if (F->hasName() && F->getName().contains("malloc"))
+ //       return true;
+ //   }
+ // }
   return false;
 }
 
@@ -709,10 +752,10 @@ MemoryLdStMapClass::getReachingDefsAt(const Instruction &AtInstr) {
   return MemUseToReachingDefsMap[&AtInstr];
 }
 
-SetOfInstructions &MemoryLdStMapClass::getReachingDefsAt(BasicBlock &BB) {
+const SetOfInstructions &MemoryLdStMapClass::getReachingDefsAt(const BasicBlock &BB) const{
   assert(EXISTSinMap(BBtoReachingDefsMap, &BB) &&
          "Reaching Defs for basic block does not exit ");
-  return BBtoReachingDefsMap[&BB];
+  return BBtoReachingDefsMap.at(&BB);
 }
 
 void MemoryLdStMapClass::insertReachingDef(ConstInstrPtr MemUse) {
@@ -827,12 +870,13 @@ bool MemoryLdStMapClass::insertReachingDef(ConstInstrPtr MemUseInstr,
 }
 
 bool MemoryLdStMapClass::insertReachingDef(const BasicBlock *BB,
-                                           ConstInstrPtr MemDef) {
-  auto PrevSize = BBtoReachingDefsMap.size();
-  BBtoReachingDefsMap[BB].insert(MemDef);
-  if (PrevSize != BBtoReachingDefsMap.size())
-    return true;
+    SetOfInstructions &MemDefSet) {
+  BBtoReachingDefsMap[BB].insert(MemDefSet.begin(), MemDefSet.end());
   return false;
+}
+bool MemoryLdStMapClass::insertReachingDef(const BasicBlock *BB,
+                                           ConstInstrPtr MemDef) {
+  return BBtoReachingDefsMap[BB].insert(MemDef).second;
 }
 
 bool MemoryLdStMapClass::isDoublePointer(ConstInstrPtr Instr) {
@@ -877,11 +921,24 @@ void MemoryLdStMapClass::print(raw_ostream &O) {
   }
 }
 
+const SetOfInstructions &
+MemoryLdStMapClass::getFuncGeneratingDefs(const Function *F) const{
+  if (EXISTSinMap(FuncGeneratingDefs, F))
+    return FuncGeneratingDefs.at(F);
+  SetOfInstructions *Temp = new SetOfInstructions;
+  return *Temp;
+  // TODO Memory Leak
+}
+
 SetOfInstructions &
 MemoryLdStMapClass::getFuncGeneratingDefs(const Function *F) {
-  return FuncGeneratingDefs[F];
+  if (!EXISTSinMap(FuncGeneratingDefs, F)) {
+    SetOfInstructions *Temp = new SetOfInstructions;
+    FuncGeneratingDefs[F] = *Temp ;
+  }
+  return FuncGeneratingDefs.at(F);
 }
-bool MemoryLdStMapClass::addFuncGeneratingDefs(SetOfInstructions &ReachingDefs,
+bool MemoryLdStMapClass::addFuncGeneratingDefs(SetOfInstructions &ReachingDefs,const BasicBlock *ReachableBlock,
                                                const Function *F) {
   if (ReachingDefs.empty())
     return false;
@@ -901,6 +958,24 @@ bool MemoryLdStMapClass::addFuncGeneratingDefs(SetOfInstructions &ReachingDefs,
     // errs()<<"\n Def:"<<*D;
   }
   FuncGeneratingDefs[F].insert(GlobalDefsOnly.begin(), GlobalDefsOnly.end());
+  if (ReachableBlock != nullptr) {
+    std::set<const BasicBlock*> Visited;
+    std::queue<const BasicBlock*> BBQueue; 
+    BBQueue.push(ReachableBlock);
+
+    while (!BBQueue.empty()){
+      auto ReachBB = BBQueue.back(); BBQueue.pop();
+      if (EXISTSinMap(Visited, ReachBB)) continue;
+      Visited.insert(ReachBB);
+      for (auto SuccBB =succ_begin(ReachBB) ; SuccBB != succ_end(ReachBB) ; SuccBB++){
+        if (EXISTSinMap(Visited, *SuccBB))
+          continue;
+        BBQueue.push(*SuccBB);
+        BBtoReachingDefsMap[*SuccBB].insert(GlobalDefsOnly.begin(), GlobalDefsOnly.end());
+      }
+    }
+  }
+
   // Return true, if the after size is greater.
   return (PrevSize < FuncGeneratingDefs[F]);
 }
@@ -993,7 +1068,7 @@ void MemorySSAUseDefWalker::addToGeneratingDefs(
   // Every mem def is added to the generating defs of a function, since we
   // assume conservatively no def is killed. No need for iterative convergence
   // analysis here, we can add every memdef here once, and be done with it.
-  LdStToMem.addFuncGeneratingDefs(SingleDef, parentF);
+  LdStToMem.addFuncGeneratingDefs(SingleDef,nullptr, parentF);
 
   // If this mem def is a function call then, record the
   if (CallInst *Call = dyn_cast<CallInst>(MemDef->getMemoryInst())) {
@@ -1208,12 +1283,13 @@ void MemorySSAUseDefWalker::updateClobberingAccess(const MemoryUse *MemUse) {
 }
 
 void MemorySSAUseDefWalker::getReachingDefs(const BasicBlock *BB,
-                                            SetOfInstructions &ReachingDefs) {
-  for (auto Iter : BBReachingDefs[BB]) {
-    for (auto Def : Iter.second) {
-      ReachingDefs.insert(Def->getMemoryInst());
-    }
-  }
+    SetOfInstructions &ReachingDefs) const{
+  if (EXISTSinMap(BBReachingDefs, BB))
+    for (auto Iter : BBReachingDefs.at(BB)) 
+      for (auto Def : Iter.second) 
+        ReachingDefs.insert(Def->getMemoryInst());
+
+
   // for (auto Def : BBGeneratingDefs[BB]){
   //  ReachingDefs.insert(Def.second->getMemoryInst());
   //}
@@ -1321,11 +1397,12 @@ void MemorySSAUseDefWalker::updateBasicBlock(const BasicBlock *BB) {
   // need to be tracked. Since it will be propagated back to the calling
   // function. So, find out if there is a return instruction in this basic
   // block, and compute the reaching defs for the return instruction.
+  SetOfInstructions ReachingDefsATBB, ReachingCalls;
+  getReachingDefs(BB, ReachingDefsATBB);
+  LdStToMem.insertReachingDef(BB, ReachingDefsATBB);
   auto MAList = MSSA->getBlockAccesses(BB);
   if (MAList == nullptr)
     return; // no Memory access in this BB;
-  SetOfInstructions ReachingDefsATBB, ReachingCalls;
-  getReachingDefs(BB, ReachingDefsATBB);
   for (auto &MA : *MAList) {
     // Assumption is the order of iterating over the list is the execution
     // order.
@@ -1559,15 +1636,34 @@ bool InterproceduralMemDFA::propagateReachingDefsIntoFunc(
   // Set the "has converged" properly, else infinite loop.
   return LdStToMem.propagateReachingDefsIntoFunc(ReachingDefs, argNum);
 }
+void InterproceduralMemDFA::propagateReachingDefsOfCItoBBs(const CallInst &CI){
 
+  Function *CalledF = getCalledFunction(CI);
+  // Get the defs generated after the func call.
+  SetOfInstructions &FuncGen = getFuncGeneratingDefs(*CalledF);
+  SetOfBasicBlocks VisitedSet;
+  ListOfBasicBlocks BBQueue;
+  BBQueue.push_back(CI.getParent());
+  while (!BBQueue.empty()){
+    const BasicBlock *BB = BBQueue.back(); BBQueue.pop_back();
+    if (EXISTSinMap(VisitedSet, BB)) continue;
+    VisitedSet.insert(BB);
+    LdStToMem.insertReachingDef(BB, FuncGen);
+    for (auto SuccBB =succ_begin(BB) ; SuccBB != succ_end(BB) ; SuccBB++){
+      if (!EXISTSinMap(VisitedSet, *SuccBB))
+        BBQueue.push_back(*SuccBB);
+    }
+  }
+}
 void InterproceduralMemDFA::handleReachingDefsFromCall(const CallInst &CI,
                                                        bool &NewDefsAdded) {
+  propagateReachingDefsOfCItoBBs(CI);
   auto ThisFunc = CI.getFunction();
   Function *CalledF = getCalledFunction(CI);
   // Get the defs generated after the func call.
   SetOfInstructions &FuncGen = getFuncGeneratingDefs(*CalledF);
   // Add the FuncGen to ThisFunc's gen defs.
-  NewDefsAdded |= LdStToMem.addFuncGeneratingDefs(FuncGen, ThisFunc);
+  NewDefsAdded |= LdStToMem.addFuncGeneratingDefs(FuncGen,CI.getParent(), ThisFunc);
   // Now add the defs generated by the func, to its users.
   for (auto User : LdStToMem.getUsersOfCall(CI)) {
     // This adds reaching defs to instructions outside this current basic block
@@ -1703,7 +1799,7 @@ void InterproceduralMemDFA::updateReachingDefsDueToCall(
     }
     // Get the defs generated after the func call.
     SetOfInstructions &FuncGen = getFuncGeneratingDefs(*CalledF);
-    LdStToMem.addFuncGeneratingDefs(FuncGen, ThisFunc);
+    LdStToMem.addFuncGeneratingDefs(FuncGen,I->getParent(), ThisFunc);
     // Now add the defs generated by the func, to its users.
     for (auto User : LdStToMem.getUsersOfCall(*CallInstr)) {
       // This adds reaching defs to instructions outside this current basic
@@ -1785,7 +1881,7 @@ void InterproceduralMemDFA::updateReachingDefsOfBB(
       }
       // Get the defs generated after the func call.
       SetOfInstructions &FuncGen = getFuncGeneratingDefs(*CalledF);
-      LdStToMem.addFuncGeneratingDefs(FuncGen, ThisFunc);
+      LdStToMem.addFuncGeneratingDefs(FuncGen,I.getParent(), ThisFunc);
       // Now add the defs generated by the func, to its users.
       for (auto User : LdStToMem.getUsersOfCall(*CallInstr)) {
         // This adds reaching defs to instructions outside this current basic
