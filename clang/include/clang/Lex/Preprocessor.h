@@ -14,7 +14,6 @@
 #ifndef LLVM_CLANG_LEX_PREPROCESSOR_H
 #define LLVM_CLANG_LEX_PREPROCESSOR_H
 
-#include "clang/Basic/Builtins.h"
 #include "clang/Basic/Diagnostic.h"
 #include "clang/Basic/IdentifierTable.h"
 #include "clang/Basic/LLVM.h"
@@ -28,11 +27,13 @@
 #include "clang/Lex/ModuleLoader.h"
 #include "clang/Lex/ModuleMap.h"
 #include "clang/Lex/PPCallbacks.h"
+#include "clang/Lex/PreprocessorExcludedConditionalDirectiveSkipMapping.h"
 #include "clang/Lex/Token.h"
 #include "clang/Lex/TokenLexer.h"
 #include "llvm/ADT/ArrayRef.h"
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/FoldingSet.h"
+#include "llvm/ADT/FunctionExtras.h"
 #include "llvm/ADT/None.h"
 #include "llvm/ADT/Optional.h"
 #include "llvm/ADT/PointerUnion.h"
@@ -48,8 +49,8 @@
 #include <cassert>
 #include <cstddef>
 #include <cstdint>
-#include <memory>
 #include <map>
+#include <memory>
 #include <string>
 #include <utility>
 #include <vector>
@@ -78,6 +79,10 @@ class PreprocessorLexer;
 class PreprocessorOptions;
 class ScratchBuffer;
 class TargetInfo;
+
+namespace Builtin {
+class Context;
+}
 
 /// Stores token information for comparing actual tokens with
 /// predefined values.  Only handles simple tokens and identifiers.
@@ -124,6 +129,7 @@ class Preprocessor {
   friend class VAOptDefinitionContext;
   friend class VariadicMacroScopeGuard;
 
+  llvm::unique_function<void(const clang::Token &)> OnToken;
   std::shared_ptr<PreprocessorOptions> PPOpts;
   DiagnosticsEngine        *Diags;
   LangOptions       &LangOpts;
@@ -147,6 +153,7 @@ class Preprocessor {
   IdentifierInfo *Ident__DATE__, *Ident__TIME__;   // __DATE__, __TIME__
   IdentifierInfo *Ident__INCLUDE_LEVEL__;          // __INCLUDE_LEVEL__
   IdentifierInfo *Ident__BASE_FILE__;              // __BASE_FILE__
+  IdentifierInfo *Ident__FILE_NAME__;              // __FILE_NAME__
   IdentifierInfo *Ident__TIMESTAMP__;              // __TIMESTAMP__
   IdentifierInfo *Ident__COUNTER__;                // __COUNTER__
   IdentifierInfo *Ident_Pragma, *Ident__pragma;    // _Pragma, __pragma
@@ -235,7 +242,7 @@ class Preprocessor {
   SelectorTable Selectors;
 
   /// Information about builtins.
-  Builtin::Context BuiltinInfo;
+  std::unique_ptr<Builtin::Context> BuiltinInfo;
 
   /// Tracks all of the pragmas that the client registered
   /// with this preprocessor.
@@ -367,9 +374,9 @@ class Preprocessor {
   /// it expects a '.' or ';'.
   bool ModuleImportExpectsIdentifier = false;
 
-  /// The source location of the currently-active
+  /// The identifier and source location of the currently-active
   /// \#pragma clang arc_cf_code_audited begin.
-  SourceLocation PragmaARCCFCodeAuditedLoc;
+  std::pair<IdentifierInfo *, SourceLocation> PragmaARCCFCodeAuditedInfo;
 
   /// The source location of the currently-active
   /// \#pragma clang assume_nonnull begin.
@@ -408,6 +415,14 @@ class Preprocessor {
   /// possible for Lex to detect whether it's producing a token for the end
   /// of phase 4 of translation or for some other situation.
   unsigned LexLevel = 0;
+
+  /// The number of (LexLevel 0) preprocessor tokens.
+  unsigned TokenCount = 0;
+
+  /// The maximum number of (LexLevel 0) tokens before issuing a -Wmax-tokens
+  /// warning, or zero for unlimited.
+  unsigned MaxTokens = 0;
+  SourceLocation MaxTokensOverrideLoc;
 
 public:
   struct PreambleSkipInfo {
@@ -907,7 +922,7 @@ public:
   IdentifierTable &getIdentifierTable() { return Identifiers; }
   const IdentifierTable &getIdentifierTable() const { return Identifiers; }
   SelectorTable &getSelectorTable() { return Selectors; }
-  Builtin::Context &getBuiltinInfo() { return BuiltinInfo; }
+  Builtin::Context &getBuiltinInfo() { return *BuiltinInfo; }
   llvm::BumpPtrAllocator &getPreprocessorAllocator() { return BP; }
 
   void setExternalSource(ExternalPreprocessorSource *Source) {
@@ -923,6 +938,12 @@ public:
 
   bool hadModuleLoaderFatalFailure() const {
     return TheModuleLoader.HadFatalFailure;
+  }
+
+  /// Retrieve the number of Directives that have been processed by the
+  /// Preprocessor.
+  unsigned getNumDirectives() const {
+    return NumDirectives;
   }
 
   /// True if we are currently preprocessing a #if or #elif directive
@@ -991,11 +1012,31 @@ public:
   PPCallbacks *getPPCallbacks() const { return Callbacks.get(); }
   void addPPCallbacks(std::unique_ptr<PPCallbacks> C) {
     if (Callbacks)
-      C = llvm::make_unique<PPChainedCallbacks>(std::move(C),
+      C = std::make_unique<PPChainedCallbacks>(std::move(C),
                                                 std::move(Callbacks));
     Callbacks = std::move(C);
   }
   /// \}
+
+  /// Get the number of tokens processed so far.
+  unsigned getTokenCount() const { return TokenCount; }
+
+  /// Get the max number of tokens before issuing a -Wmax-tokens warning.
+  unsigned getMaxTokens() const { return MaxTokens; }
+
+  void overrideMaxTokens(unsigned Value, SourceLocation Loc) {
+    MaxTokens = Value;
+    MaxTokensOverrideLoc = Loc;
+  };
+
+  SourceLocation getMaxTokensOverrideLoc() const { return MaxTokensOverrideLoc; }
+
+  /// Register a function that would be called on each token in the final
+  /// expanded token stream.
+  /// This also reports annotation tokens produced by the parser.
+  void setTokenWatcher(llvm::unique_function<void(const clang::Token &)> F) {
+    OnToken = std::move(F);
+  }
 
   bool isMacroDefined(StringRef Id) {
     return isMacroDefined(&Identifiers.get(Id));
@@ -1143,7 +1184,7 @@ public:
   ///
   /// These predefines are automatically injected when parsing the main file.
   void setPredefines(const char *P) { Predefines = P; }
-  void setPredefines(StringRef P) { Predefines = P; }
+  void setPredefines(StringRef P) { Predefines = std::string(P); }
 
   /// Return information about the specified preprocessor
   /// identifier token.
@@ -1281,6 +1322,7 @@ public:
   void EnterMacro(Token &Tok, SourceLocation ILEnd, MacroInfo *Macro,
                   MacroArgs *Args);
 
+private:
   /// Add a "macro" context to the top of the include stack,
   /// which will cause the lexer to start returning the specified tokens.
   ///
@@ -1292,18 +1334,24 @@ public:
   /// of tokens has a permanent owner somewhere, so they do not need to be
   /// copied. If it is true, it assumes the array of tokens is allocated with
   /// \c new[] and the Preprocessor will delete[] it.
-private:
+  ///
+  /// If \p IsReinject the resulting tokens will have Token::IsReinjected flag
+  /// set, see the flag documentation for details.
   void EnterTokenStream(const Token *Toks, unsigned NumToks,
-                        bool DisableMacroExpansion, bool OwnsTokens);
+                        bool DisableMacroExpansion, bool OwnsTokens,
+                        bool IsReinject);
 
 public:
   void EnterTokenStream(std::unique_ptr<Token[]> Toks, unsigned NumToks,
-                        bool DisableMacroExpansion) {
-    EnterTokenStream(Toks.release(), NumToks, DisableMacroExpansion, true);
+                        bool DisableMacroExpansion, bool IsReinject) {
+    EnterTokenStream(Toks.release(), NumToks, DisableMacroExpansion, true,
+                     IsReinject);
   }
 
-  void EnterTokenStream(ArrayRef<Token> Toks, bool DisableMacroExpansion) {
-    EnterTokenStream(Toks.data(), Toks.size(), DisableMacroExpansion, false);
+  void EnterTokenStream(ArrayRef<Token> Toks, bool DisableMacroExpansion,
+                        bool IsReinject) {
+    EnterTokenStream(Toks.data(), Toks.size(), DisableMacroExpansion, false,
+                     IsReinject);
   }
 
   /// Pop the current lexer/macro exp off the top of the lexer stack.
@@ -1448,15 +1496,18 @@ public:
   ///
   /// If BackTrack() is called afterwards, the token will remain at the
   /// insertion point.
-  void EnterToken(const Token &Tok) {
+  /// If \p IsReinject is true, resulting token will have Token::IsReinjected
+  /// flag set. See the flag documentation for details.
+  void EnterToken(const Token &Tok, bool IsReinject) {
     if (LexLevel) {
       // It's not correct in general to enter caching lex mode while in the
       // middle of a nested lexing action.
-      auto TokCopy = llvm::make_unique<Token[]>(1);
+      auto TokCopy = std::make_unique<Token[]>(1);
       TokCopy[0] = Tok;
-      EnterTokenStream(std::move(TokCopy), 1, true);
+      EnterTokenStream(std::move(TokCopy), 1, true, IsReinject);
     } else {
       EnterCachingLexMode();
+      assert(IsReinject && "new tokens in the middle of cached stream");
       CachedTokens.insert(CachedTokens.begin()+CachedLexPos, Tok);
     }
   }
@@ -1510,6 +1561,12 @@ public:
   /// Enter an annotation token into the token stream.
   void EnterAnnotationToken(SourceRange Range, tok::TokenKind Kind,
                             void *AnnotationVal);
+
+  /// Determine whether it's possible for a future call to Lex to produce an
+  /// annotation token created by a previous call to EnterAnnotationToken.
+  bool mightHavePendingAnnotationTokens() {
+    return CurLexerKind != CLK_Lexer;
+  }
 
   /// Update the current token to represent the provided
   /// identifier, in order to cache an action performed by typo correction.
@@ -1581,14 +1638,16 @@ public:
   /// arc_cf_code_audited begin.
   ///
   /// Returns an invalid location if there is no such pragma active.
-  SourceLocation getPragmaARCCFCodeAuditedLoc() const {
-    return PragmaARCCFCodeAuditedLoc;
+  std::pair<IdentifierInfo *, SourceLocation>
+  getPragmaARCCFCodeAuditedInfo() const {
+    return PragmaARCCFCodeAuditedInfo;
   }
 
   /// Set the location of the currently-active \#pragma clang
   /// arc_cf_code_audited begin.  An invalid location ends the pragma.
-  void setPragmaARCCFCodeAuditedLoc(SourceLocation Loc) {
-    PragmaARCCFCodeAuditedLoc = Loc;
+  void setPragmaARCCFCodeAuditedInfo(IdentifierInfo *Ident,
+                                     SourceLocation Loc) {
+    PragmaARCCFCodeAuditedInfo = {Ident, Loc};
   }
 
   /// The location of the currently-active \#pragma clang
@@ -1929,17 +1988,15 @@ public:
 
   /// Given a "foo" or \<foo> reference, look up the indicated file.
   ///
-  /// Returns null on failure.  \p isAngled indicates whether the file
+  /// Returns None on failure.  \p isAngled indicates whether the file
   /// reference is for system \#include's or not (i.e. using <> instead of "").
-  const FileEntry *LookupFile(SourceLocation FilenameLoc, StringRef Filename,
-                              bool isAngled, const DirectoryLookup *FromDir,
-                              const FileEntry *FromFile,
-                              const DirectoryLookup *&CurDir,
-                              SmallVectorImpl<char> *SearchPath,
-                              SmallVectorImpl<char> *RelativePath,
-                              ModuleMap::KnownHeader *SuggestedModule,
-                              bool *IsMapped, bool *IsFrameworkFound,
-                              bool SkipCache = false);
+  Optional<FileEntryRef>
+  LookupFile(SourceLocation FilenameLoc, StringRef Filename, bool isAngled,
+             const DirectoryLookup *FromDir, const FileEntry *FromFile,
+             const DirectoryLookup *&CurDir, SmallVectorImpl<char> *SearchPath,
+             SmallVectorImpl<char> *RelativePath,
+             ModuleMap::KnownHeader *SuggestedModule, bool *IsMapped,
+             bool *IsFrameworkFound, bool SkipCache = false);
 
   /// Get the DirectoryLookup structure used to find the current
   /// FileEntry, if CurLexer is non-null and if applicable.
@@ -2135,7 +2192,7 @@ private:
 
   //===--------------------------------------------------------------------===//
   // Caching stuff.
-  void CachingLex(Token &Result, bool &IsNewToken);
+  void CachingLex(Token &Result);
 
   bool InCachingLexMode() const {
     // If the Lexer pointers are 0 and IncludeMacroStack is empty, it means
@@ -2173,14 +2230,25 @@ private:
       ModuleBegin,
       ModuleImport,
       SkippedModuleImport,
+      Failure,
     } Kind;
     Module *ModuleForHeader = nullptr;
 
     ImportAction(ActionKind AK, Module *Mod = nullptr)
         : Kind(AK), ModuleForHeader(Mod) {
-      assert((AK == None || Mod) && "no module for module action");
+      assert((AK == None || Mod || AK == Failure) &&
+             "no module for module action");
     }
   };
+
+  Optional<FileEntryRef> LookupHeaderIncludeOrImport(
+      const DirectoryLookup *&CurDir, StringRef &Filename,
+      SourceLocation FilenameLoc, CharSourceRange FilenameRange,
+      const Token &FilenameTok, bool &IsFrameworkFound, bool IsImportDecl,
+      bool &IsMapped, const DirectoryLookup *LookupFrom,
+      const FileEntry *LookupFromFile, StringRef &LookupFilename,
+      SmallVectorImpl<char> &RelativePath, SmallVectorImpl<char> &SearchPath,
+      ModuleMap::KnownHeader &SuggestedModule, bool isAngled);
 
   // File inclusion.
   void HandleIncludeDirective(SourceLocation HashLoc, Token &Tok,
@@ -2210,20 +2278,22 @@ public:
   /// into a module, or is outside any module, returns nullptr.
   Module *getModuleForLocation(SourceLocation Loc);
 
-  /// We want to produce a diagnostic at location IncLoc concerning a
-  /// missing module import.
+  /// We want to produce a diagnostic at location IncLoc concerning an
+  /// unreachable effect at location MLoc (eg, where a desired entity was
+  /// declared or defined). Determine whether the right way to make MLoc
+  /// reachable is by #include, and if so, what header should be included.
   ///
-  /// \param IncLoc The location at which the missing import was detected.
-  /// \param M The desired module.
-  /// \param MLoc A location within the desired module at which some desired
-  ///        effect occurred (eg, where a desired entity was declared).
+  /// This is not necessarily fast, and might load unexpected module maps, so
+  /// should only be called by code that intends to produce an error.
   ///
-  /// \return A file that can be #included to import a module containing MLoc.
-  ///         Null if no such file could be determined or if a #include is not
-  ///         appropriate.
-  const FileEntry *getModuleHeaderToIncludeForDiagnostics(SourceLocation IncLoc,
-                                                          Module *M,
-                                                          SourceLocation MLoc);
+  /// \param IncLoc The location at which the missing effect was detected.
+  /// \param MLoc A location within an unimported module at which the desired
+  ///        effect occurred.
+  /// \return A file that can be #included to provide the desired effect. Null
+  ///         if no such file could be determined or if a #include is not
+  ///         appropriate (eg, if a module should be imported instead).
+  const FileEntry *getHeaderToIncludeForDiagnostics(SourceLocation IncLoc,
+                                                    SourceLocation MLoc);
 
   bool isRecordingPreamble() const {
     return PreambleConditionalStack.isRecording();
@@ -2271,8 +2341,7 @@ private:
   void HandleElifDirective(Token &ElifToken, const Token &HashToken);
 
   // Pragmas.
-  void HandlePragmaDirective(SourceLocation IntroducerLoc,
-                             PragmaIntroducerKind Introducer);
+  void HandlePragmaDirective(PragmaIntroducer Introducer);
 
 public:
   void HandlePragmaOnce(Token &OnceTok);
@@ -2294,6 +2363,15 @@ public:
   /// A macro is used, update information about macros that need unused
   /// warnings.
   void markMacroAsUsed(MacroInfo *MI);
+
+private:
+  Optional<unsigned>
+  getSkippedRangeForExcludedConditionalBlock(SourceLocation HashLoc);
+
+  /// Contains the currently active skipped range mappings for skipping excluded
+  /// conditional directives.
+  ExcludedPreprocessorDirectiveSkipMapping
+      *ExcludedConditionalDirectiveSkipMappings;
 };
 
 /// Abstract base class that describes a handler that will receive

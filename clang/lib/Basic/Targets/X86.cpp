@@ -131,36 +131,13 @@ bool X86TargetInfo::initFeatureMap(
   case CK_Lakemont:
     break;
 
-  case CK_PentiumMMX:
-  case CK_Pentium2:
-  case CK_K6:
-  case CK_WinChipC6:
-    setFeatureEnabledImpl(Features, "mmx", true);
-    break;
-
-  case CK_IcelakeServer:
-    setFeatureEnabledImpl(Features, "pconfig", true);
-    setFeatureEnabledImpl(Features, "wbnoinvd", true);
-    LLVM_FALLTHROUGH;
-  case CK_IcelakeClient:
-    setFeatureEnabledImpl(Features, "vaes", true);
-    setFeatureEnabledImpl(Features, "gfni", true);
-    setFeatureEnabledImpl(Features, "vpclmulqdq", true);
-    setFeatureEnabledImpl(Features, "avx512bitalg", true);
-    setFeatureEnabledImpl(Features, "avx512vbmi2", true);
-    setFeatureEnabledImpl(Features, "avx512vpopcntdq", true);
-    setFeatureEnabledImpl(Features, "rdpid", true);
-    LLVM_FALLTHROUGH;
-  case CK_Cannonlake:
-    setFeatureEnabledImpl(Features, "avx512ifma", true);
-    setFeatureEnabledImpl(Features, "avx512vbmi", true);
-    setFeatureEnabledImpl(Features, "sha", true);
+  case CK_Cooperlake:
+    // CPX inherits all CLX features plus AVX512BF16
+    setFeatureEnabledImpl(Features, "avx512bf16", true);
     LLVM_FALLTHROUGH;
   case CK_Cascadelake:
-    //Cannonlake has no VNNI feature inside while Icelake has
-    if (Kind != CK_Cannonlake)
-      // CLK inherits all SKX features plus AVX512_VNNI
-      setFeatureEnabledImpl(Features, "avx512vnni", true);
+    // CLX inherits all SKX features plus AVX512VNNI
+    setFeatureEnabledImpl(Features, "avx512vnni", true);
     LLVM_FALLTHROUGH;
   case CK_SkylakeServer:
     setFeatureEnabledImpl(Features, "avx512f", true);
@@ -168,18 +145,52 @@ bool X86TargetInfo::initFeatureMap(
     setFeatureEnabledImpl(Features, "avx512dq", true);
     setFeatureEnabledImpl(Features, "avx512bw", true);
     setFeatureEnabledImpl(Features, "avx512vl", true);
+    setFeatureEnabledImpl(Features, "clwb", true);
     setFeatureEnabledImpl(Features, "pku", true);
-    if (Kind != CK_Cannonlake) // CNL inherits all SKX features, except CLWB
-      setFeatureEnabledImpl(Features, "clwb", true);
+    // SkylakeServer cores inherits all SKL features, except SGX
+    goto SkylakeCommon;
+
+  case CK_Tigerlake:
+    setFeatureEnabledImpl(Features, "avx512vp2intersect", true);
+    setFeatureEnabledImpl(Features, "movdiri", true);
+    setFeatureEnabledImpl(Features, "movdir64b", true);
+    setFeatureEnabledImpl(Features, "shstk", true);
+    // Tigerlake cores inherits IcelakeClient, except pconfig and wbnoinvd
+    goto IcelakeCommon;
+
+  case CK_IcelakeServer:
+    setFeatureEnabledImpl(Features, "pconfig", true);
+    setFeatureEnabledImpl(Features, "wbnoinvd", true);
+    LLVM_FALLTHROUGH;
+  case CK_IcelakeClient:
+IcelakeCommon:
+    setFeatureEnabledImpl(Features, "vaes", true);
+    setFeatureEnabledImpl(Features, "gfni", true);
+    setFeatureEnabledImpl(Features, "vpclmulqdq", true);
+    setFeatureEnabledImpl(Features, "avx512bitalg", true);
+    setFeatureEnabledImpl(Features, "avx512vbmi2", true);
+    setFeatureEnabledImpl(Features, "avx512vnni", true);
+    setFeatureEnabledImpl(Features, "avx512vpopcntdq", true);
+    setFeatureEnabledImpl(Features, "rdpid", true);
+    setFeatureEnabledImpl(Features, "clwb", true);
+    LLVM_FALLTHROUGH;
+  case CK_Cannonlake:
+    setFeatureEnabledImpl(Features, "avx512f", true);
+    setFeatureEnabledImpl(Features, "avx512cd", true);
+    setFeatureEnabledImpl(Features, "avx512dq", true);
+    setFeatureEnabledImpl(Features, "avx512bw", true);
+    setFeatureEnabledImpl(Features, "avx512vl", true);
+    setFeatureEnabledImpl(Features, "avx512ifma", true);
+    setFeatureEnabledImpl(Features, "avx512vbmi", true);
+    setFeatureEnabledImpl(Features, "pku", true);
+    setFeatureEnabledImpl(Features, "sha", true);
     LLVM_FALLTHROUGH;
   case CK_SkylakeClient:
+    setFeatureEnabledImpl(Features, "sgx", true);
+    // SkylakeServer cores inherits all SKL features, except SGX
+SkylakeCommon:
     setFeatureEnabledImpl(Features, "xsavec", true);
     setFeatureEnabledImpl(Features, "xsaves", true);
-    setFeatureEnabledImpl(Features, "mpx", true);
-    if (Kind != CK_SkylakeServer
-        && Kind != CK_Cascadelake)
-      // SKX/CLX inherits all SKL features, except SGX
-      setFeatureEnabledImpl(Features, "sgx", true);
     setFeatureEnabledImpl(Features, "clflushopt", true);
     setFeatureEnabledImpl(Features, "aes", true);
     LLVM_FALLTHROUGH;
@@ -235,7 +246,14 @@ bool X86TargetInfo::initFeatureMap(
   case CK_Pentium3:
   case CK_C3_2:
     setFeatureEnabledImpl(Features, "sse", true);
+    LLVM_FALLTHROUGH;
+  case CK_Pentium2:
     setFeatureEnabledImpl(Features, "fxsr", true);
+    LLVM_FALLTHROUGH;
+  case CK_PentiumMMX:
+  case CK_K6:
+  case CK_WinChipC6:
+    setFeatureEnabledImpl(Features, "mmx", true);
     break;
 
   case CK_Tremont:
@@ -258,7 +276,6 @@ bool X86TargetInfo::initFeatureMap(
     setFeatureEnabledImpl(Features, "xsavec", true);
     setFeatureEnabledImpl(Features, "xsaves", true);
     setFeatureEnabledImpl(Features, "clflushopt", true);
-    setFeatureEnabledImpl(Features, "mpx", true);
     setFeatureEnabledImpl(Features, "fsgsbase", true);
     setFeatureEnabledImpl(Features, "aes", true);
     LLVM_FALLTHROUGH;
@@ -274,6 +291,7 @@ bool X86TargetInfo::initFeatureMap(
     setFeatureEnabledImpl(Features, "fxsr", true);
     setFeatureEnabledImpl(Features, "cx16", true);
     setFeatureEnabledImpl(Features, "sahf", true);
+    setFeatureEnabledImpl(Features, "mmx", true);
     break;
 
   case CK_KNM:
@@ -304,6 +322,7 @@ bool X86TargetInfo::initFeatureMap(
     setFeatureEnabledImpl(Features, "xsave", true);
     setFeatureEnabledImpl(Features, "movbe", true);
     setFeatureEnabledImpl(Features, "sahf", true);
+    setFeatureEnabledImpl(Features, "mmx", true);
     break;
 
   case CK_K6_2:
@@ -352,6 +371,7 @@ bool X86TargetInfo::initFeatureMap(
     setFeatureEnabledImpl(Features, "cx16", true);
     setFeatureEnabledImpl(Features, "fxsr", true);
     setFeatureEnabledImpl(Features, "sahf", true);
+    setFeatureEnabledImpl(Features, "mmx", true);
     break;
 
   case CK_ZNVER2:
@@ -373,6 +393,7 @@ bool X86TargetInfo::initFeatureMap(
     setFeatureEnabledImpl(Features, "fsgsbase", true);
     setFeatureEnabledImpl(Features, "fxsr", true);
     setFeatureEnabledImpl(Features, "lzcnt", true);
+    setFeatureEnabledImpl(Features, "mmx", true);
     setFeatureEnabledImpl(Features, "mwaitx", true);
     setFeatureEnabledImpl(Features, "movbe", true);
     setFeatureEnabledImpl(Features, "pclmul", true);
@@ -416,6 +437,7 @@ bool X86TargetInfo::initFeatureMap(
     setFeatureEnabledImpl(Features, "fxsr", true);
     setFeatureEnabledImpl(Features, "xsave", true);
     setFeatureEnabledImpl(Features, "sahf", true);
+    setFeatureEnabledImpl(Features, "mmx", true);
     break;
   }
   if (!TargetInfo::initFeatureMap(Features, Diags, CPU, FeaturesVec))
@@ -451,7 +473,9 @@ void X86TargetInfo::setSSELevel(llvm::StringMap<bool> &Features,
   if (Enabled) {
     switch (Level) {
     case AVX512F:
-      Features["avx512f"] = Features["fma"] = Features["f16c"] = true;
+      Features["avx512f"] = true;
+      Features["fma"] = true;
+      Features["f16c"] = true;
       LLVM_FALLTHROUGH;
     case AVX2:
       Features["avx2"] = true;
@@ -490,8 +514,8 @@ void X86TargetInfo::setSSELevel(llvm::StringMap<bool> &Features,
     Features["sse"] = false;
     LLVM_FALLTHROUGH;
   case SSE2:
-    Features["sse2"] = Features["pclmul"] = Features["aes"] = Features["sha"] =
-        Features["gfni"] = false;
+    Features["sse2"] = Features["pclmul"] = Features["aes"] = false;
+    Features["sha"] = Features["gfni"] = false;
     LLVM_FALLTHROUGH;
   case SSE3:
     Features["sse3"] = false;
@@ -507,21 +531,22 @@ void X86TargetInfo::setSSELevel(llvm::StringMap<bool> &Features,
     Features["sse4.2"] = false;
     LLVM_FALLTHROUGH;
   case AVX:
-    Features["fma"] = Features["avx"] = Features["f16c"] = Features["xsave"] =
-        Features["xsaveopt"] = Features["vaes"] = Features["vpclmulqdq"] = false;
+    Features["fma"] = Features["avx"] = Features["f16c"] = false;
+    Features["xsave"] = Features["xsaveopt"] = Features["vaes"] = false;
+    Features["vpclmulqdq"] = false;
     setXOPLevel(Features, FMA4, false);
     LLVM_FALLTHROUGH;
   case AVX2:
     Features["avx2"] = false;
     LLVM_FALLTHROUGH;
   case AVX512F:
-    Features["avx512f"] = Features["avx512cd"] = Features["avx512er"] =
-        Features["avx512pf"] = Features["avx512dq"] = Features["avx512bw"] =
-            Features["avx512vl"] = Features["avx512vbmi"] =
-                Features["avx512ifma"] = Features["avx512vpopcntdq"] =
-                    Features["avx512bitalg"] = Features["avx512vnni"] =
-                        Features["avx512vbmi2"] = false;
-                        Features["avx512bf16"] = false;
+    Features["avx512f"] = Features["avx512cd"] = Features["avx512er"] = false;
+    Features["avx512pf"] = Features["avx512dq"] = Features["avx512bw"] = false;
+    Features["avx512vl"] = Features["avx512vbmi"] = false;
+    Features["avx512ifma"] = Features["avx512vpopcntdq"] = false;
+    Features["avx512bitalg"] = Features["avx512vnni"] = false;
+    Features["avx512vbmi2"] = Features["avx512bf16"] = false;
+    Features["avx512vp2intersect"] = false;
     break;
   }
 }
@@ -649,26 +674,20 @@ void X86TargetInfo::setFeatureEnabledImpl(llvm::StringMap<bool> &Features,
     setSSELevel(Features, AVX2, Enabled);
   } else if (Name == "avx512f") {
     setSSELevel(Features, AVX512F, Enabled);
-  } else if (Name == "avx512cd" || Name == "avx512er" || Name == "avx512pf" ||
-             Name == "avx512dq" || Name == "avx512bw" || Name == "avx512vl" ||
-             Name == "avx512vbmi" || Name == "avx512ifma" ||
-             Name == "avx512vpopcntdq" || Name == "avx512bitalg" ||
-             Name == "avx512bf16" ||
-             Name == "avx512vnni" || Name == "avx512vbmi2") {
+  } else if (Name.startswith("avx512")) {
     if (Enabled)
       setSSELevel(Features, AVX512F, Enabled);
-    // Enable BWI instruction if VBMI/VBMI2/BITALG is being enabled.
-    if ((Name.startswith("avx512vbmi") || Name == "avx512bitalg") && Enabled)
+    // Enable BWI instruction if certain features are being enabled.
+    if ((Name == "avx512vbmi" || Name == "avx512vbmi2" ||
+         Name == "avx512bitalg" || Name == "avx512bf16") && Enabled)
       Features["avx512bw"] = true;
-    if (Name == "avx512bf16" && Enabled)
-      Features["avx512bw"] = Features["avx512vl"] = true;
-    // Also disable VBMI/VBMI2/BITALG if BWI is being disabled.
-    if (Name == "avx512bw" && !Enabled)
-      Features["avx512vbmi"] = Features["avx512vbmi2"] =
-      Features["avx512bf16"] =
+    // Also disable some features if BWI is being disabled.
+    if (Name == "avx512bw" && !Enabled) {
+      Features["avx512vbmi"] = false;
+      Features["avx512vbmi2"] = false;
       Features["avx512bitalg"] = false;
-    if (Name == "avx512vl" && !Enabled)
       Features["avx512bf16"] = false;
+    }
   } else if (Name == "fma") {
     if (Enabled)
       setSSELevel(Features, AVX, Enabled);
@@ -778,10 +797,10 @@ bool X86TargetInfo::handleTargetFeatures(std::vector<std::string> &Features,
       HasAVX512VBMI2 = true;
     } else if (Feature == "+avx512ifma") {
       HasAVX512IFMA = true;
+    } else if (Feature == "+avx512vp2intersect") {
+      HasAVX512VP2INTERSECT = true;
     } else if (Feature == "+sha") {
       HasSHA = true;
-    } else if (Feature == "+mpx") {
-      HasMPX = true;
     } else if (Feature == "+shstk") {
       HasSHSTK = true;
     } else if (Feature == "+movbe") {
@@ -836,6 +855,12 @@ bool X86TargetInfo::handleTargetFeatures(std::vector<std::string> &Features,
       HasPTWRITE = true;
     } else if (Feature == "+invpcid") {
       HasINVPCID = true;
+    } else if (Feature == "+enqcmd") {
+      HasENQCMD = true;
+    } else if (Feature == "+serialize") {
+      HasSERIALIZE = true;
+    } else if (Feature == "+tsxldtrk") {
+      HasTSXLDTRK = true;
     }
 
     X86SSEEnum Level = llvm::StringSwitch<X86SSEEnum>(Feature)
@@ -884,13 +909,13 @@ bool X86TargetInfo::handleTargetFeatures(std::vector<std::string> &Features,
 /// definitions for this particular subtarget.
 void X86TargetInfo::getTargetDefines(const LangOptions &Opts,
                                      MacroBuilder &Builder) const {
-  // Inline assembly supports X86 flag outputs. 
+  // Inline assembly supports X86 flag outputs.
   Builder.defineMacro("__GCC_ASM_FLAG_OUTPUTS__");
 
   std::string CodeModel = getTargetOpts().CodeModel;
   if (CodeModel == "default")
     CodeModel = "small";
-  Builder.defineMacro("__code_model_" + CodeModel + "_");
+  Builder.defineMacro("__code_model_" + CodeModel + "__");
 
   // Target identification.
   if (getTriple().getArch() == llvm::Triple::x86_64) {
@@ -905,6 +930,11 @@ void X86TargetInfo::getTargetDefines(const LangOptions &Opts,
   } else {
     DefineStd(Builder, "i386", Opts);
   }
+
+  Builder.defineMacro("__SEG_GS");
+  Builder.defineMacro("__SEG_FS");
+  Builder.defineMacro("__seg_gs", "__attribute__((address_space(256)))");
+  Builder.defineMacro("__seg_fs", "__attribute__((address_space(257)))");
 
   // Subtarget options.
   // FIXME: We are hard-coding the tune parameters based on the CPU, but they
@@ -980,9 +1010,11 @@ void X86TargetInfo::getTargetDefines(const LangOptions &Opts,
   case CK_SkylakeClient:
   case CK_SkylakeServer:
   case CK_Cascadelake:
+  case CK_Cooperlake:
   case CK_Cannonlake:
   case CK_IcelakeClient:
   case CK_IcelakeServer:
+  case CK_Tigerlake:
     // FIXME: Historically, we defined this legacy name, it would be nice to
     // remove it at some point. We've never exposed fine-grained names for
     // recent primary x86 CPUs, and we should keep it that way.
@@ -1170,7 +1202,8 @@ void X86TargetInfo::getTargetDefines(const LangOptions &Opts,
     Builder.defineMacro("__AVX512VBMI2__");
   if (HasAVX512IFMA)
     Builder.defineMacro("__AVX512IFMA__");
-
+  if (HasAVX512VP2INTERSECT)
+    Builder.defineMacro("__AVX512VP2INTERSECT__");
   if (HasSHA)
     Builder.defineMacro("__SHA__");
 
@@ -1192,8 +1225,6 @@ void X86TargetInfo::getTargetDefines(const LangOptions &Opts,
     Builder.defineMacro("__CLWB__");
   if (HasWBNOINVD)
     Builder.defineMacro("__WBNOINVD__");
-  if (HasMPX)
-    Builder.defineMacro("__MPX__");
   if (HasSHSTK)
     Builder.defineMacro("__SHSTK__");
   if (HasSGX)
@@ -1218,6 +1249,12 @@ void X86TargetInfo::getTargetDefines(const LangOptions &Opts,
     Builder.defineMacro("__PTWRITE__");
   if (HasINVPCID)
     Builder.defineMacro("__INVPCID__");
+  if (HasENQCMD)
+    Builder.defineMacro("__ENQCMD__");
+  if (HasSERIALIZE)
+    Builder.defineMacro("__SERIALIZE__");
+  if (HasTSXLDTRK)
+    Builder.defineMacro("__TSXLDTRK__");
 
   // Each case falls through to the previous one here.
   switch (SSELevel) {
@@ -1326,6 +1363,7 @@ bool X86TargetInfo::isValidFeatureName(StringRef Name) const {
       .Case("avx512vbmi", true)
       .Case("avx512vbmi2", true)
       .Case("avx512ifma", true)
+      .Case("avx512vp2intersect", true)
       .Case("bmi", true)
       .Case("bmi2", true)
       .Case("cldemote", true)
@@ -1333,6 +1371,7 @@ bool X86TargetInfo::isValidFeatureName(StringRef Name) const {
       .Case("clwb", true)
       .Case("clzero", true)
       .Case("cx16", true)
+      .Case("enqcmd", true)
       .Case("f16c", true)
       .Case("fma", true)
       .Case("fma4", true)
@@ -1346,7 +1385,6 @@ bool X86TargetInfo::isValidFeatureName(StringRef Name) const {
       .Case("movbe", true)
       .Case("movdiri", true)
       .Case("movdir64b", true)
-      .Case("mpx", true)
       .Case("mwaitx", true)
       .Case("pclmul", true)
       .Case("pconfig", true)
@@ -1360,6 +1398,7 @@ bool X86TargetInfo::isValidFeatureName(StringRef Name) const {
       .Case("rdseed", true)
       .Case("rtm", true)
       .Case("sahf", true)
+      .Case("serialize", true)
       .Case("sgx", true)
       .Case("sha", true)
       .Case("shstk", true)
@@ -1372,6 +1411,7 @@ bool X86TargetInfo::isValidFeatureName(StringRef Name) const {
       .Case("sse4.2", true)
       .Case("sse4a", true)
       .Case("tbm", true)
+      .Case("tsxldtrk", true)
       .Case("vaes", true)
       .Case("vpclmulqdq", true)
       .Case("wbnoinvd", true)
@@ -1405,6 +1445,7 @@ bool X86TargetInfo::hasFeature(StringRef Feature) const {
       .Case("avx512vbmi", HasAVX512VBMI)
       .Case("avx512vbmi2", HasAVX512VBMI2)
       .Case("avx512ifma", HasAVX512IFMA)
+      .Case("avx512vp2intersect", HasAVX512VP2INTERSECT)
       .Case("bmi", HasBMI)
       .Case("bmi2", HasBMI2)
       .Case("cldemote", HasCLDEMOTE)
@@ -1413,6 +1454,7 @@ bool X86TargetInfo::hasFeature(StringRef Feature) const {
       .Case("clzero", HasCLZERO)
       .Case("cx8", HasCX8)
       .Case("cx16", HasCX16)
+      .Case("enqcmd", HasENQCMD)
       .Case("f16c", HasF16C)
       .Case("fma", HasFMA)
       .Case("fma4", XOPLevel >= FMA4)
@@ -1428,7 +1470,6 @@ bool X86TargetInfo::hasFeature(StringRef Feature) const {
       .Case("movbe", HasMOVBE)
       .Case("movdiri", HasMOVDIRI)
       .Case("movdir64b", HasMOVDIR64B)
-      .Case("mpx", HasMPX)
       .Case("mwaitx", HasMWAITX)
       .Case("pclmul", HasPCLMUL)
       .Case("pconfig", HasPCONFIG)
@@ -1443,6 +1484,7 @@ bool X86TargetInfo::hasFeature(StringRef Feature) const {
       .Case("retpoline-external-thunk", HasRetpolineExternalThunk)
       .Case("rtm", HasRTM)
       .Case("sahf", HasLAHFSAHF)
+      .Case("serialize", HasSERIALIZE)
       .Case("sgx", HasSGX)
       .Case("sha", HasSHA)
       .Case("shstk", HasSHSTK)
@@ -1454,6 +1496,7 @@ bool X86TargetInfo::hasFeature(StringRef Feature) const {
       .Case("sse4.2", SSELevel >= SSE42)
       .Case("sse4a", XOPLevel >= SSE4A)
       .Case("tbm", HasTBM)
+      .Case("tsxldtrk", HasTSXLDTRK)
       .Case("vaes", HasVAES)
       .Case("vpclmulqdq", HasVPCLMULQDQ)
       .Case("wbnoinvd", HasWBNOINVD)
@@ -1648,8 +1691,7 @@ bool X86TargetInfo::validateAsmConstraint(
     switch (*Name) {
     default:
       return false;
-    case 'z':
-    case '0': // First SSE register.
+    case 'z': // First SSE register.
     case '2':
     case 't': // Any SSE register, when SSE2 is enabled.
     case 'i': // Any SSE register, when SSE2 and inter-unit moves enabled.
@@ -1700,21 +1742,138 @@ bool X86TargetInfo::validateAsmConstraint(
   }
 }
 
-bool X86TargetInfo::validateOutputSize(StringRef Constraint,
+// Below is based on the following information:
+// +------------------------------------+-------------------------+--------------------------------------------------------------------------------------------------------------------------------------------------------------+
+// |           Processor Name           | Cache Line Size (Bytes) |                                                                            Source                                                                            |
+// +------------------------------------+-------------------------+--------------------------------------------------------------------------------------------------------------------------------------------------------------+
+// | i386                               |                      64 | https://www.intel.com/content/dam/www/public/us/en/documents/manuals/64-ia-32-architectures-optimization-manual.pdf                                          |
+// | i486                               |                      16 | "four doublewords" (doubleword = 32 bits, 4 bits * 32 bits = 16 bytes) https://en.wikichip.org/w/images/d/d3/i486_MICROPROCESSOR_HARDWARE_REFERENCE_MANUAL_%281990%29.pdf and http://citeseerx.ist.psu.edu/viewdoc/download?doi=10.1.1.126.4216&rep=rep1&type=pdf (page 29) |
+// | i586/Pentium MMX                   |                      32 | https://www.7-cpu.com/cpu/P-MMX.html                                                                                                                         |
+// | i686/Pentium                       |                      32 | https://www.7-cpu.com/cpu/P6.html                                                                                                                            |
+// | Netburst/Pentium4                  |                      64 | https://www.7-cpu.com/cpu/P4-180.html                                                                                                                        |
+// | Atom                               |                      64 | https://www.7-cpu.com/cpu/Atom.html                                                                                                                          |
+// | Westmere                           |                      64 | https://en.wikichip.org/wiki/intel/microarchitectures/sandy_bridge_(client) "Cache Architecture"                                                             |
+// | Sandy Bridge                       |                      64 | https://en.wikipedia.org/wiki/Sandy_Bridge and https://www.7-cpu.com/cpu/SandyBridge.html                                                                    |
+// | Ivy Bridge                         |                      64 | https://blog.stuffedcow.net/2013/01/ivb-cache-replacement/ and https://www.7-cpu.com/cpu/IvyBridge.html                                                      |
+// | Haswell                            |                      64 | https://www.7-cpu.com/cpu/Haswell.html                                                                                                                       |
+// | Boadwell                           |                      64 | https://www.7-cpu.com/cpu/Broadwell.html                                                                                                                     |
+// | Skylake (including skylake-avx512) |                      64 | https://www.nas.nasa.gov/hecc/support/kb/skylake-processors_550.html "Cache Hierarchy"                                                                       |
+// | Cascade Lake                       |                      64 | https://www.nas.nasa.gov/hecc/support/kb/cascade-lake-processors_579.html "Cache Hierarchy"                                                                  |
+// | Skylake                            |                      64 | https://en.wikichip.org/wiki/intel/microarchitectures/kaby_lake "Memory Hierarchy"                                                                           |
+// | Ice Lake                           |                      64 | https://www.7-cpu.com/cpu/Ice_Lake.html                                                                                                                      |
+// | Knights Landing                    |                      64 | https://software.intel.com/en-us/articles/intel-xeon-phi-processor-7200-family-memory-management-optimizations "The Intel® Xeon Phi™ Processor Architecture" |
+// | Knights Mill                       |                      64 | https://software.intel.com/sites/default/files/managed/9e/bc/64-ia-32-architectures-optimization-manual.pdf?countrylabel=Colombia "2.5.5.2 L1 DCache "       |
+// +------------------------------------+-------------------------+--------------------------------------------------------------------------------------------------------------------------------------------------------------+
+Optional<unsigned> X86TargetInfo::getCPUCacheLineSize() const {
+  switch (CPU) {
+    // i386
+    case CK_i386:
+    // i486
+    case CK_i486:
+    case CK_WinChipC6:
+    case CK_WinChip2:
+    case CK_C3:
+    // Lakemont
+    case CK_Lakemont:
+      return 16;
+
+    // i586
+    case CK_i586:
+    case CK_Pentium:
+    case CK_PentiumMMX:
+    // i686
+    case CK_PentiumPro:
+    case CK_i686:
+    case CK_Pentium2:
+    case CK_Pentium3:
+    case CK_PentiumM:
+    case CK_C3_2:
+    // K6
+    case CK_K6:
+    case CK_K6_2:
+    case CK_K6_3:
+    // Geode
+    case CK_Geode:
+      return 32;
+
+    // Netburst
+    case CK_Pentium4:
+    case CK_Prescott:
+    case CK_Nocona:
+    // Atom
+    case CK_Bonnell:
+    case CK_Silvermont:
+    case CK_Goldmont:
+    case CK_GoldmontPlus:
+    case CK_Tremont:
+
+    case CK_Westmere:
+    case CK_SandyBridge:
+    case CK_IvyBridge:
+    case CK_Haswell:
+    case CK_Broadwell:
+    case CK_SkylakeClient:
+    case CK_SkylakeServer:
+    case CK_Cascadelake:
+    case CK_Nehalem:
+    case CK_Cooperlake:
+    case CK_Cannonlake:
+    case CK_Tigerlake:
+    case CK_IcelakeClient:
+    case CK_IcelakeServer:
+    case CK_KNL:
+    case CK_KNM:
+    // K7
+    case CK_Athlon:
+    case CK_AthlonXP:
+    // K8
+    case CK_K8:
+    case CK_K8SSE3:
+    case CK_AMDFAM10:
+    // Bobcat
+    case CK_BTVER1:
+    case CK_BTVER2:
+    // Bulldozer
+    case CK_BDVER1:
+    case CK_BDVER2:
+    case CK_BDVER3:
+    case CK_BDVER4:
+    // Zen
+    case CK_ZNVER1:
+    case CK_ZNVER2:
+    // Deprecated
+    case CK_x86_64:
+    case CK_Yonah:
+    case CK_Penryn:
+    case CK_Core2:
+      return 64;
+
+    // The following currently have unknown cache line sizes (but they are probably all 64):
+    // Core
+    case CK_Generic:
+      return None;
+  }
+  llvm_unreachable("Unknown CPU kind");
+}
+
+bool X86TargetInfo::validateOutputSize(const llvm::StringMap<bool> &FeatureMap,
+                                       StringRef Constraint,
                                        unsigned Size) const {
   // Strip off constraint modifiers.
   while (Constraint[0] == '=' || Constraint[0] == '+' || Constraint[0] == '&')
     Constraint = Constraint.substr(1);
 
-  return validateOperandSize(Constraint, Size);
+  return validateOperandSize(FeatureMap, Constraint, Size);
 }
 
-bool X86TargetInfo::validateInputSize(StringRef Constraint,
+bool X86TargetInfo::validateInputSize(const llvm::StringMap<bool> &FeatureMap,
+                                      StringRef Constraint,
                                       unsigned Size) const {
-  return validateOperandSize(Constraint, Size);
+  return validateOperandSize(FeatureMap, Constraint, Size);
 }
 
-bool X86TargetInfo::validateOperandSize(StringRef Constraint,
+bool X86TargetInfo::validateOperandSize(const llvm::StringMap<bool> &FeatureMap,
+                                        StringRef Constraint,
                                         unsigned Size) const {
   switch (Constraint[0]) {
   default:
@@ -1737,9 +1896,14 @@ bool X86TargetInfo::validateOperandSize(StringRef Constraint,
     case 'k':
       return Size <= 64;
     case 'z':
-    case '0':
-      // XMM0
-      if (SSELevel >= SSE1)
+      // XMM0/YMM/ZMM0
+      if (FeatureMap.lookup("avx512f"))
+        // ZMM0 can be used if target supports AVX512F.
+        return Size <= 512U;
+      else if (FeatureMap.lookup("avx"))
+        // YMM0 can be used if target supports AVX.
+        return Size <= 256U;
+      else if (FeatureMap.lookup("sse"))
         return Size <= 128U;
       return false;
     case 'i':
@@ -1750,13 +1914,13 @@ bool X86TargetInfo::validateOperandSize(StringRef Constraint,
         return false;
       break;
     }
-    LLVM_FALLTHROUGH;
+    break;
   case 'v':
   case 'x':
-    if (SSELevel >= AVX512F)
+    if (FeatureMap.lookup("avx512f"))
       // 512-bit zmm registers can be used if target supports AVX512F.
       return Size <= 512U;
-    else if (SSELevel >= AVX)
+    else if (FeatureMap.lookup("avx"))
       // 256-bit ymm registers can be used if target supports AVX.
       return Size <= 256U;
     return Size <= 128U;
@@ -1805,7 +1969,6 @@ std::string X86TargetInfo::convertConstraint(const char *&Constraint) const {
     case 'i':
     case 't':
     case 'z':
-    case '0':
     case '2':
       // "^" hints llvm that this is a 2 letter constraint.
       // "Constraint++" is used to promote the string iterator

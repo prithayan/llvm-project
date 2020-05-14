@@ -223,6 +223,9 @@ StringRef llvm::object::getELFSectionTypeName(uint32_t Machine, unsigned Type) {
       STRINGIFY_ENUM_CASE(ELF, SHT_MIPS_ABIFLAGS);
     }
     break;
+  case ELF::EM_RISCV:
+    switch (Type) { STRINGIFY_ENUM_CASE(ELF, SHT_RISCV_ATTRIBUTES); }
+    break;
   default:
     break;
   }
@@ -253,6 +256,10 @@ StringRef llvm::object::getELFSectionTypeName(uint32_t Machine, unsigned Type) {
     STRINGIFY_ENUM_CASE(ELF, SHT_LLVM_LINKER_OPTIONS);
     STRINGIFY_ENUM_CASE(ELF, SHT_LLVM_CALL_GRAPH_PROFILE);
     STRINGIFY_ENUM_CASE(ELF, SHT_LLVM_ADDRSIG);
+    STRINGIFY_ENUM_CASE(ELF, SHT_LLVM_DEPENDENT_LIBRARIES);
+    STRINGIFY_ENUM_CASE(ELF, SHT_LLVM_SYMPART);
+    STRINGIFY_ENUM_CASE(ELF, SHT_LLVM_PART_EHDR);
+    STRINGIFY_ENUM_CASE(ELF, SHT_LLVM_PART_PHDR);
     STRINGIFY_ENUM_CASE(ELF, SHT_GNU_ATTRIBUTES);
     STRINGIFY_ENUM_CASE(ELF, SHT_GNU_HASH);
     STRINGIFY_ENUM_CASE(ELF, SHT_GNU_verdef);
@@ -432,6 +439,14 @@ std::string ELFFile<ELFT>::getDynamicTagAsString(unsigned Arch,
 
 #define DYNAMIC_TAG(n, v)
   switch (Arch) {
+  case ELF::EM_AARCH64:
+    switch (Type) {
+#define AARCH64_DYNAMIC_TAG(name, value) DYNAMIC_STRINGIFY_ENUM(name, value)
+#include "llvm/BinaryFormat/DynamicTags.def"
+#undef AARCH64_DYNAMIC_TAG
+    }
+    break;
+
   case ELF::EM_HEXAGON:
     switch (Type) {
 #define HEXAGON_DYNAMIC_TAG(name, value) DYNAMIC_STRINGIFY_ENUM(name, value)
@@ -459,14 +474,16 @@ std::string ELFFile<ELFT>::getDynamicTagAsString(unsigned Arch,
 #undef DYNAMIC_TAG
   switch (Type) {
 // Now handle all dynamic tags except the architecture specific ones
+#define AARCH64_DYNAMIC_TAG(name, value)
 #define MIPS_DYNAMIC_TAG(name, value)
 #define HEXAGON_DYNAMIC_TAG(name, value)
 #define PPC64_DYNAMIC_TAG(name, value)
 // Also ignore marker tags such as DT_HIOS (maps to DT_VERNEEDNUM), etc.
 #define DYNAMIC_TAG_MARKER(name, value)
-#define DYNAMIC_TAG(name, value) DYNAMIC_STRINGIFY_ENUM(name, value)
+#define DYNAMIC_TAG(name, value) case value: return #name;
 #include "llvm/BinaryFormat/DynamicTags.def"
 #undef DYNAMIC_TAG
+#undef AARCH64_DYNAMIC_TAG
 #undef MIPS_DYNAMIC_TAG
 #undef HEXAGON_DYNAMIC_TAG
 #undef PPC64_DYNAMIC_TAG
@@ -485,7 +502,6 @@ std::string ELFFile<ELFT>::getDynamicTagAsString(uint64_t Type) const {
 template <class ELFT>
 Expected<typename ELFT::DynRange> ELFFile<ELFT>::dynamicEntries() const {
   ArrayRef<Elf_Dyn> Dyn;
-  size_t DynSecSize = 0;
 
   auto ProgramHeadersOrError = program_headers();
   if (!ProgramHeadersOrError)
@@ -496,7 +512,6 @@ Expected<typename ELFT::DynRange> ELFFile<ELFT>::dynamicEntries() const {
       Dyn = makeArrayRef(
           reinterpret_cast<const Elf_Dyn *>(base() + Phdr.p_offset),
           Phdr.p_filesz / sizeof(Elf_Dyn));
-      DynSecSize = Phdr.p_filesz;
       break;
     }
   }
@@ -515,7 +530,6 @@ Expected<typename ELFT::DynRange> ELFFile<ELFT>::dynamicEntries() const {
         if (!DynOrError)
           return DynOrError.takeError();
         Dyn = *DynOrError;
-        DynSecSize = Sec.sh_size;
         break;
       }
     }
@@ -525,12 +539,11 @@ Expected<typename ELFT::DynRange> ELFFile<ELFT>::dynamicEntries() const {
   }
 
   if (Dyn.empty())
+    // TODO: this error is untested.
     return createError("invalid empty dynamic section");
 
-  if (DynSecSize % sizeof(Elf_Dyn) != 0)
-    return createError("malformed dynamic section");
-
   if (Dyn.back().d_tag != ELF::DT_NULL)
+    // TODO: this error is untested.
     return createError("dynamic sections must be DT_NULL terminated");
 
   return Dyn;
@@ -555,13 +568,26 @@ Expected<const uint8_t *> ELFFile<ELFT>::toMappedAddr(uint64_t VAddr) const {
                        });
 
   if (I == LoadSegments.begin())
-    return createError("Virtual address is not in any segment");
+    return createError("virtual address is not in any segment: 0x" +
+                       Twine::utohexstr(VAddr));
   --I;
   const Elf_Phdr &Phdr = **I;
   uint64_t Delta = VAddr - Phdr.p_vaddr;
   if (Delta >= Phdr.p_filesz)
-    return createError("Virtual address is not in any segment");
-  return base() + Phdr.p_offset + Delta;
+    return createError("virtual address is not in any segment: 0x" +
+                       Twine::utohexstr(VAddr));
+
+  uint64_t Offset = Phdr.p_offset + Delta;
+  if (Offset >= getBufSize())
+    return createError("can't map virtual address 0x" +
+                       Twine::utohexstr(VAddr) + " to the segment with index " +
+                       Twine(&Phdr - (*ProgramHeadersOrError).data() + 1) +
+                       ": the segment ends at 0x" +
+                       Twine::utohexstr(Phdr.p_offset + Phdr.p_filesz) +
+                       ", which is greater than the file size (0x" +
+                       Twine::utohexstr(getBufSize()) + ")");
+
+  return base() + Offset;
 }
 
 template class llvm::object::ELFFile<ELF32LE>;

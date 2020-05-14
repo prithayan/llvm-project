@@ -1,4 +1,4 @@
-//===-- SBListener.cpp ------------------------------------------*- C++ -*-===//
+//===-- SBListener.cpp ----------------------------------------------------===//
 //
 // Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
 // See https://llvm.org/LICENSE.txt for license information.
@@ -20,7 +20,7 @@
 using namespace lldb;
 using namespace lldb_private;
 
-SBListener::SBListener() : m_opaque_sp(), m_unused_ptr(NULL) {
+SBListener::SBListener() : m_opaque_sp(), m_unused_ptr(nullptr) {
   LLDB_RECORD_CONSTRUCTOR_NO_ARGS(SBListener);
 }
 
@@ -48,7 +48,7 @@ const lldb::SBListener &SBListener::operator=(const lldb::SBListener &rhs) {
 SBListener::SBListener(const lldb::ListenerSP &listener_sp)
     : m_opaque_sp(listener_sp), m_unused_ptr(nullptr) {}
 
-SBListener::~SBListener() {}
+SBListener::~SBListener() = default;
 
 bool SBListener::IsValid() const {
   LLDB_RECORD_METHOD_CONST_NO_ARGS(bool, SBListener, IsValid);
@@ -160,7 +160,7 @@ bool SBListener::WaitForEvent(uint32_t timeout_secs, SBEvent &event) {
   }
 
   if (!success)
-    event.reset(NULL);
+    event.reset(nullptr);
   return success;
 }
 
@@ -182,7 +182,7 @@ bool SBListener::WaitForEventForBroadcaster(uint32_t num_seconds,
       return true;
     }
   }
-  event.reset(NULL);
+  event.reset(nullptr);
   return false;
 }
 
@@ -205,7 +205,7 @@ bool SBListener::WaitForEventForBroadcasterWithType(
       return true;
     }
   }
-  event.reset(NULL);
+  event.reset(nullptr);
   return false;
 }
 
@@ -217,7 +217,7 @@ bool SBListener::PeekAtNextEvent(SBEvent &event) {
     event.reset(m_opaque_sp->PeekAtNextEvent());
     return event.IsValid();
   }
-  event.reset(NULL);
+  event.reset(nullptr);
   return false;
 }
 
@@ -231,7 +231,7 @@ bool SBListener::PeekAtNextEventForBroadcaster(const SBBroadcaster &broadcaster,
     event.reset(m_opaque_sp->PeekAtNextEventForBroadcaster(broadcaster.get()));
     return event.IsValid();
   }
-  event.reset(NULL);
+  event.reset(nullptr);
   return false;
 }
 
@@ -247,7 +247,7 @@ bool SBListener::PeekAtNextEventForBroadcasterWithType(
         broadcaster.get(), event_type_mask));
     return event.IsValid();
   }
-  event.reset(NULL);
+  event.reset(nullptr);
   return false;
 }
 
@@ -261,7 +261,7 @@ bool SBListener::GetNextEvent(SBEvent &event) {
       return true;
     }
   }
-  event.reset(NULL);
+  event.reset(nullptr);
   return false;
 }
 
@@ -279,7 +279,7 @@ bool SBListener::GetNextEventForBroadcaster(const SBBroadcaster &broadcaster,
       return true;
     }
   }
-  event.reset(NULL);
+  event.reset(nullptr);
   return false;
 }
 
@@ -299,7 +299,7 @@ bool SBListener::GetNextEventForBroadcasterWithType(
       return true;
     }
   }
-  event.reset(NULL);
+  event.reset(nullptr);
   return false;
 }
 

@@ -343,7 +343,9 @@ struct LoadModifier: public Modifier {
   void Act() override {
     // Try to use predefined pointers. If non-exist, use undef pointer value;
     Value *Ptr = getRandomPointerValue();
-    Value *V = new LoadInst(Ptr, "L", BB->getTerminator());
+    PointerType *Tp = cast<PointerType>(Ptr->getType());
+    Value *V = new LoadInst(Tp->getElementType(), Ptr, "L",
+                            BB->getTerminator());
     PT->push_back(V);
   }
 };
@@ -735,7 +737,7 @@ int main(int argc, char **argv) {
   cl::ParseCommandLineOptions(argc, argv, "llvm codegen stress-tester\n");
   llvm_shutdown_obj Y;
 
-  auto M = llvm::make_unique<Module>("/tmp/autogen.bc", Context);
+  auto M = std::make_unique<Module>("/tmp/autogen.bc", Context);
   Function *F = GenEmptyFunction(M.get());
 
   // Pick an initial seed value
@@ -752,7 +754,7 @@ int main(int argc, char **argv) {
     OutputFilename = "-";
 
   std::error_code EC;
-  Out.reset(new ToolOutputFile(OutputFilename, EC, sys::fs::F_None));
+  Out.reset(new ToolOutputFile(OutputFilename, EC, sys::fs::OF_None));
   if (EC) {
     errs() << EC.message() << '\n';
     return 1;

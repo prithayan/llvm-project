@@ -1,4 +1,4 @@
-//===-- SBSection.cpp -------------------------------------------*- C++ -*-===//
+//===-- SBSection.cpp -----------------------------------------------------===//
 //
 // Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
 // See https://llvm.org/LICENSE.txt for license information.
@@ -44,7 +44,7 @@ const SBSection &SBSection::operator=(const SBSection &rhs) {
   return LLDB_RECORD_RESULT(*this);
 }
 
-SBSection::~SBSection() {}
+SBSection::~SBSection() = default;
 
 bool SBSection::IsValid() const {
   LLDB_RECORD_METHOD_CONST_NO_ARGS(bool, SBSection, IsValid);
@@ -54,7 +54,7 @@ SBSection::operator bool() const {
   LLDB_RECORD_METHOD_CONST_NO_ARGS(bool, SBSection, operator bool);
 
   SectionSP section_sp(GetSP());
-  return section_sp && section_sp->GetModule().get() != NULL;
+  return section_sp && section_sp->GetModule().get() != nullptr;
 }
 
 const char *SBSection::GetName() {
@@ -63,7 +63,7 @@ const char *SBSection::GetName() {
   SectionSP section_sp(GetSP());
   if (section_sp)
     return section_sp->GetName().GetCString();
-  return NULL;
+  return nullptr;
 }
 
 lldb::SBSection SBSection::GetParent() {
@@ -281,7 +281,7 @@ bool SBSection::GetDescription(SBStream &description) {
     const addr_t file_addr = section_sp->GetFileAddress();
     strm.Printf("[0x%16.16" PRIx64 "-0x%16.16" PRIx64 ") ", file_addr,
                 file_addr + section_sp->GetByteSize());
-    section_sp->DumpName(&strm);
+    section_sp->DumpName(strm.AsRawOstream());
   } else {
     strm.PutCString("No value");
   }

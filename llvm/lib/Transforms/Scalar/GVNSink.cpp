@@ -47,7 +47,6 @@
 #include "llvm/ADT/Statistic.h"
 #include "llvm/ADT/StringExtras.h"
 #include "llvm/Analysis/GlobalsModRef.h"
-#include "llvm/Transforms/Utils/Local.h"
 #include "llvm/IR/BasicBlock.h"
 #include "llvm/IR/CFG.h"
 #include "llvm/IR/Constants.h"
@@ -59,6 +58,7 @@
 #include "llvm/IR/Type.h"
 #include "llvm/IR/Use.h"
 #include "llvm/IR/Value.h"
+#include "llvm/InitializePasses.h"
 #include "llvm/Pass.h"
 #include "llvm/Support/Allocator.h"
 #include "llvm/Support/ArrayRecycler.h"
@@ -71,6 +71,7 @@
 #include "llvm/Transforms/Scalar/GVN.h"
 #include "llvm/Transforms/Scalar/GVNExpression.h"
 #include "llvm/Transforms/Utils/BasicBlockUtils.h"
+#include "llvm/Transforms/Utils/Local.h"
 #include <algorithm>
 #include <cassert>
 #include <cstddef>
@@ -349,6 +350,7 @@ using ModelledPHISet = DenseSet<ModelledPHI, DenseMapInfo<ModelledPHI>>;
 class InstructionUseExpr : public GVNExpression::BasicExpression {
   unsigned MemoryUseOrder = -1;
   bool Volatile = false;
+  ArrayRef<int> ShuffleMask;
 
 public:
   InstructionUseExpr(Instruction *I, ArrayRecycler<Value *> &R,
@@ -357,6 +359,9 @@ public:
     allocateOperands(R, A);
     setOpcode(I->getOpcode());
     setType(I->getType());
+
+    if (ShuffleVectorInst *SVI = dyn_cast<ShuffleVectorInst>(I))
+      ShuffleMask = SVI->getShuffleMask().copy(A);
 
     for (auto &U : I->uses())
       op_push_back(U.getUser());
@@ -368,12 +373,12 @@ public:
 
   hash_code getHashValue() const override {
     return hash_combine(GVNExpression::BasicExpression::getHashValue(),
-                        MemoryUseOrder, Volatile);
+                        MemoryUseOrder, Volatile, ShuffleMask);
   }
 
   template <typename Function> hash_code getHashValue(Function MapFn) {
-    hash_code H =
-        hash_combine(getOpcode(), getType(), MemoryUseOrder, Volatile);
+    hash_code H = hash_combine(getOpcode(), getType(), MemoryUseOrder, Volatile,
+                               ShuffleMask);
     for (auto *V : operands())
       H = hash_combine(H, MapFn(V));
     return H;
@@ -441,6 +446,7 @@ public:
       break;
     case Instruction::Call:
     case Instruction::Invoke:
+    case Instruction::FNeg:
     case Instruction::Add:
     case Instruction::FAdd:
     case Instruction::Sub:
@@ -473,6 +479,7 @@ public:
     case Instruction::PtrToInt:
     case Instruction::IntToPtr:
     case Instruction::BitCast:
+    case Instruction::AddrSpaceCast:
     case Instruction::Select:
     case Instruction::ExtractElement:
     case Instruction::InsertElement:
@@ -713,6 +720,15 @@ Optional<SinkingInstructionCandidate> GVNSink::analyzeInstructionForSinking(
   // FIXME: If any of these fail, we should partition up the candidates to
   // try and continue making progress.
   Instruction *I0 = NewInsts[0];
+
+  // If all instructions that are going to participate don't have the same
+  // number of operands, we can't do any useful PHI analysis for all operands.
+  auto hasDifferentNumOperands = [&I0](Instruction *I) {
+    return I->getNumOperands() != I0->getNumOperands();
+  };
+  if (any_of(NewInsts, hasDifferentNumOperands))
+    return None;
+
   for (unsigned OpNum = 0, E = I0->getNumOperands(); OpNum != E; ++OpNum) {
     ModelledPHI PHI(NewInsts, OpNum, ActivePreds);
     if (PHI.areAllIncomingValuesSame())

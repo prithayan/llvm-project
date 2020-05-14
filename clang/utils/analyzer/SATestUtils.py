@@ -1,9 +1,10 @@
 import os
-from subprocess import check_output, check_call
+from subprocess import check_call
 import sys
 
 
 Verbose = 1
+
 
 def which(command, paths=None):
     """which(command, [paths]) - Look up the given command in the paths string
@@ -45,18 +46,6 @@ def hasNoExtension(FileName):
 def isValidSingleInputFile(FileName):
     (Root, Ext) = os.path.splitext(FileName)
     return Ext in (".i", ".ii", ".c", ".cpp", ".m", "")
-
-
-def getSDKPath(SDKName):
-    """
-    Get the path to the SDK for the given SDK name. Returns None if
-    the path cannot be determined.
-    """
-    if which("xcrun") is None:
-        return None
-
-    Cmd = "xcrun --sdk " + SDKName + " --show-sdk-path"
-    return check_output(Cmd, shell=True).rstrip()
 
 
 def runScript(ScriptPath, PBuildLogFile, Cwd, Stdout=sys.stdout,

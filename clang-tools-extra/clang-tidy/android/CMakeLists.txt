@@ -1,4 +1,7 @@
-set(LLVM_LINK_COMPONENTS support)
+set(LLVM_LINK_COMPONENTS
+  support
+  FrontendOpenMP
+  )
 
 add_clang_library(clangTidyAndroidModule
   AndroidTidyModule.cpp
@@ -14,6 +17,8 @@ add_clang_library(clangTidyAndroidModule
   CloexecInotifyInitCheck.cpp
   CloexecMemfdCreateCheck.cpp
   CloexecOpenCheck.cpp
+  CloexecPipeCheck.cpp
+  CloexecPipe2Check.cpp
   CloexecSocketCheck.cpp
   ComparisonInTempFailureRetryCheck.cpp
 

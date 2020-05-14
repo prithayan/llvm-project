@@ -1,4 +1,4 @@
-//===-- EmulateInstructionMIPS.cpp -------------------------------*- C++-*-===//
+//===-- EmulateInstructionMIPS.cpp ----------------------------------------===//
 //
 // Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
 // See https://llvm.org/LICENSE.txt for license information.
@@ -28,6 +28,7 @@
 #include "llvm/MC/MCInstrInfo.h"
 #include "llvm/MC/MCRegisterInfo.h"
 #include "llvm/MC/MCSubtargetInfo.h"
+#include "llvm/MC/MCTargetOptions.h"
 #include "llvm/Support/TargetRegistry.h"
 #include "llvm/Support/TargetSelect.h"
 
@@ -38,6 +39,8 @@
 
 using namespace lldb;
 using namespace lldb_private;
+
+LLDB_PLUGIN_DEFINE_ADV(EmulateInstructionMIPS, InstructionMIPS)
 
 #define UInt(x) ((uint64_t)x)
 #define integer int64_t
@@ -149,7 +152,9 @@ EmulateInstructionMIPS::EmulateInstructionMIPS(
   m_insn_info.reset(target->createMCInstrInfo());
   assert(m_insn_info.get());
 
-  m_asm_info.reset(target->createMCAsmInfo(*m_reg_info, triple.getTriple()));
+  llvm::MCTargetOptions MCOptions;
+  m_asm_info.reset(
+      target->createMCAsmInfo(*m_reg_info, triple.getTriple(), MCOptions));
   m_subtype_info.reset(
       target->createMCSubtargetInfo(triple.getTriple(), cpu, features));
   assert(m_asm_info.get() && m_subtype_info.get());
@@ -213,7 +218,7 @@ EmulateInstructionMIPS::CreateInstance(const ArchSpec &arch,
     }
   }
 
-  return NULL;
+  return nullptr;
 }
 
 bool EmulateInstructionMIPS::SetTargetTriple(const ArchSpec &arch) {
@@ -966,7 +971,7 @@ EmulateInstructionMIPS::GetOpcodeForInstruction(const char *op_name) {
       return &g_opcodes[i];
   }
 
-  return NULL;
+  return nullptr;
 }
 
 uint32_t
@@ -978,13 +983,11 @@ EmulateInstructionMIPS::GetSizeOfInstruction(lldb_private::DataExtractor &data,
   llvm::ArrayRef<uint8_t> raw_insn(data.GetDataStart(), data.GetByteSize());
 
   if (m_use_alt_disaasm)
-    decode_status =
-        m_alt_disasm->getInstruction(mc_insn, next_inst_size, raw_insn,
-                                     inst_addr, llvm::nulls(), llvm::nulls());
+    decode_status = m_alt_disasm->getInstruction(
+        mc_insn, next_inst_size, raw_insn, inst_addr, llvm::nulls());
   else
-    decode_status =
-        m_disasm->getInstruction(mc_insn, next_inst_size, raw_insn, inst_addr,
-                                 llvm::nulls(), llvm::nulls());
+    decode_status = m_disasm->getInstruction(mc_insn, next_inst_size, raw_insn,
+                                             inst_addr, llvm::nulls());
 
   if (decode_status != llvm::MCDisassembler::Success)
     return false;
@@ -1067,11 +1070,11 @@ bool EmulateInstructionMIPS::EvaluateInstruction(uint32_t evaluate_options) {
     llvm::MCDisassembler::DecodeStatus decode_status;
     llvm::ArrayRef<uint8_t> raw_insn(data.GetDataStart(), data.GetByteSize());
     if (m_use_alt_disaasm)
-      decode_status = m_alt_disasm->getInstruction(
-          mc_insn, insn_size, raw_insn, m_addr, llvm::nulls(), llvm::nulls());
+      decode_status = m_alt_disasm->getInstruction(mc_insn, insn_size, raw_insn,
+                                                   m_addr, llvm::nulls());
     else
-      decode_status = m_disasm->getInstruction(
-          mc_insn, insn_size, raw_insn, m_addr, llvm::nulls(), llvm::nulls());
+      decode_status = m_disasm->getInstruction(mc_insn, insn_size, raw_insn,
+                                               m_addr, llvm::nulls());
 
     if (decode_status != llvm::MCDisassembler::Success)
       return false;
@@ -1083,7 +1086,7 @@ bool EmulateInstructionMIPS::EvaluateInstruction(uint32_t evaluate_options) {
   */
   const char *op_name = m_insn_info->getName(mc_insn.getOpcode()).data();
 
-  if (op_name == NULL)
+  if (op_name == nullptr)
     return false;
 
   /*
@@ -1092,7 +1095,7 @@ bool EmulateInstructionMIPS::EvaluateInstruction(uint32_t evaluate_options) {
   */
   MipsOpcode *opcode_data = GetOpcodeForInstruction(op_name);
 
-  if (opcode_data == NULL)
+  if (opcode_data == nullptr)
     return false;
 
   uint64_t old_pc = 0, new_pc = 0;
@@ -1150,6 +1153,7 @@ bool EmulateInstructionMIPS::CreateFunctionEntryUnwind(
   unwind_plan.SetSourceName("EmulateInstructionMIPS");
   unwind_plan.SetSourcedFromCompiler(eLazyBoolNo);
   unwind_plan.SetUnwindPlanValidAtAllInstructions(eLazyBoolYes);
+  unwind_plan.SetUnwindPlanForSignalTrap(eLazyBoolNo);
   unwind_plan.SetReturnAddressRegister(dwarf_ra_mips);
 
   return true;
@@ -2875,7 +2879,7 @@ bool EmulateInstructionMIPS::Emulate_MSA_Branch_DF(llvm::MCInst &insn,
   bool success = false, branch_hit = true;
   int32_t target = 0;
   RegisterValue reg_value;
-  const uint8_t *ptr = NULL;
+  const uint8_t *ptr = nullptr;
 
   uint32_t wt = m_reg_info->getEncodingValue(insn.getOperand(0).getReg());
   int32_t offset = insn.getOperand(1).getImm();

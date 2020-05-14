@@ -1,4 +1,4 @@
-//===-- HostProcessPosix.cpp ------------------------------------*- C++ -*-===//
+//===-- HostProcessPosix.cpp ----------------------------------------------===//
 //
 // Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
 // See https://llvm.org/LICENSE.txt for license information.
@@ -87,7 +87,7 @@ bool HostProcessPosix::IsRunning() const {
   return error.Success();
 }
 
-HostThread HostProcessPosix::StartMonitoring(
+llvm::Expected<HostThread> HostProcessPosix::StartMonitoring(
     const Host::MonitorChildProcessCallback &callback, bool monitor_signals) {
   return Host::StartMonitoringChildProcess(callback, m_process,
                                            monitor_signals);

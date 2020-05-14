@@ -23,7 +23,6 @@
 #include "llvm/Analysis/GlobalsModRef.h"
 #include "llvm/Analysis/OptimizationRemarkEmitter.h"
 #include "llvm/IR/BasicBlock.h"
-#include "llvm/IR/CallSite.h"
 #include "llvm/IR/DerivedTypes.h"
 #include "llvm/IR/Dominators.h"
 #include "llvm/IR/Function.h"
@@ -35,9 +34,9 @@
 #include "llvm/IR/LLVMContext.h"
 #include "llvm/IR/PassManager.h"
 #include "llvm/IR/Type.h"
+#include "llvm/InitializePasses.h"
 #include "llvm/Pass.h"
 #include "llvm/PassRegistry.h"
-#include "llvm/PassSupport.h"
 #include "llvm/ProfileData/InstrProf.h"
 #include "llvm/Support/Casting.h"
 #include "llvm/Support/CommandLine.h"
@@ -138,7 +137,7 @@ public:
                OptimizationRemarkEmitter &ORE, DominatorTree *DT)
       : Func(Func), BFI(BFI), ORE(ORE), DT(DT), Changed(false) {
     ValueDataArray =
-        llvm::make_unique<InstrProfValueData[]>(MemOPMaxVersion + 2);
+        std::make_unique<InstrProfValueData[]>(MemOPMaxVersion + 2);
     // Get the MemOPSize range information from option MemOPSizeRange,
     getMemOPSizeRangeFromOption(MemOPSizeRange, PreciseRangeStart,
                                 PreciseRangeLast);
@@ -374,8 +373,8 @@ bool MemOPSizeOpt::perform(MemIntrinsic *MI) {
         Ctx, Twine("MemOP.Case.") + Twine(SizeId), &Func, DefaultBB);
     Instruction *NewInst = MI->clone();
     // Fix the argument.
-    MemIntrinsic * MemI = dyn_cast<MemIntrinsic>(NewInst);
-    IntegerType *SizeType = dyn_cast<IntegerType>(MemI->getLength()->getType());
+    auto *MemI = cast<MemIntrinsic>(NewInst);
+    auto *SizeType = dyn_cast<IntegerType>(MemI->getLength()->getType());
     assert(SizeType && "Expected integer type size argument.");
     ConstantInt *CaseSizeId = ConstantInt::get(SizeType, SizeId);
     MemI->setLength(CaseSizeId);

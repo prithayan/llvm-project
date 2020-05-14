@@ -116,7 +116,7 @@ class CompilerInstance : public ModuleLoader {
   std::unique_ptr<llvm::Timer> FrontendTimer;
 
   /// The ASTReader, if one exists.
-  IntrusiveRefCntPtr<ASTReader> ModuleManager;
+  IntrusiveRefCntPtr<ASTReader> TheASTReader;
 
   /// The module dependency collector for crashdumps
   std::shared_ptr<ModuleDependencyCollector> ModuleDepCollector;
@@ -124,18 +124,11 @@ class CompilerInstance : public ModuleLoader {
   /// The module provider.
   std::shared_ptr<PCHContainerOperations> ThePCHContainerOperations;
 
-  /// The dependency file generator.
-  std::unique_ptr<DependencyFileGenerator> TheDependencyFileGenerator;
-
   std::vector<std::shared_ptr<DependencyCollector>> DependencyCollectors;
-
-  /// The set of top-level modules that has already been loaded,
-  /// along with the module map
-  llvm::DenseMap<const IdentifierInfo *, Module *> KnownModules;
 
   /// The set of top-level modules that has already been built on the
   /// fly as part of this overall compilation action.
-  std::map<std::string, std::string> BuiltModules;
+  std::map<std::string, std::string, std::less<>> BuiltModules;
 
   /// Should we delete the BuiltModules when we're done?
   bool DeleteBuiltModules = true;
@@ -157,6 +150,12 @@ class CompilerInstance : public ModuleLoader {
 
   /// One or more modules failed to build.
   bool ModuleBuildFailed = false;
+
+  /// The stream for verbose output if owned, otherwise nullptr.
+  std::unique_ptr<raw_ostream> OwnedVerboseOutputStream;
+
+  /// The stream for verbose output.
+  raw_ostream *VerboseOutputStream = &llvm::errs();
 
   /// Holds information about the output file.
   ///
@@ -219,9 +218,6 @@ public:
   ///
   /// \param Act - The action to execute.
   /// \return - True on success.
-  //
-  // FIXME: This function should take the stream to write any debugging /
-  // verbose output to as an argument.
   //
   // FIXME: Eliminate the llvm_shutdown requirement, that should either be part
   // of the context or else not CompilerInstance specific.
@@ -353,6 +349,21 @@ public:
   }
 
   /// }
+  /// @name VerboseOutputStream
+  /// }
+
+  /// Replace the current stream for verbose output.
+  void setVerboseOutputStream(raw_ostream &Value);
+
+  /// Replace the current stream for verbose output.
+  void setVerboseOutputStream(std::unique_ptr<raw_ostream> Value);
+
+  /// Get the current stream for verbose output.
+  raw_ostream &getVerboseOutputStream() {
+    return *VerboseOutputStream;
+  }
+
+  /// }
   /// @name Target Info
   /// {
 
@@ -379,9 +390,7 @@ public:
   /// @name Virtual File System
   /// {
 
-  llvm::vfs::FileSystem &getVirtualFileSystem() const {
-    return getFileManager().getVirtualFileSystem();
-  }
+  llvm::vfs::FileSystem &getVirtualFileSystem() const;
 
   /// }
   /// @name File Manager
@@ -503,8 +512,8 @@ public:
   /// @name Module Management
   /// {
 
-  IntrusiveRefCntPtr<ASTReader> getModuleManager() const;
-  void setModuleManager(IntrusiveRefCntPtr<ASTReader> Reader);
+  IntrusiveRefCntPtr<ASTReader> getASTReader() const;
+  void setASTReader(IntrusiveRefCntPtr<ASTReader> Reader);
 
   std::shared_ptr<ModuleDependencyCollector> getModuleDepCollector() const;
   void setModuleDepCollector(
@@ -661,7 +670,6 @@ public:
       InMemoryModuleCache &ModuleCache, ASTContext &Context,
       const PCHContainerReader &PCHContainerRdr,
       ArrayRef<std::shared_ptr<ModuleFileExtension>> Extensions,
-      DependencyFileGenerator *DependencyFile,
       ArrayRef<std::shared_ptr<DependencyCollector>> DependencyCollectors,
       void *DeserializationListener, bool OwnDeserializationListener,
       bool Preamble, bool UseGlobalModuleIndex);
@@ -771,17 +779,34 @@ public:
     return std::move(OutputStream);
   }
 
-  // Create module manager.
-  void createModuleManager();
+  void createASTReader();
 
   bool loadModuleFile(StringRef FileName);
 
+private:
+  /// Find a module, potentially compiling it, before reading its AST.  This is
+  /// the guts of loadModule.
+  ///
+  /// For prebuilt modules, the Module is not expected to exist in
+  /// HeaderSearch's ModuleMap.  If a ModuleFile by that name is in the
+  /// ModuleManager, then it will be loaded and looked up.
+  ///
+  /// For implicit modules, the Module is expected to already be in the
+  /// ModuleMap.  First attempt to load it from the given path on disk.  If that
+  /// fails, defer to compileModuleAndReadAST, which will first build and then
+  /// load it.
+  ModuleLoadResult findOrCompileModuleAndReadAST(StringRef ModuleName,
+                                                 SourceLocation ImportLoc,
+                                                 SourceLocation ModuleNameLoc,
+                                                 bool IsInclusionDirective);
+
+public:
   ModuleLoadResult loadModule(SourceLocation ImportLoc, ModuleIdPath Path,
                               Module::NameVisibilityKind Visibility,
                               bool IsInclusionDirective) override;
 
-  void loadModuleFromSource(SourceLocation ImportLoc, StringRef ModuleName,
-                            StringRef Source) override;
+  void createModuleFromSource(SourceLocation ImportLoc, StringRef ModuleName,
+                              StringRef Source) override;
 
   void makeModuleVisible(Module *Mod, Module::NameVisibilityKind Visibility,
                          SourceLocation ImportLoc) override;

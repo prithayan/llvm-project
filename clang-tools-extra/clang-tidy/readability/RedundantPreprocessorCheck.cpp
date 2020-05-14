@@ -83,7 +83,7 @@ private:
 
     if (Store)
       // This is an actual directive to be remembered.
-      Stack.push_back({Loc, MacroName});
+      Stack.push_back({Loc, std::string(MacroName)});
   }
 
   ClangTidyCheck &Check;
@@ -99,7 +99,7 @@ private:
 void RedundantPreprocessorCheck::registerPPCallbacks(
     const SourceManager &SM, Preprocessor *PP, Preprocessor *ModuleExpanderPP) {
   PP->addPPCallbacks(
-      ::llvm::make_unique<RedundantPreprocessorCallbacks>(*this, *PP));
+      ::std::make_unique<RedundantPreprocessorCallbacks>(*this, *PP));
 }
 
 } // namespace readability

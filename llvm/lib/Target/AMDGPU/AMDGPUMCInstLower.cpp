@@ -90,6 +90,10 @@ static MCSymbolRefExpr::VariantKind getVariantKind(unsigned MOFlags) {
     return MCSymbolRefExpr::VK_AMDGPU_REL32_LO;
   case SIInstrInfo::MO_REL32_HI:
     return MCSymbolRefExpr::VK_AMDGPU_REL32_HI;
+  case SIInstrInfo::MO_ABS32_LO:
+    return MCSymbolRefExpr::VK_AMDGPU_ABS32_LO;
+  case SIInstrInfo::MO_ABS32_HI:
+    return MCSymbolRefExpr::VK_AMDGPU_ABS32_HI;
   }
 }
 
@@ -112,10 +116,10 @@ const MCExpr *AMDGPUMCInstLower::getLongBranchBlockExpr(
   const MCConstantExpr *One = MCConstantExpr::create(4, Ctx);
   SrcBBSym = MCBinaryExpr::createAdd(SrcBBSym, One, Ctx);
 
-  if (MO.getTargetFlags() == AMDGPU::TF_LONG_BRANCH_FORWARD)
+  if (MO.getTargetFlags() == SIInstrInfo::MO_LONG_BRANCH_FORWARD)
     return MCBinaryExpr::createSub(DestBBSym, SrcBBSym, Ctx);
 
-  assert(MO.getTargetFlags() == AMDGPU::TF_LONG_BRANCH_BACKWARD);
+  assert(MO.getTargetFlags() == SIInstrInfo::MO_LONG_BRANCH_BACKWARD);
   return MCBinaryExpr::createSub(SrcBBSym, DestBBSym, Ctx);
 }
 
@@ -146,10 +150,13 @@ bool AMDGPUMCInstLower::lowerOperand(const MachineOperand &MO,
     SmallString<128> SymbolName;
     AP.getNameWithPrefix(SymbolName, GV);
     MCSymbol *Sym = Ctx.getOrCreateSymbol(SymbolName);
-    const MCExpr *SymExpr =
+    const MCExpr *Expr =
       MCSymbolRefExpr::create(Sym, getVariantKind(MO.getTargetFlags()),Ctx);
-    const MCExpr *Expr = MCBinaryExpr::createAdd(SymExpr,
-      MCConstantExpr::create(MO.getOffset(), Ctx), Ctx);
+    int64_t Offset = MO.getOffset();
+    if (Offset != 0) {
+      Expr = MCBinaryExpr::createAdd(Expr,
+                                     MCConstantExpr::create(Offset, Ctx), Ctx);
+    }
     MCOp = MCOperand::createExpr(Expr);
     return true;
   }
@@ -204,6 +211,10 @@ void AMDGPUMCInstLower::lower(const MachineInstr *MI, MCInst &OutMI) const {
     lowerOperand(MO, MCOp);
     OutMI.addOperand(MCOp);
   }
+
+  int FIIdx = AMDGPU::getNamedOperandIdx(MCOpcode, AMDGPU::OpName::fi);
+  if (FIIdx >= (int)OutMI.getNumOperands())
+    OutMI.addOperand(MCOperand::createImm(0));
 }
 
 bool AMDGPUAsmPrinter::lowerOperand(const MachineOperand &MO,
@@ -243,7 +254,7 @@ const MCExpr *AMDGPUAsmPrinter::lowerConstant(const Constant *CV) {
   return AsmPrinter::lowerConstant(CV);
 }
 
-void AMDGPUAsmPrinter::EmitInstruction(const MachineInstr *MI) {
+void AMDGPUAsmPrinter::emitInstruction(const MachineInstr *MI) {
   if (emitPseudoExpansionLowering(*OutStreamer, MI))
     return;
 
@@ -261,7 +272,7 @@ void AMDGPUAsmPrinter::EmitInstruction(const MachineInstr *MI) {
     const MachineBasicBlock *MBB = MI->getParent();
     MachineBasicBlock::const_instr_iterator I = ++MI->getIterator();
     while (I != MBB->instr_end() && I->isInsideBundle()) {
-      EmitInstruction(&*I);
+      emitInstruction(&*I);
       ++I;
     }
   } else {
@@ -333,7 +344,7 @@ void AMDGPUAsmPrinter::EmitInstruction(const MachineInstr *MI) {
 
       AMDGPUInstPrinter InstPrinter(*TM.getMCAsmInfo(), *STI.getInstrInfo(),
                                     *STI.getRegisterInfo());
-      InstPrinter.printInst(&TmpInst, DisasmStream, StringRef(), STI);
+      InstPrinter.printInst(&TmpInst, 0, StringRef(), STI, DisasmStream);
 
       // Disassemble instruction/operands to hex representation.
       SmallVector<MCFixup, 4> Fixups;
@@ -370,7 +381,7 @@ void R600MCInstLower::lower(const MachineInstr *MI, MCInst &OutMI) const {
   }
 }
 
-void R600AsmPrinter::EmitInstruction(const MachineInstr *MI) {
+void R600AsmPrinter::emitInstruction(const MachineInstr *MI) {
   const R600Subtarget &STI = MF->getSubtarget<R600Subtarget>();
   R600MCInstLower MCInstLowering(OutContext, STI, *this);
 
@@ -385,7 +396,7 @@ void R600AsmPrinter::EmitInstruction(const MachineInstr *MI) {
     const MachineBasicBlock *MBB = MI->getParent();
     MachineBasicBlock::const_instr_iterator I = ++MI->getIterator();
     while (I != MBB->instr_end() && I->isInsideBundle()) {
-      EmitInstruction(&*I);
+      emitInstruction(&*I);
       ++I;
     }
   } else {

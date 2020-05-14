@@ -1,10 +1,14 @@
-set(LLVM_LINK_COMPONENTS support)
+set(LLVM_LINK_COMPONENTS
+  FrontendOpenMP
+  Support
+  )
 
 add_clang_library(clangTidyReadabilityModule
   AvoidConstParamsInDecls.cpp
   BracesAroundStatementsCheck.cpp
   ConstReturnTypeCheck.cpp
   ContainerSizeEmptyCheck.cpp
+  ConvertMemberFunctionsToStatic.cpp
   DeleteNullPointerCheck.cpp
   DeletedDefaultCheck.cpp
   ElseAfterReturnCheck.cpp
@@ -14,12 +18,15 @@ add_clang_library(clangTidyReadabilityModule
   InconsistentDeclarationParameterNameCheck.cpp
   IsolateDeclarationCheck.cpp
   MagicNumbersCheck.cpp
+  MakeMemberFunctionConstCheck.cpp
   MisleadingIndentationCheck.cpp
   MisplacedArrayIndexCheck.cpp
   NamedParameterCheck.cpp
   NamespaceCommentCheck.cpp
   NonConstParameterCheck.cpp
+  QualifiedAutoCheck.cpp
   ReadabilityTidyModule.cpp
+  RedundantAccessSpecifiersCheck.cpp
   RedundantControlFlowCheck.cpp
   RedundantDeclarationCheck.cpp
   RedundantFunctionPtrDereferenceCheck.cpp

@@ -15,6 +15,8 @@
 #include "clang/AST/DeclOpenMP.h"
 #include "clang/AST/DeclTemplate.h"
 #include "clang/AST/LocInfoType.h"
+#include "clang/Basic/Module.h"
+#include "clang/Basic/SourceManager.h"
 
 using namespace clang;
 
@@ -121,11 +123,13 @@ void TextNodeDumper::Visit(const Stmt *Node) {
   dumpPointer(Node);
   dumpSourceRange(Node->getSourceRange());
 
-  if (Node->isOMPStructuredBlock())
-    OS << " openmp_structured_block";
-
   if (const auto *E = dyn_cast<Expr>(Node)) {
     dumpType(E->getType());
+
+    if (E->containsErrors()) {
+      ColorScope Color(OS, ShowColors, ErrorsColor);
+      OS << " contains-errors";
+    }
 
     {
       ColorScope Color(OS, ShowColors, ValueKindColor);
@@ -255,9 +259,12 @@ void TextNodeDumper::Visit(const Decl *D) {
 
   if (D->isInvalidDecl())
     OS << " invalid";
-  if (const FunctionDecl *FD = dyn_cast<FunctionDecl>(D))
-    if (FD->isConstexpr())
+  if (const FunctionDecl *FD = dyn_cast<FunctionDecl>(D)) {
+    if (FD->isConstexprSpecified())
       OS << " constexpr";
+    if (FD->isConsteval())
+      OS << " consteval";
+  }
 
   if (!isa<FunctionDecl>(*D)) {
     const auto *MD = dyn_cast<ObjCMethodDecl>(D);
@@ -307,7 +314,7 @@ void TextNodeDumper::Visit(const OMPClause *C) {
   }
   {
     ColorScope Color(OS, ShowColors, AttrColor);
-    StringRef ClauseName(getOpenMPClauseName(C->getClauseKind()));
+    StringRef ClauseName(llvm::omp::getOpenMPClauseName(C->getClauseKind()));
     OS << "OMP" << ClauseName.substr(/*Start=*/0, /*N=*/1).upper()
        << ClauseName.drop_front() << "Clause";
   }
@@ -444,10 +451,21 @@ void TextNodeDumper::dumpAccessSpecifier(AccessSpecifier AS) {
   }
 }
 
-void TextNodeDumper::dumpCXXTemporary(const CXXTemporary *Temporary) {
-  OS << "(CXXTemporary";
-  dumpPointer(Temporary);
-  OS << ")";
+void TextNodeDumper::dumpCleanupObject(
+    const ExprWithCleanups::CleanupObject &C) {
+  if (auto *BD = C.dyn_cast<BlockDecl *>())
+    dumpDeclRef(BD, "cleanup");
+  else if (auto *CLE = C.dyn_cast<CompoundLiteralExpr *>())
+    AddChild([=] {
+      OS << "cleanup ";
+      {
+        ColorScope Color(OS, ShowColors, StmtColor);
+        OS << CLE->getStmtClassName();
+      }
+      dumpPointer(CLE);
+    });
+  else
+    llvm_unreachable("unexpected cleanup type");
 }
 
 void TextNodeDumper::dumpDeclRef(const Decl *D, StringRef Label) {
@@ -491,6 +509,9 @@ void TextNodeDumper::visitInlineCommandComment(
     break;
   case comments::InlineCommandComment::RenderEmphasized:
     OS << " RenderEmphasized";
+    break;
+  case comments::InlineCommandComment::RenderAnchor:
+    OS << " RenderAnchor";
     break;
   }
 
@@ -639,8 +660,8 @@ static void dumpBasePath(raw_ostream &OS, const CastExpr *Node) {
     if (!First)
       OS << " -> ";
 
-    const CXXRecordDecl *RD =
-        cast<CXXRecordDecl>(Base->getType()->getAs<RecordType>()->getDecl());
+    const auto *RD =
+        cast<CXXRecordDecl>(Base->getType()->castAs<RecordType>()->getDecl());
 
     if (Base->isVirtual())
       OS << "virtual ";
@@ -686,6 +707,14 @@ void TextNodeDumper::VisitCaseStmt(const CaseStmt *Node) {
     OS << " gnu_range";
 }
 
+void TextNodeDumper::VisitConstantExpr(const ConstantExpr *Node) {
+  if (Node->getResultAPValueKind() != APValue::None) {
+    ColorScope Color(OS, ShowColors, ValueColor);
+    OS << " ";
+    Node->getAPValueResult().dump(OS);
+  }
+}
+
 void TextNodeDumper::VisitCallExpr(const CallExpr *Node) {
   if (Node->usesADL())
     OS << " adl";
@@ -714,6 +743,12 @@ void TextNodeDumper::VisitDeclRefExpr(const DeclRefExpr *Node) {
     OS << " (";
     dumpBareDeclRef(Node->getFoundDecl());
     OS << ")";
+  }
+  switch (Node->isNonOdrUse()) {
+  case NOUR_None: break;
+  case NOUR_Unevaluated: OS << " non_odr_use_unevaluated"; break;
+  case NOUR_Constant: OS << " non_odr_use_constant"; break;
+  case NOUR_Discarded: OS << " non_odr_use_discarded"; break;
   }
 }
 
@@ -819,6 +854,12 @@ void TextNodeDumper::VisitUnaryExprOrTypeTraitExpr(
 void TextNodeDumper::VisitMemberExpr(const MemberExpr *Node) {
   OS << " " << (Node->isArrow() ? "->" : ".") << *Node->getMemberDecl();
   dumpPointer(Node->getMemberDecl());
+  switch (Node->isNonOdrUse()) {
+  case NOUR_None: break;
+  case NOUR_Unevaluated: OS << " non_odr_use_unevaluated"; break;
+  case NOUR_Constant: OS << " non_odr_use_constant"; break;
+  case NOUR_Discarded: OS << " non_odr_use_discarded"; break;
+  }
 }
 
 void TextNodeDumper::VisitExtVectorElementExpr(
@@ -890,8 +931,9 @@ void TextNodeDumper::VisitCXXConstructExpr(const CXXConstructExpr *Node) {
 
 void TextNodeDumper::VisitCXXBindTemporaryExpr(
     const CXXBindTemporaryExpr *Node) {
-  OS << " ";
-  dumpCXXTemporary(Node->getTemporary());
+  OS << " (CXXTemporary";
+  dumpPointer(Node);
+  OS << ")";
 }
 
 void TextNodeDumper::VisitCXXNewExpr(const CXXNewExpr *Node) {
@@ -928,7 +970,7 @@ void TextNodeDumper::VisitMaterializeTemporaryExpr(
 
 void TextNodeDumper::VisitExprWithCleanups(const ExprWithCleanups *Node) {
   for (unsigned i = 0, e = Node->getNumObjects(); i != e; ++i)
-    dumpDeclRef(Node->getObject(i), "cleanup");
+    dumpCleanupObject(Node->getObject(i));
 }
 
 void TextNodeDumper::VisitSizeOfPackExpr(const SizeOfPackExpr *Node) {
@@ -1042,6 +1084,23 @@ void TextNodeDumper::VisitObjCSubscriptRefExpr(
 
 void TextNodeDumper::VisitObjCBoolLiteralExpr(const ObjCBoolLiteralExpr *Node) {
   OS << " " << (Node->getValue() ? "__objc_yes" : "__objc_no");
+}
+
+void TextNodeDumper::VisitOMPIteratorExpr(const OMPIteratorExpr *Node) {
+  OS << " ";
+  for (unsigned I = 0, E = Node->numOfIterators(); I < E; ++I) {
+    Visit(Node->getIteratorDecl(I));
+    OS << " = ";
+    const OMPIteratorExpr::IteratorRange Range = Node->getIteratorRange(I);
+    OS << " begin ";
+    Visit(Range.Begin);
+    OS << " end ";
+    Visit(Range.End);
+    if (Range.Step) {
+      OS << " step ";
+      Visit(Range.Step);
+    }
+  }
 }
 
 void TextNodeDumper::VisitRValueReferenceType(const ReferenceType *T) {
@@ -1180,6 +1239,11 @@ void TextNodeDumper::VisitAutoType(const AutoType *T) {
     OS << " decltype(auto)";
   if (!T->isDeduced())
     OS << " undeduced";
+  if (T->isConstrained()) {
+    dumpDeclRef(T->getTypeConstraintConcept());
+    for (const auto &Arg : T->getTypeConstraintArguments())
+      VisitTemplateArgument(Arg);
+  }
 }
 
 void TextNodeDumper::VisitTemplateSpecializationType(
@@ -1320,6 +1384,17 @@ void TextNodeDumper::VisitFunctionDecl(const FunctionDecl *D) {
     OS << " <<<NULL params x " << D->getNumParams() << ">>>";
 }
 
+void TextNodeDumper::VisitLifetimeExtendedTemporaryDecl(
+    const LifetimeExtendedTemporaryDecl *D) {
+  OS << " extended by ";
+  dumpBareDeclRef(D->getExtendingDecl());
+  OS << " mangling ";
+  {
+    ColorScope Color(OS, ShowColors, ValueColor);
+    OS << D->getManglingNumber();
+  }
+}
+
 void TextNodeDumper::VisitFieldDecl(const FieldDecl *D) {
   dumpName(D);
   dumpType(D->getType());
@@ -1366,6 +1441,10 @@ void TextNodeDumper::VisitVarDecl(const VarDecl *D) {
       break;
     }
   }
+  if (D->needsDestruction(D->getASTContext()))
+    OS << " destroyed";
+  if (D->isParameterPack())
+    OS << " pack";
 }
 
 void TextNodeDumper::VisitBindingDecl(const BindingDecl *D) {
@@ -1455,7 +1534,8 @@ void TextNodeDumper::VisitOMPRequiresDecl(const OMPRequiresDecl *D) {
       }
       {
         ColorScope Color(OS, ShowColors, AttrColor);
-        StringRef ClauseName(getOpenMPClauseName(C->getClauseKind()));
+        StringRef ClauseName(
+            llvm::omp::getOpenMPClauseName(C->getClauseKind()));
         OS << "OMP" << ClauseName.substr(/*Start=*/0, /*N=*/1).upper()
            << ClauseName.drop_front() << "Clause";
       }
@@ -1516,6 +1596,7 @@ void TextNodeDumper::VisitCXXRecordDecl(const CXXRecordDecl *D) {
     FLAG(isGenericLambda, generic);
     FLAG(isLambda, lambda);
 
+    FLAG(isAnonymousStructOrUnion, is_anonymous);
     FLAG(canPassInRegisters, pass_in_registers);
     FLAG(isEmpty, empty);
     FLAG(isAggregate, aggregate);
@@ -1620,6 +1701,7 @@ void TextNodeDumper::VisitCXXRecordDecl(const CXXRecordDecl *D) {
       FLAG(hasTrivialDestructor, trivial);
       FLAG(hasNonTrivialDestructor, non_trivial);
       FLAG(hasUserDeclaredDestructor, user_declared);
+      FLAG(hasConstexprDestructor, constexpr);
       FLAG(needsImplicitDestructor, needs_implicit);
       FLAG(needsOverloadResolutionForDestructor, needs_overload_resolution);
       if (!D->needsOverloadResolutionForDestructor())
@@ -1656,7 +1738,16 @@ void TextNodeDumper::VisitBuiltinTemplateDecl(const BuiltinTemplateDecl *D) {
 }
 
 void TextNodeDumper::VisitTemplateTypeParmDecl(const TemplateTypeParmDecl *D) {
-  if (D->wasDeclaredWithTypename())
+  if (const auto *TC = D->getTypeConstraint()) {
+    OS << " ";
+    dumpBareDeclRef(TC->getNamedConcept());
+    if (TC->getNamedConcept() != TC->getFoundDecl()) {
+      OS << " (";
+      dumpBareDeclRef(TC->getFoundDecl());
+      OS << ")";
+    }
+    Visit(TC->getImmediatelyDeclaredConstraint());
+  } else if (D->wasDeclaredWithTypename())
     OS << " typename";
   else
     OS << " class";
@@ -1867,33 +1958,35 @@ void TextNodeDumper::VisitObjCPropertyDecl(const ObjCPropertyDecl *D) {
   else if (D->getPropertyImplementation() == ObjCPropertyDecl::Optional)
     OS << " optional";
 
-  ObjCPropertyDecl::PropertyAttributeKind Attrs = D->getPropertyAttributes();
-  if (Attrs != ObjCPropertyDecl::OBJC_PR_noattr) {
-    if (Attrs & ObjCPropertyDecl::OBJC_PR_readonly)
+  ObjCPropertyAttribute::Kind Attrs = D->getPropertyAttributes();
+  if (Attrs != ObjCPropertyAttribute::kind_noattr) {
+    if (Attrs & ObjCPropertyAttribute::kind_readonly)
       OS << " readonly";
-    if (Attrs & ObjCPropertyDecl::OBJC_PR_assign)
+    if (Attrs & ObjCPropertyAttribute::kind_assign)
       OS << " assign";
-    if (Attrs & ObjCPropertyDecl::OBJC_PR_readwrite)
+    if (Attrs & ObjCPropertyAttribute::kind_readwrite)
       OS << " readwrite";
-    if (Attrs & ObjCPropertyDecl::OBJC_PR_retain)
+    if (Attrs & ObjCPropertyAttribute::kind_retain)
       OS << " retain";
-    if (Attrs & ObjCPropertyDecl::OBJC_PR_copy)
+    if (Attrs & ObjCPropertyAttribute::kind_copy)
       OS << " copy";
-    if (Attrs & ObjCPropertyDecl::OBJC_PR_nonatomic)
+    if (Attrs & ObjCPropertyAttribute::kind_nonatomic)
       OS << " nonatomic";
-    if (Attrs & ObjCPropertyDecl::OBJC_PR_atomic)
+    if (Attrs & ObjCPropertyAttribute::kind_atomic)
       OS << " atomic";
-    if (Attrs & ObjCPropertyDecl::OBJC_PR_weak)
+    if (Attrs & ObjCPropertyAttribute::kind_weak)
       OS << " weak";
-    if (Attrs & ObjCPropertyDecl::OBJC_PR_strong)
+    if (Attrs & ObjCPropertyAttribute::kind_strong)
       OS << " strong";
-    if (Attrs & ObjCPropertyDecl::OBJC_PR_unsafe_unretained)
+    if (Attrs & ObjCPropertyAttribute::kind_unsafe_unretained)
       OS << " unsafe_unretained";
-    if (Attrs & ObjCPropertyDecl::OBJC_PR_class)
+    if (Attrs & ObjCPropertyAttribute::kind_class)
       OS << " class";
-    if (Attrs & ObjCPropertyDecl::OBJC_PR_getter)
+    if (Attrs & ObjCPropertyAttribute::kind_direct)
+      OS << " direct";
+    if (Attrs & ObjCPropertyAttribute::kind_getter)
       dumpDeclRef(D->getGetterMethodDecl(), "getter");
-    if (Attrs & ObjCPropertyDecl::OBJC_PR_setter)
+    if (Attrs & ObjCPropertyAttribute::kind_setter)
       dumpDeclRef(D->getSetterMethodDecl(), "setter");
   }
 }
@@ -1914,4 +2007,8 @@ void TextNodeDumper::VisitBlockDecl(const BlockDecl *D) {
 
   if (D->capturesCXXThis())
     OS << " captures_this";
+}
+
+void TextNodeDumper::VisitConceptDecl(const ConceptDecl *D) {
+  dumpName(D);
 }

@@ -6,8 +6,8 @@
 //
 //===----------------------------------------------------------------------===//
 
-#ifndef liblldb_Section_h_
-#define liblldb_Section_h_
+#ifndef LLDB_CORE_SECTION_H
+#define LLDB_CORE_SECTION_H
 
 #include "lldb/Core/ModuleChild.h"
 #include "lldb/Utility/ConstString.h"
@@ -29,7 +29,6 @@ class Address;
 class DataExtractor;
 class ObjectFile;
 class Section;
-class Stream;
 class Target;
 
 class SectionList {
@@ -38,9 +37,13 @@ public:
   typedef collection::iterator iterator;
   typedef collection::const_iterator const_iterator;
 
-  SectionList();
+  const_iterator begin() const { return m_sections.begin(); }
+  const_iterator end() const { return m_sections.end(); }
+  const_iterator begin() { return m_sections.begin(); }
+  const_iterator end() { return m_sections.end(); }
 
-  ~SectionList();
+  /// Create an empty list.
+  SectionList() = default;
 
   SectionList &operator=(const SectionList &rhs);
 
@@ -52,7 +55,8 @@ public:
 
   bool ContainsSection(lldb::user_id_t sect_id) const;
 
-  void Dump(Stream *s, Target *target, bool show_header, uint32_t depth) const;
+  void Dump(llvm::raw_ostream &s, unsigned indent, Target *target,
+            bool show_header, uint32_t depth) const;
 
   lldb::SectionSP FindSectionByName(ConstString section_dstr) const;
 
@@ -123,9 +127,10 @@ public:
 
   const SectionList &GetChildren() const { return m_children; }
 
-  void Dump(Stream *s, Target *target, uint32_t depth) const;
+  void Dump(llvm::raw_ostream &s, unsigned indent, Target *target,
+            uint32_t depth) const;
 
-  void DumpName(Stream *s) const;
+  void DumpName(llvm::raw_ostream &s) const;
 
   lldb::addr_t GetLoadBaseAddress(Target *target) const;
 
@@ -268,4 +273,4 @@ private:
 
 } // namespace lldb_private
 
-#endif // liblldb_Section_h_
+#endif // LLDB_CORE_SECTION_H

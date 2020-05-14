@@ -112,7 +112,6 @@ static const char *getSectionSuffixForSize(unsigned Size) {
 void HexagonTargetObjectFile::Initialize(MCContext &Ctx,
       const TargetMachine &TM) {
   TargetLoweringObjectFileELF::Initialize(Ctx, TM);
-  InitializeELF(TM.Options.UseInitArray);
 
   SmallDataSection =
     getContext().getELFSection(".sdata", ELF::SHT_PROGBITS,
@@ -238,10 +237,7 @@ bool HexagonTargetObjectFile::isGlobalInSmallSection(const GlobalObject *GO,
     return false;
   }
 
-  Type *GType = GVar->getType();
-  if (PointerType *PT = dyn_cast<PointerType>(GType))
-    GType = PT->getElementType();
-
+  Type *GType = GVar->getValueType();
   if (isa<ArrayType>(GType)) {
     LLVM_DEBUG(dbgs() << "no, is an array\n");
     return false;
@@ -311,7 +307,8 @@ unsigned HexagonTargetObjectFile::getSmallestAddressableSize(const Type *Ty,
     const ArrayType *ATy = cast<const ArrayType>(Ty);
     return getSmallestAddressableSize(ATy->getElementType(), GV, TM);
   }
-  case Type::VectorTyID: {
+  case Type::FixedVectorTyID:
+  case Type::ScalableVectorTyID: {
     const VectorType *PTy = cast<const VectorType>(Ty);
     return getSmallestAddressableSize(PTy->getElementType(), GV, TM);
   }
@@ -341,7 +338,7 @@ unsigned HexagonTargetObjectFile::getSmallestAddressableSize(const Type *Ty,
 
 MCSection *HexagonTargetObjectFile::selectSmallSectionForGlobal(
     const GlobalObject *GO, SectionKind Kind, const TargetMachine &TM) const {
-  const Type *GTy = GO->getType()->getElementType();
+  const Type *GTy = GO->getValueType();
   unsigned Size = getSmallestAddressableSize(GTy, GO, TM);
 
   // If we have -ffunction-section or -fdata-section then we should emit the

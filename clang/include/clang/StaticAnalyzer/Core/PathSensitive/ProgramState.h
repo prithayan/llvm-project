@@ -298,6 +298,9 @@ public:
   LLVM_NODISCARD ProgramStateRef enterStackFrame(
       const CallEvent &Call, const StackFrameContext *CalleeCtx) const;
 
+  /// Return the value of 'self' if available in the given context.
+  SVal getSelfSVal(const LocationContext *LC) const;
+
   /// Get the lvalue for a base class object reference.
   Loc getLValue(const CXXBaseSpecifier &BaseSpec, const SubRegion *Super) const;
 
@@ -424,10 +427,12 @@ public:
   }
 
   // Pretty-printing.
-  void print(raw_ostream &Out, const char *nl = "\n", const char *sep = "",
-             const LocationContext *CurrentLC = nullptr) const;
-  void printDOT(raw_ostream &Out,
-                const LocationContext *CurrentLC = nullptr) const;
+  void printJson(raw_ostream &Out, const LocationContext *LCtx = nullptr,
+                 const char *NL = "\n", unsigned int Space = 0,
+                 bool IsDot = false) const;
+
+  void printDOT(raw_ostream &Out, const LocationContext *LCtx = nullptr,
+                unsigned int Space = 0) const;
 
   void dump() const;
 
@@ -505,6 +510,10 @@ public:
     return *svalBuilder;
   }
 
+  const SValBuilder &getSValBuilder() const {
+    return *svalBuilder;
+  }
+
   SymbolManager &getSymbolManager() {
     return svalBuilder->getSymbolManager();
   }
@@ -527,9 +536,10 @@ public:
   ConstraintManager &getConstraintManager() { return *ConstraintMgr; }
   SubEngine &getOwningEngine() { return *Eng; }
 
-  ProgramStateRef removeDeadBindings(ProgramStateRef St,
-                                    const StackFrameContext *LCtx,
-                                    SymbolReaper& SymReaper);
+  ProgramStateRef
+  removeDeadBindingsFromEnvironmentAndStore(ProgramStateRef St,
+                                            const StackFrameContext *LCtx,
+                                            SymbolReaper &SymReaper);
 
 public:
 
@@ -631,10 +641,6 @@ public:
                              ProgramStateTrait<T>::DeleteContext);
 
     return ProgramStateTrait<T>::MakeContext(p);
-  }
-
-  void EndPath(ProgramStateRef St) {
-    ConstraintMgr->EndPath(St);
   }
 };
 

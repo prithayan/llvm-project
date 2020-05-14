@@ -9,6 +9,7 @@
 #include "Error.h"
 #include "llvm/DebugInfo/DWARF/DWARFContext.h"
 #include "llvm/DebugInfo/DWARF/DWARFDebugArangeSet.h"
+#include "llvm/DebugInfo/DWARF/DWARFDebugRangeList.h"
 #include "llvm/DebugInfo/DWARF/DWARFFormValue.h"
 #include "llvm/ObjectYAML/DWARFYAML.h"
 
@@ -16,7 +17,7 @@
 
 using namespace llvm;
 
-void dumpInitialLength(DataExtractor &Data, uint32_t &Offset,
+void dumpInitialLength(DataExtractor &Data, uint64_t &Offset,
                        DWARFYAML::InitialLength &InitialLength) {
   InitialLength.TotalLength = Data.getU32(&Offset);
   if (InitialLength.isDWARF64())
@@ -48,7 +49,7 @@ void dumpDebugAbbrev(DWARFContext &DCtx, DWARFYAML::Data &Y) {
 }
 
 void dumpDebugStrings(DWARFContext &DCtx, DWARFYAML::Data &Y) {
-  StringRef RemainingTable = DCtx.getDWARFObj().getStringSection();
+  StringRef RemainingTable = DCtx.getDWARFObj().getStrSection();
   while (RemainingTable.size() > 0) {
     auto SymbolPair = RemainingTable.split('\0');
     RemainingTable = SymbolPair.second;
@@ -56,13 +57,15 @@ void dumpDebugStrings(DWARFContext &DCtx, DWARFYAML::Data &Y) {
   }
 }
 
-void dumpDebugARanges(DWARFContext &DCtx, DWARFYAML::Data &Y) {
-  DataExtractor ArangesData(DCtx.getDWARFObj().getARangeSection(),
-                            DCtx.isLittleEndian(), 0);
-  uint32_t Offset = 0;
+Error dumpDebugARanges(DWARFContext &DCtx, DWARFYAML::Data &Y) {
+  DWARFDataExtractor ArangesData(DCtx.getDWARFObj().getArangesSection(),
+                                 DCtx.isLittleEndian(), 0);
+  uint64_t Offset = 0;
   DWARFDebugArangeSet Set;
 
-  while (Set.extract(ArangesData, &Offset)) {
+  while (ArangesData.isValidOffset(Offset)) {
+    if (Error E = Set.extract(ArangesData, &Offset))
+      return E;
     DWARFYAML::ARange Range;
     Range.Length.setLength(Set.getHeader().Length);
     Range.Version = Set.getHeader().Version;
@@ -77,13 +80,45 @@ void dumpDebugARanges(DWARFContext &DCtx, DWARFYAML::Data &Y) {
     }
     Y.ARanges.push_back(Range);
   }
+  return ErrorSuccess();
+}
+
+Error dumpDebugRanges(DWARFContext &DCtx, DWARFYAML::Data &Y) {
+  // We are assuming all address byte sizes will be consistent across all
+  // compile units.
+  uint8_t AddrSize = 0;
+  for (const auto &CU : DCtx.compile_units()) {
+    const uint8_t CUAddrSize = CU->getAddressByteSize();
+    if (AddrSize == 0)
+      AddrSize = CUAddrSize;
+    else if (CUAddrSize != AddrSize)
+      return createStringError(std::errc::invalid_argument,
+                               "address sizes vary in different compile units");
+  }
+
+  DWARFDataExtractor Data(DCtx.getDWARFObj().getRangesSection().Data,
+                          DCtx.isLittleEndian(), AddrSize);
+  uint64_t Offset = 0;
+  DWARFDebugRangeList DwarfRanges;
+
+  while (Data.isValidOffset(Offset)) {
+    DWARFYAML::Ranges YamlRanges;
+    YamlRanges.Offset = Offset;
+    YamlRanges.AddrSize = AddrSize;
+    if (Error E = DwarfRanges.extract(Data, &Offset))
+      return E;
+    for (const auto &RLE : DwarfRanges.getEntries())
+      YamlRanges.Entries.push_back({RLE.StartAddress, RLE.EndAddress});
+    Y.DebugRanges.push_back(std::move(YamlRanges));
+  }
+  return ErrorSuccess();
 }
 
 void dumpPubSection(DWARFContext &DCtx, DWARFYAML::PubSection &Y,
                     DWARFSection Section) {
   DWARFDataExtractor PubSectionData(DCtx.getDWARFObj(), Section,
                                     DCtx.isLittleEndian(), 0);
-  uint32_t Offset = 0;
+  uint64_t Offset = 0;
   dumpInitialLength(PubSectionData, Offset, Y.Length);
   Y.Version = PubSectionData.getU16(&Offset);
   Y.UnitOffset = PubSectionData.getU32(&Offset);
@@ -101,16 +136,16 @@ void dumpPubSection(DWARFContext &DCtx, DWARFYAML::PubSection &Y,
 void dumpDebugPubSections(DWARFContext &DCtx, DWARFYAML::Data &Y) {
   const DWARFObject &D = DCtx.getDWARFObj();
   Y.PubNames.IsGNUStyle = false;
-  dumpPubSection(DCtx, Y.PubNames, D.getPubNamesSection());
+  dumpPubSection(DCtx, Y.PubNames, D.getPubnamesSection());
 
   Y.PubTypes.IsGNUStyle = false;
-  dumpPubSection(DCtx, Y.PubTypes, D.getPubTypesSection());
+  dumpPubSection(DCtx, Y.PubTypes, D.getPubtypesSection());
 
   Y.GNUPubNames.IsGNUStyle = true;
-  dumpPubSection(DCtx, Y.GNUPubNames, D.getGnuPubNamesSection());
+  dumpPubSection(DCtx, Y.GNUPubNames, D.getGnuPubnamesSection());
 
   Y.GNUPubTypes.IsGNUStyle = true;
-  dumpPubSection(DCtx, Y.GNUPubTypes, D.getGnuPubTypesSection());
+  dumpPubSection(DCtx, Y.GNUPubTypes, D.getGnuPubtypesSection());
 }
 
 void dumpDebugInfo(DWARFContext &DCtx, DWARFYAML::Data &Y) {
@@ -125,7 +160,7 @@ void dumpDebugInfo(DWARFContext &DCtx, DWARFYAML::Data &Y) {
     for (auto DIE : CU->dies()) {
       DWARFYAML::Entry NewEntry;
       DataExtractor EntryData = CU->getDebugInfoExtractor();
-      uint32_t offset = DIE.getOffset();
+      uint64_t offset = DIE.getOffset();
 
       assert(EntryData.isValidOffset(offset) && "Invalid DIE Offset");
       if (!EntryData.isValidOffset(offset))
@@ -226,7 +261,7 @@ void dumpDebugInfo(DWARFContext &DCtx, DWARFYAML::Data &Y) {
   }
 }
 
-bool dumpFileEntry(DataExtractor &Data, uint32_t &Offset,
+bool dumpFileEntry(DataExtractor &Data, uint64_t &Offset,
                    DWARFYAML::File &File) {
   File.Name = Data.getCStr(&Offset);
   if (File.Name.empty())
@@ -247,7 +282,7 @@ void dumpDebugLines(DWARFContext &DCtx, DWARFYAML::Data &Y) {
       DWARFYAML::LineTable DebugLines;
       DataExtractor LineData(DCtx.getDWARFObj().getLineSection().Data,
                              DCtx.isLittleEndian(), CU->getAddressByteSize());
-      uint32_t Offset = *StmtOffset;
+      uint64_t Offset = *StmtOffset;
       dumpInitialLength(LineData, Offset, DebugLines.Length);
       uint64_t LineTableLength = DebugLines.Length.getLength();
       uint64_t SizeOfPrologueLength = DebugLines.Length.isDWARF64() ? 8 : 4;
@@ -287,7 +322,7 @@ void dumpDebugLines(DWARFContext &DCtx, DWARFYAML::Data &Y) {
       const uint64_t LineEnd =
           LineTableLength + *StmtOffset + SizeOfPrologueLength;
       while (Offset < LineEnd) {
-        DWARFYAML::LineTableOpcode NewOp;
+        DWARFYAML::LineTableOpcode NewOp = {};
         NewOp.Opcode = (dwarf::LineNumberOps)LineData.getU8(&Offset);
         if (NewOp.Opcode == 0) {
           auto StartExt = Offset;
@@ -346,12 +381,15 @@ void dumpDebugLines(DWARFContext &DCtx, DWARFYAML::Data &Y) {
   }
 }
 
-std::error_code dwarf2yaml(DWARFContext &DCtx, DWARFYAML::Data &Y) {
+llvm::Error dwarf2yaml(DWARFContext &DCtx, DWARFYAML::Data &Y) {
   dumpDebugAbbrev(DCtx, Y);
   dumpDebugStrings(DCtx, Y);
-  dumpDebugARanges(DCtx, Y);
+  if (Error E = dumpDebugARanges(DCtx, Y))
+    return E;
+  if (Error E = dumpDebugRanges(DCtx, Y))
+    return E;
   dumpDebugPubSections(DCtx, Y);
   dumpDebugInfo(DCtx, Y);
   dumpDebugLines(DCtx, Y);
-  return obj2yaml_error::success;
+  return ErrorSuccess();
 }

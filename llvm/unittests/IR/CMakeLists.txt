@@ -4,9 +4,11 @@ set(LLVM_LINK_COMPONENTS
   Core
   Support
   Passes
+  TransformUtils
   )
 
 add_llvm_unittest(IRTests
+  AbstractCallSiteTest.cpp
   AsmWriterTest.cpp
   AttributesTest.cpp
   BasicBlockTest.cpp
@@ -37,8 +39,9 @@ add_llvm_unittest(IRTests
   ValueHandleTest.cpp
   ValueMapTest.cpp
   ValueTest.cpp
+  VectorTypesTest.cpp
   VerifierTest.cpp
-  WaymarkTest.cpp
+  VPIntrinsicTest.cpp
   )
 
 target_link_libraries(IRTests PRIVATE LLVMTestingSupport)

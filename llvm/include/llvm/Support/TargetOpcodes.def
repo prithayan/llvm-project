@@ -279,11 +279,17 @@ HANDLE_TARGET_OPCODE(G_INTTOPTR)
 /// COPY is the relevant instruction.
 HANDLE_TARGET_OPCODE(G_BITCAST)
 
+/// Generic freeze.
+HANDLE_TARGET_OPCODE(G_FREEZE)
+
 /// INTRINSIC trunc intrinsic.
 HANDLE_TARGET_OPCODE(G_INTRINSIC_TRUNC)
 
 /// INTRINSIC round intrinsic.
 HANDLE_TARGET_OPCODE(G_INTRINSIC_ROUND)
+
+/// INTRINSIC readcyclecounter
+HANDLE_TARGET_OPCODE(G_READCYCLECOUNTER)
 
 /// Generic load (including anyext load)
 HANDLE_TARGET_OPCODE(G_LOAD)
@@ -294,8 +300,20 @@ HANDLE_TARGET_OPCODE(G_SEXTLOAD)
 /// Generic zeroext load
 HANDLE_TARGET_OPCODE(G_ZEXTLOAD)
 
+/// Generic indexed load (including anyext load)
+HANDLE_TARGET_OPCODE(G_INDEXED_LOAD)
+
+/// Generic indexed signext load
+HANDLE_TARGET_OPCODE(G_INDEXED_SEXTLOAD)
+
+/// Generic indexed zeroext load
+HANDLE_TARGET_OPCODE(G_INDEXED_ZEXTLOAD)
+
 /// Generic store.
 HANDLE_TARGET_OPCODE(G_STORE)
+
+/// Generic indexed store.
+HANDLE_TARGET_OPCODE(G_INDEXED_STORE)
 
 /// Generic atomic cmpxchg with internal success check.
 HANDLE_TARGET_OPCODE(G_ATOMIC_CMPXCHG_WITH_SUCCESS)
@@ -315,6 +333,11 @@ HANDLE_TARGET_OPCODE(G_ATOMICRMW_MAX)
 HANDLE_TARGET_OPCODE(G_ATOMICRMW_MIN)
 HANDLE_TARGET_OPCODE(G_ATOMICRMW_UMAX)
 HANDLE_TARGET_OPCODE(G_ATOMICRMW_UMIN)
+HANDLE_TARGET_OPCODE(G_ATOMICRMW_FADD)
+HANDLE_TARGET_OPCODE(G_ATOMICRMW_FSUB)
+
+// Generic atomic fence
+HANDLE_TARGET_OPCODE(G_FENCE)
 
 /// Generic conditional branch instruction.
 HANDLE_TARGET_OPCODE(G_BRCOND)
@@ -351,6 +374,7 @@ HANDLE_TARGET_OPCODE(G_VAARG)
 
 // Generic sign extend
 HANDLE_TARGET_OPCODE(G_SEXT)
+HANDLE_TARGET_OPCODE(G_SEXT_INREG)
 
 // Generic zero extend
 HANDLE_TARGET_OPCODE(G_ZEXT)
@@ -363,6 +387,12 @@ HANDLE_TARGET_OPCODE(G_LSHR)
 
 // Generic arithmetic right-shift
 HANDLE_TARGET_OPCODE(G_ASHR)
+
+// Generic funnel left shift
+HANDLE_TARGET_OPCODE(G_FSHL)
+
+// Generic funnel right shift
+HANDLE_TARGET_OPCODE(G_FSHR)
 
 /// Generic integer-base comparison, also applicable to vectors of integers.
 HANDLE_TARGET_OPCODE(G_ICMP)
@@ -421,6 +451,18 @@ HANDLE_TARGET_OPCODE(G_UMULH)
 // the high half of the result.
 HANDLE_TARGET_OPCODE(G_SMULH)
 
+/// Generic saturating unsigned addition.
+HANDLE_TARGET_OPCODE(G_UADDSAT)
+
+/// Generic saturating signed addition.
+HANDLE_TARGET_OPCODE(G_SADDSAT)
+
+/// Generic saturating unsigned subtraction.
+HANDLE_TARGET_OPCODE(G_USUBSAT)
+
+/// Generic saturating signed subtraction.
+HANDLE_TARGET_OPCODE(G_SSUBSAT)
+
 /// Generic FP addition.
 HANDLE_TARGET_OPCODE(G_FADD)
 
@@ -432,6 +474,9 @@ HANDLE_TARGET_OPCODE(G_FMUL)
 
 /// Generic FMA multiplication. Behaves like llvm fma intrinsic
 HANDLE_TARGET_OPCODE(G_FMA)
+
+/// Generic FP multiply and add. Behaves as separate fmul and fadd.
+HANDLE_TARGET_OPCODE(G_FMAD)
 
 /// Generic FP division.
 HANDLE_TARGET_OPCODE(G_FDIV)
@@ -490,15 +535,42 @@ HANDLE_TARGET_OPCODE(G_FCOPYSIGN)
 /// Generic FP canonicalize value.
 HANDLE_TARGET_OPCODE(G_FCANONICALIZE)
 
+/// FP min/max matching libm's fmin/fmax
+HANDLE_TARGET_OPCODE(G_FMINNUM)
+HANDLE_TARGET_OPCODE(G_FMAXNUM)
+
+/// FP min/max matching IEEE-754 2008's minnum/maxnum semantics.
+HANDLE_TARGET_OPCODE(G_FMINNUM_IEEE)
+HANDLE_TARGET_OPCODE(G_FMAXNUM_IEEE)
+
+/// FP min/max matching IEEE-754 2018 draft semantics.
+HANDLE_TARGET_OPCODE(G_FMINIMUM)
+HANDLE_TARGET_OPCODE(G_FMAXIMUM)
+
 /// Generic pointer offset
-HANDLE_TARGET_OPCODE(G_GEP)
+HANDLE_TARGET_OPCODE(G_PTR_ADD)
 
 /// Clear the specified number of low bits in a pointer. This rounds the value
 /// *down* to the given alignment.
 HANDLE_TARGET_OPCODE(G_PTR_MASK)
 
+/// Generic signed integer minimum.
+HANDLE_TARGET_OPCODE(G_SMIN)
+
+/// Generic signed integer maximum.
+HANDLE_TARGET_OPCODE(G_SMAX)
+
+/// Generic unsigned integer maximum.
+HANDLE_TARGET_OPCODE(G_UMIN)
+
+/// Generic unsigned integer maximum.
+HANDLE_TARGET_OPCODE(G_UMAX)
+
 /// Generic BRANCH instruction. This is an unconditional branch.
 HANDLE_TARGET_OPCODE(G_BR)
+
+/// Generic branch to jump table entry.
+HANDLE_TARGET_OPCODE(G_BRJT)
 
 /// Generic insertelement.
 HANDLE_TARGET_OPCODE(G_INSERT_VECTOR_ELT)
@@ -527,6 +599,9 @@ HANDLE_TARGET_OPCODE(G_CTPOP)
 /// Generic byte swap.
 HANDLE_TARGET_OPCODE(G_BSWAP)
 
+/// Generic bit reverse.
+HANDLE_TARGET_OPCODE(G_BITREVERSE)
+
 /// Floating point ceil.
 HANDLE_TARGET_OPCODE(G_FCEIL)
 
@@ -554,12 +629,22 @@ HANDLE_TARGET_OPCODE(G_ADDRSPACE_CAST)
 /// Generic block address
 HANDLE_TARGET_OPCODE(G_BLOCK_ADDR)
 
-// TODO: Add more generic opcodes as we move along.
+/// Generic jump table address
+HANDLE_TARGET_OPCODE(G_JUMP_TABLE)
+
+/// Generic dynamic stack allocation.
+HANDLE_TARGET_OPCODE(G_DYN_STACKALLOC)
+
+/// read_register intrinsic
+HANDLE_TARGET_OPCODE(G_READ_REGISTER)
+
+/// write_register intrinsic
+HANDLE_TARGET_OPCODE(G_WRITE_REGISTER)
 
 /// Marker for the end of the generic opcode.
 /// This is used to check if an opcode is in the range of the
 /// generic opcodes.
-HANDLE_TARGET_OPCODE_MARKER(PRE_ISEL_GENERIC_OPCODE_END, G_BLOCK_ADDR)
+HANDLE_TARGET_OPCODE_MARKER(PRE_ISEL_GENERIC_OPCODE_END, G_WRITE_REGISTER)
 
 /// BUILTIN_OP_END - This must be the last enum value in this list.
 /// The target-specific post-isel opcode values start here.

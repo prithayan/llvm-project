@@ -1,5 +1,5 @@
-// RUN: %clang_cc1 -ffreestanding %s -triple=x86_64-apple-darwin -target-feature +sse4.1 -emit-llvm -o - -Wall -Werror | FileCheck %s
-// RUN: %clang_cc1 -ffreestanding %s -triple=x86_64-apple-darwin -target-feature +sse4.1 -fno-signed-char -emit-llvm -o - -Wall -Werror | FileCheck %s
+// RUN: %clang_cc1 -flax-vector-conversions=none -ffreestanding %s -triple=x86_64-apple-darwin -target-feature +sse4.1 -emit-llvm -o - -Wall -Werror | FileCheck %s
+// RUN: %clang_cc1 -flax-vector-conversions=none -ffreestanding %s -triple=x86_64-apple-darwin -target-feature +sse4.1 -fno-signed-char -emit-llvm -o - -Wall -Werror | FileCheck %s
 
 
 #include <immintrin.h>
@@ -182,11 +182,13 @@ int test_mm_extract_epi32(__m128i x) {
   return _mm_extract_epi32(x, 1);
 }
 
+#ifdef __x86_64__
 long long test_mm_extract_epi64(__m128i x) {
   // CHECK-LABEL: test_mm_extract_epi64
   // CHECK: extractelement <2 x i64> %{{.*}}, {{i32|i64}} 1
   return _mm_extract_epi64(x, 1);
 }
+#endif
 
 int test_mm_extract_ps(__m128 x) {
   // CHECK-LABEL: test_mm_extract_ps
@@ -230,11 +232,13 @@ __m128i test_mm_insert_epi32(__m128i x, int b) {
   return _mm_insert_epi32(x, b, 1);
 }
 
+#ifdef __x86_64__
 __m128i test_mm_insert_epi64(__m128i x, long long b) {
   // CHECK-LABEL: test_mm_insert_epi64
   // CHECK: insertelement <2 x i64> %{{.*}}, i64 %{{.*}}, {{i32|i64}} 1
   return _mm_insert_epi64(x, b, 1);
 }
+#endif
 
 __m128 test_mm_insert_ps(__m128 x, __m128 y) {
   // CHECK-LABEL: test_mm_insert_ps

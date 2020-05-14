@@ -124,21 +124,6 @@ MCSymbol *DebugHandlerBase::getLabelAfterInsn(const MachineInstr *MI) {
   return LabelsAfterInsn.lookup(MI);
 }
 
-// Return the function-local offset of an instruction.
-const MCExpr *
-DebugHandlerBase::getFunctionLocalOffsetAfterInsn(const MachineInstr *MI) {
-  MCContext &MC = Asm->OutContext;
-
-  MCSymbol *Start = Asm->getFunctionBegin();
-  const auto *StartRef = MCSymbolRefExpr::create(Start, MC);
-
-  MCSymbol *AfterInsn = getLabelAfterInsn(MI);
-  assert(AfterInsn && "Expected label after instruction");
-  const auto *AfterRef = MCSymbolRefExpr::create(AfterInsn, MC);
-
-  return MCBinaryExpr::createSub(AfterRef, StartRef, MC);
-}
-
 /// If this type is derived from a base type then return base type size.
 uint64_t DebugHandlerBase::getBaseTypeSize(const DIType *Ty) {
   assert(Ty);
@@ -246,8 +231,13 @@ void DebugHandlerBase::beginFunction(const MachineFunction *MF) {
                                        Pred.getInstr()->getDebugExpression());
                           }))
             break;
-          if (!IsDescribedByReg(I->getInstr()))
-            LabelsBeforeInsn[I->getInstr()] = Asm->getFunctionBegin();
+          // The code that generates location lists for DWARF assumes that the
+          // entries' start labels are monotonically increasing, and since we
+          // don't change the label for fragments that are described by
+          // registers, we must bail out when encountering such a fragment.
+          if (IsDescribedByReg(I->getInstr()))
+            break;
+          LabelsBeforeInsn[I->getInstr()] = Asm->getFunctionBegin();
         }
       }
     }
@@ -292,7 +282,7 @@ void DebugHandlerBase::beginInstruction(const MachineInstr *MI) {
 
   if (!PrevLabel) {
     PrevLabel = MMI->getContext().createTempSymbol();
-    Asm->OutStreamer->EmitLabel(PrevLabel);
+    Asm->OutStreamer->emitLabel(PrevLabel);
   }
   I->second = PrevLabel;
 }
@@ -324,7 +314,7 @@ void DebugHandlerBase::endInstruction() {
   // We need a label after this instruction.
   if (!PrevLabel) {
     PrevLabel = MMI->getContext().createTempSymbol();
-    Asm->OutStreamer->EmitLabel(PrevLabel);
+    Asm->OutStreamer->emitLabel(PrevLabel);
   }
   I->second = PrevLabel;
 }

@@ -15,7 +15,7 @@
 
 #include "llvm/ADT/ArrayRef.h"
 #include "llvm/ADT/StringRef.h"
-#include "llvm/Bitcode/BitCodes.h"
+#include "llvm/Bitstream/BitCodes.h"
 #include "llvm/IR/ModuleSummaryIndex.h"
 #include "llvm/Support/Endian.h"
 #include "llvm/Support/Error.h"
@@ -254,6 +254,8 @@ class Module;
     BufEnd = BufPtr+Size;
     return false;
   }
+
+  APInt readWideAPInt(ArrayRef<uint64_t> Vals, unsigned TypeBits);
 
   const std::error_category &BitcodeErrorCategory();
   enum class BitcodeError { CorruptedBitcode = 1 };

@@ -6,14 +6,15 @@
 //
 //===----------------------------------------------------------------------===//
 
-#ifndef liblldb_AppleObjCClassDescriptorV2_h_
-#define liblldb_AppleObjCClassDescriptorV2_h_
+#ifndef LLDB_SOURCE_PLUGINS_LANGUAGERUNTIME_OBJC_APPLEOBJCRUNTIME_APPLEOBJCCLASSDESCRIPTORV2_H
+#define LLDB_SOURCE_PLUGINS_LANGUAGERUNTIME_OBJC_APPLEOBJCRUNTIME_APPLEOBJCCLASSDESCRIPTORV2_H
 
 #include <mutex>
 
 #include "AppleObjCRuntimeV2.h"
-#include "lldb/Target/ObjCLanguageRuntime.h"
 #include "lldb/lldb-private.h"
+
+#include "Plugins/LanguageRuntime/ObjC/ObjCLanguageRuntime.h"
 
 namespace lldb_private {
 
@@ -327,4 +328,4 @@ private:
 
 } // namespace lldb_private
 
-#endif // liblldb_AppleObjCClassDescriptorV2_h_
+#endif // LLDB_SOURCE_PLUGINS_LANGUAGERUNTIME_OBJC_APPLEOBJCRUNTIME_APPLEOBJCCLASSDESCRIPTORV2_H

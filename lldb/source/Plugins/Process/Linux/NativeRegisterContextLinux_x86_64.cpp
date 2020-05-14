@@ -1,4 +1,4 @@
-//===-- NativeRegisterContextLinux_x86_64.cpp ---------------*- C++ -*-===//
+//===-- NativeRegisterContextLinux_x86_64.cpp -----------------------------===//
 //
 // Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
 // See https://llvm.org/LICENSE.txt for license information.
@@ -29,13 +29,13 @@ static inline int get_cpuid_count(unsigned int __leaf,
                                   unsigned int *__eax, unsigned int *__ebx,
                                   unsigned int *__ecx, unsigned int *__edx)
 {
-    unsigned int __max_leaf = __get_cpuid_max(__leaf & 0x80000000, 0);
+  unsigned int __max_leaf = __get_cpuid_max(__leaf & 0x80000000, nullptr);
 
-    if (__max_leaf == 0 || __max_leaf < __leaf)
-        return 0;
+  if (__max_leaf == 0 || __max_leaf < __leaf)
+    return 0;
 
-    __cpuid_count(__leaf, __subleaf, *__eax, *__ebx, *__ecx, *__edx);
-    return 1;
+  __cpuid_count(__leaf, __subleaf, *__eax, *__ebx, *__ecx, *__edx);
+  return 1;
 }
 
 using namespace lldb_private;
@@ -903,26 +903,13 @@ bool NativeRegisterContextLinux_x86_64::CopyXSTATEtoYMM(
     return false;
 
   if (byte_order == lldb::eByteOrderLittle) {
-    ::memcpy(m_ymm_set.ymm[reg_index - m_reg_info.first_ymm].bytes,
-             m_xstate->fxsave.xmm[reg_index - m_reg_info.first_ymm].bytes,
-             sizeof(XMMReg));
-    ::memcpy(m_ymm_set.ymm[reg_index - m_reg_info.first_ymm].bytes +
-                 sizeof(XMMReg),
-             m_xstate->xsave.ymmh[reg_index - m_reg_info.first_ymm].bytes,
-             sizeof(YMMHReg));
+    uint32_t reg_no = reg_index - m_reg_info.first_ymm;
+    m_ymm_set.ymm[reg_no] = XStateToYMM(
+        m_xstate->fxsave.xmm[reg_no].bytes,
+        m_xstate->xsave.ymmh[reg_no].bytes);
     return true;
   }
 
-  if (byte_order == lldb::eByteOrderBig) {
-    ::memcpy(m_ymm_set.ymm[reg_index - m_reg_info.first_ymm].bytes +
-                 sizeof(XMMReg),
-             m_xstate->fxsave.xmm[reg_index - m_reg_info.first_ymm].bytes,
-             sizeof(XMMReg));
-    ::memcpy(m_ymm_set.ymm[reg_index - m_reg_info.first_ymm].bytes,
-             m_xstate->xsave.ymmh[reg_index - m_reg_info.first_ymm].bytes,
-             sizeof(YMMHReg));
-    return true;
-  }
   return false; // unsupported or invalid byte order
 }
 
@@ -932,22 +919,13 @@ bool NativeRegisterContextLinux_x86_64::CopyYMMtoXSTATE(
     return false;
 
   if (byte_order == lldb::eByteOrderLittle) {
-    ::memcpy(m_xstate->fxsave.xmm[reg - m_reg_info.first_ymm].bytes,
-             m_ymm_set.ymm[reg - m_reg_info.first_ymm].bytes, sizeof(XMMReg));
-    ::memcpy(m_xstate->xsave.ymmh[reg - m_reg_info.first_ymm].bytes,
-             m_ymm_set.ymm[reg - m_reg_info.first_ymm].bytes + sizeof(XMMReg),
-             sizeof(YMMHReg));
+    uint32_t reg_no = reg - m_reg_info.first_ymm;
+    YMMToXState(m_ymm_set.ymm[reg_no],
+        m_xstate->fxsave.xmm[reg_no].bytes,
+        m_xstate->xsave.ymmh[reg_no].bytes);
     return true;
   }
 
-  if (byte_order == lldb::eByteOrderBig) {
-    ::memcpy(m_xstate->fxsave.xmm[reg - m_reg_info.first_ymm].bytes,
-             m_ymm_set.ymm[reg - m_reg_info.first_ymm].bytes + sizeof(XMMReg),
-             sizeof(XMMReg));
-    ::memcpy(m_xstate->xsave.ymmh[reg - m_reg_info.first_ymm].bytes,
-             m_ymm_set.ymm[reg - m_reg_info.first_ymm].bytes, sizeof(YMMHReg));
-    return true;
-  }
   return false; // unsupported or invalid byte order
 }
 
@@ -1213,8 +1191,8 @@ uint32_t NativeRegisterContextLinux_x86_64::SetHardwareWatchpoint(
         return wp_index;
     }
     if (error.Fail() && log) {
-      log->Printf("NativeRegisterContextLinux_x86_64::%s Error: %s",
-                  __FUNCTION__, error.AsCString());
+      LLDB_LOGF(log, "NativeRegisterContextLinux_x86_64::%s Error: %s",
+                __FUNCTION__, error.AsCString());
     }
   }
   return LLDB_INVALID_INDEX32;
@@ -1233,6 +1211,13 @@ NativeRegisterContextLinux_x86_64::GetWatchpointAddress(uint32_t wp_index) {
 uint32_t NativeRegisterContextLinux_x86_64::NumSupportedHardwareWatchpoints() {
   // Available debug address registers: dr0, dr1, dr2, dr3
   return 4;
+}
+
+uint32_t
+NativeRegisterContextLinux_x86_64::GetPtraceOffset(uint32_t reg_index) {
+  // If register is MPX, remove extra factor from gdb offset
+  return GetRegisterInfoAtIndex(reg_index)->byte_offset -
+         (IsMPX(reg_index) ? 128 : 0);
 }
 
 #endif // defined(__i386__) || defined(__x86_64__)

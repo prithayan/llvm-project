@@ -182,7 +182,8 @@ static bool ParseOneFlag(const char *Param) {
 }
 
 // We don't use any library to minimize dependencies.
-static void ParseFlags(const Vector<std::string> &Args) {
+static void ParseFlags(const Vector<std::string> &Args,
+                       const ExternalFunctions *EF) {
   for (size_t F = 0; F < kNumFlags; F++) {
     if (FlagDescriptions[F].IntFlag)
       *FlagDescriptions[F].IntFlag = FlagDescriptions[F].Default;
@@ -192,6 +193,14 @@ static void ParseFlags(const Vector<std::string> &Args) {
     if (FlagDescriptions[F].StrFlag)
       *FlagDescriptions[F].StrFlag = nullptr;
   }
+
+  // Disable len_control by default, if LLVMFuzzerCustomMutator is used.
+  if (EF->LLVMFuzzerCustomMutator) {
+    Flags.len_control = 0;
+    Printf("INFO: found LLVMFuzzerCustomMutator (%p). "
+           "Disabling -len_control by default.\n", EF->LLVMFuzzerCustomMutator);
+  }
+
   Inputs = new Vector<std::string>;
   for (size_t A = 1; A < Args.size(); A++) {
     if (ParseOneFlag(Args[A].c_str())) {
@@ -274,7 +283,8 @@ static void RssThread(Fuzzer *F, size_t RssLimitMb) {
 }
 
 static void StartRssThread(Fuzzer *F, size_t RssLimitMb) {
-  if (!RssLimitMb) return;
+  if (!RssLimitMb)
+    return;
   std::thread T(RssThread, F, RssLimitMb);
   T.detach();
 }
@@ -296,8 +306,7 @@ static bool AllInputsAreFiles() {
   return true;
 }
 
-static std::string GetDedupTokenFromFile(const std::string &Path) {
-  auto S = FileToString(Path);
+static std::string GetDedupTokenFromCmdOutput(const std::string &S) {
   auto Beg = S.find("DEDUP_TOKEN:");
   if (Beg == std::string::npos)
     return "";
@@ -322,10 +331,9 @@ int CleanseCrashInput(const Vector<std::string> &Args,
   assert(Cmd.hasArgument(InputFilePath));
   Cmd.removeArgument(InputFilePath);
 
-  auto LogFilePath = TempPath(".txt");
-  auto TmpFilePath = TempPath(".repro");
+  auto TmpFilePath = TempPath("CleanseCrashInput", ".repro");
   Cmd.addArgument(TmpFilePath);
-  Cmd.setOutputFile(LogFilePath);
+  Cmd.setOutputFile(getDevNull());
   Cmd.combineOutAndErr();
 
   std::string CurrentFilePath = InputFilePath;
@@ -360,7 +368,6 @@ int CleanseCrashInput(const Vector<std::string> &Args,
     }
     if (!Changed) break;
   }
-  RemoveFile(LogFilePath);
   return 0;
 }
 
@@ -383,8 +390,6 @@ int MinimizeCrashInput(const Vector<std::string> &Args,
     BaseCmd.addFlag("max_total_time", "600");
   }
 
-  auto LogFilePath = TempPath(".txt");
-  BaseCmd.setOutputFile(LogFilePath);
   BaseCmd.combineOutAndErr();
 
   std::string CurrentFilePath = InputFilePath;
@@ -396,17 +401,17 @@ int MinimizeCrashInput(const Vector<std::string> &Args,
     Command Cmd(BaseCmd);
     Cmd.addArgument(CurrentFilePath);
 
-    std::string CommandLine = Cmd.toString();
-    Printf("CRASH_MIN: executing: %s\n", CommandLine.c_str());
-    int ExitCode = ExecuteCommand(Cmd);
-    if (ExitCode == 0) {
+    Printf("CRASH_MIN: executing: %s\n", Cmd.toString().c_str());
+    std::string CmdOutput;
+    bool Success = ExecuteCommand(Cmd, &CmdOutput);
+    if (Success) {
       Printf("ERROR: the input %s did not crash\n", CurrentFilePath.c_str());
       exit(1);
     }
     Printf("CRASH_MIN: '%s' (%zd bytes) caused a crash. Will try to minimize "
            "it further\n",
            CurrentFilePath.c_str(), U.size());
-    auto DedupToken1 = GetDedupTokenFromFile(LogFilePath);
+    auto DedupToken1 = GetDedupTokenFromCmdOutput(CmdOutput);
     if (!DedupToken1.empty())
       Printf("CRASH_MIN: DedupToken1: %s\n", DedupToken1.c_str());
 
@@ -416,11 +421,11 @@ int MinimizeCrashInput(const Vector<std::string> &Args,
             : Options.ArtifactPrefix + "minimized-from-" + Hash(U);
     Cmd.addFlag("minimize_crash_internal_step", "1");
     Cmd.addFlag("exact_artifact_path", ArtifactPath);
-    CommandLine = Cmd.toString();
-    Printf("CRASH_MIN: executing: %s\n", CommandLine.c_str());
-    ExitCode = ExecuteCommand(Cmd);
-    CopyFileToErr(LogFilePath);
-    if (ExitCode == 0) {
+    Printf("CRASH_MIN: executing: %s\n", Cmd.toString().c_str());
+    CmdOutput.clear();
+    Success = ExecuteCommand(Cmd, &CmdOutput);
+    Printf("%s", CmdOutput.c_str());
+    if (Success) {
       if (Flags.exact_artifact_path) {
         CurrentFilePath = Flags.exact_artifact_path;
         WriteToFile(U, CurrentFilePath);
@@ -429,7 +434,7 @@ int MinimizeCrashInput(const Vector<std::string> &Args,
              CurrentFilePath.c_str(), U.size());
       break;
     }
-    auto DedupToken2 = GetDedupTokenFromFile(LogFilePath);
+    auto DedupToken2 = GetDedupTokenFromCmdOutput(CmdOutput);
     if (!DedupToken2.empty())
       Printf("CRASH_MIN: DedupToken2: %s\n", DedupToken2.c_str());
 
@@ -446,7 +451,6 @@ int MinimizeCrashInput(const Vector<std::string> &Args,
     CurrentFilePath = ArtifactPath;
     Printf("*********************************\n");
   }
-  RemoveFile(LogFilePath);
   return 0;
 }
 
@@ -481,7 +485,7 @@ void Merge(Fuzzer *F, FuzzingOptions &Options, const Vector<std::string> &Args,
   std::sort(OldCorpus.begin(), OldCorpus.end());
   std::sort(NewCorpus.begin(), NewCorpus.end());
 
-  std::string CFPath = CFPathOrNull ? CFPathOrNull : TempPath(".txt");
+  std::string CFPath = CFPathOrNull ? CFPathOrNull : TempPath("Merge", ".txt");
   Vector<std::string> NewFiles;
   Set<uint32_t> NewFeatures, NewCov;
   CrashResistantMerge(Args, OldCorpus, NewCorpus, &NewFiles, {}, &NewFeatures,
@@ -616,7 +620,7 @@ int FuzzerDriver(int *argc, char ***argv, UserCallback Callback) {
     Printf("ERROR: argv[0] has been modified in LLVMFuzzerInitialize\n");
     exit(1);
   }
-  ParseFlags(Args);
+  ParseFlags(Args, EF);
   if (Flags.help) {
     PrintHelp();
     return 0;
@@ -700,7 +704,10 @@ int FuzzerDriver(int *argc, char ***argv, UserCallback Callback) {
     Options.DataFlowTrace = Flags.data_flow_trace;
   if (Flags.features_dir)
     Options.FeaturesDir = Flags.features_dir;
-  Options.LazyCounters = Flags.lazy_counters;
+  if (Flags.collect_data_flow)
+    Options.CollectDataFlow = Flags.collect_data_flow;
+  if (Flags.stop_file)
+    Options.StopFile = Flags.stop_file;
 
   unsigned Seed = Flags.seed;
   // Initialize Seed.
@@ -710,7 +717,7 @@ int FuzzerDriver(int *argc, char ***argv, UserCallback Callback) {
   if (Flags.verbosity)
     Printf("INFO: Seed: %u\n", Seed);
 
-  if (Flags.collect_data_flow) {
+  if (Flags.collect_data_flow && !Flags.fork && !Flags.merge) {
     if (RunIndividualFiles)
       return CollectDataFlow(Flags.collect_data_flow, Flags.data_flow_trace,
                         ReadCorpora({}, *Inputs));
@@ -728,7 +735,11 @@ int FuzzerDriver(int *argc, char ***argv, UserCallback Callback) {
     if (U.size() <= Word::GetMaxSize())
       MD->AddWordToManualDictionary(Word(U.data(), U.size()));
 
+      // Threads are only supported by Chrome. Don't use them with emscripten
+      // for now.
+#if !LIBFUZZER_EMSCRIPTEN
   StartRssThread(F, Flags.rss_limit_mb);
+#endif // LIBFUZZER_EMSCRIPTEN
 
   Options.HandleAbrt = Flags.handle_abrt;
   Options.HandleBus = Flags.handle_bus;

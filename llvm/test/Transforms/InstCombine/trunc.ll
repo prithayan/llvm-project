@@ -125,8 +125,8 @@ define i16 @ashr_mul(i8 %X, i8 %Y) {
 
 define i32 @trunc_ashr(i32 %X) {
 ; CHECK-LABEL: @trunc_ashr(
-; CHECK-NEXT:    [[B:%.*]] = or i32 [[X:%.*]], -2147483648
-; CHECK-NEXT:    [[C:%.*]] = ashr i32 [[B]], 8
+; CHECK-NEXT:    [[TMP1:%.*]] = lshr i32 [[X:%.*]], 8
+; CHECK-NEXT:    [[C:%.*]] = or i32 [[TMP1]], -8388608
 ; CHECK-NEXT:    ret i32 [[C]]
 ;
   %A = zext i32 %X to i36
@@ -138,8 +138,8 @@ define i32 @trunc_ashr(i32 %X) {
 
 define <2 x i32> @trunc_ashr_vec(<2 x i32> %X) {
 ; CHECK-LABEL: @trunc_ashr_vec(
-; CHECK-NEXT:    [[B:%.*]] = or <2 x i32> [[X:%.*]], <i32 -2147483648, i32 -2147483648>
-; CHECK-NEXT:    [[C:%.*]] = ashr <2 x i32> [[B]], <i32 8, i32 8>
+; CHECK-NEXT:    [[TMP1:%.*]] = lshr <2 x i32> [[X:%.*]], <i32 8, i32 8>
+; CHECK-NEXT:    [[C:%.*]] = or <2 x i32> [[TMP1]], <i32 -8388608, i32 -8388608>
 ; CHECK-NEXT:    ret <2 x i32> [[C]]
 ;
   %A = zext <2 x i32> %X to <2 x i36>
@@ -626,3 +626,19 @@ define <2 x i8> @narrow_sub_vec_constant(<2 x i32> %x) {
   ret <2 x i8> %tr
 }
 
+; If the select is narrowed based on the target's datalayout, we allow more optimizations.
+
+define i16 @PR44545(i32 %t0, i32 %data) {
+; CHECK-LABEL: @PR44545(
+; CHECK-NEXT:    [[ISZERO:%.*]] = icmp eq i32 [[DATA:%.*]], 0
+; CHECK-NEXT:    [[TMP1:%.*]] = trunc i32 [[T0:%.*]] to i16
+; CHECK-NEXT:    [[SUB:%.*]] = select i1 [[ISZERO]], i16 -1, i16 [[TMP1]]
+; CHECK-NEXT:    ret i16 [[SUB]]
+;
+  %t1 = add nuw nsw i32 %t0, 1
+  %iszero = icmp eq i32 %data, 0
+  %ffs = select i1 %iszero, i32 0, i32 %t1
+  %cast = trunc i32 %ffs to i16
+  %sub = add nsw i16 %cast, -1
+  ret i16 %sub
+}

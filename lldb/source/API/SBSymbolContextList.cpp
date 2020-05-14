@@ -1,4 +1,4 @@
-//===-- SBSymbolContextList.cpp ---------------------------------*- C++ -*-===//
+//===-- SBSymbolContextList.cpp -------------------------------------------===//
 //
 // Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
 // See https://llvm.org/LICENSE.txt for license information.
@@ -28,7 +28,7 @@ SBSymbolContextList::SBSymbolContextList(const SBSymbolContextList &rhs)
   m_opaque_up = clone(rhs.m_opaque_up);
 }
 
-SBSymbolContextList::~SBSymbolContextList() {}
+SBSymbolContextList::~SBSymbolContextList() = default;
 
 const SBSymbolContextList &SBSymbolContextList::
 operator=(const SBSymbolContextList &rhs) {
@@ -93,7 +93,7 @@ bool SBSymbolContextList::IsValid() const {
 SBSymbolContextList::operator bool() const {
   LLDB_RECORD_METHOD_CONST_NO_ARGS(bool, SBSymbolContextList, operator bool);
 
-  return m_opaque_up != NULL;
+  return m_opaque_up != nullptr;
 }
 
 lldb_private::SymbolContextList *SBSymbolContextList::operator->() const {
@@ -111,7 +111,7 @@ bool SBSymbolContextList::GetDescription(lldb::SBStream &description) {
 
   Stream &strm = description.ref();
   if (m_opaque_up)
-    m_opaque_up->GetDescription(&strm, lldb::eDescriptionLevelFull, NULL);
+    m_opaque_up->GetDescription(&strm, lldb::eDescriptionLevelFull, nullptr);
   return true;
 }
 

@@ -28,12 +28,24 @@
 #ifdef _ARCH_PWR8
 #define PPC64_HAS_VMX
 #endif
-#elif defined(__POWERPC__) || defined(__powerpc__) || defined(__ppc__)
-#define SEPARATOR @
-#elif defined(__arm64__)
+#elif defined(__APPLE__) && defined(__aarch64__)
 #define SEPARATOR %%
 #else
 #define SEPARATOR ;
+#endif
+
+#if defined(__powerpc64__) && (!defined(_CALL_ELF) || _CALL_ELF == 1)
+#define PPC64_OPD1 .section .opd,"aw",@progbits SEPARATOR
+#define PPC64_OPD2 SEPARATOR \
+  .p2align 3 SEPARATOR \
+  .quad .Lfunc_begin0 SEPARATOR \
+  .quad .TOC.@tocbase SEPARATOR \
+  .quad 0 SEPARATOR \
+  .text SEPARATOR \
+.Lfunc_begin0:
+#else
+#define PPC64_OPD1
+#define PPC64_OPD2
 #endif
 
 #define GLUE2(a, b) a ## b
@@ -63,9 +75,16 @@
 #define EXPORT_SYMBOL(name)
 #define HIDDEN_SYMBOL(name) .hidden name
 #define WEAK_SYMBOL(name) .weak name
+
+#if defined(__hexagon__)
+#define WEAK_ALIAS(name, aliasname) \
+  WEAK_SYMBOL(aliasname) SEPARATOR                                             \
+  .equiv SYMBOL_NAME(aliasname), SYMBOL_NAME(name)
+#else
 #define WEAK_ALIAS(name, aliasname)                                            \
   WEAK_SYMBOL(aliasname) SEPARATOR                                             \
   SYMBOL_NAME(aliasname) = SYMBOL_NAME(name)
+#endif
 
 #if defined(__GNU__) || defined(__FreeBSD__) || defined(__Fuchsia__) || \
     defined(__linux__)
@@ -123,7 +142,9 @@
   .globl SYMBOL_NAME(name) SEPARATOR                                           \
   HIDDEN_SYMBOL(SYMBOL_NAME(name)) SEPARATOR                                   \
   SYMBOL_IS_FUNC(SYMBOL_NAME(name)) SEPARATOR                                  \
-  SYMBOL_NAME(name):
+  PPC64_OPD1                                                                   \
+  SYMBOL_NAME(name):                                                           \
+  PPC64_OPD2
 
 #if defined(__arm__)
 #if !defined(__ARM_ARCH)

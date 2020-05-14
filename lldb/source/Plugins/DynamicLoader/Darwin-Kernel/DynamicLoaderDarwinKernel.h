@@ -6,8 +6,8 @@
 //
 //===----------------------------------------------------------------------===//
 
-#ifndef liblldb_DynamicLoaderDarwinKernel_h_
-#define liblldb_DynamicLoaderDarwinKernel_h_
+#ifndef LLDB_SOURCE_PLUGINS_DYNAMICLOADER_DARWIN_KERNEL_DYNAMICLOADERDARWINKERNEL_H
+#define LLDB_SOURCE_PLUGINS_DYNAMICLOADER_DARWIN_KERNEL_DYNAMICLOADERDARWINKERNEL_H
 
 #include <mutex>
 #include <string>
@@ -240,7 +240,7 @@ protected:
       image_infos_addr = LLDB_INVALID_ADDRESS;
     }
 
-    bool IsValid() const { return version >= 1 || version <= 2; }
+    bool IsValid() const { return version >= 1 && version <= 2; }
   };
 
   void RegisterNotificationCallbacks();
@@ -299,4 +299,4 @@ private:
   DISALLOW_COPY_AND_ASSIGN(DynamicLoaderDarwinKernel);
 };
 
-#endif // liblldb_DynamicLoaderDarwinKernel_h_
+#endif // LLDB_SOURCE_PLUGINS_DYNAMICLOADER_DARWIN_KERNEL_DYNAMICLOADERDARWINKERNEL_H

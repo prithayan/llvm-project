@@ -6,8 +6,8 @@
 //
 //===----------------------------------------------------------------------===//
 
-#ifndef liblldb_RegisterContext_x86_H_
-#define liblldb_RegisterContext_x86_H_
+#ifndef LLDB_SOURCE_PLUGINS_PROCESS_UTILITY_REGISTERCONTEXT_X86_H
+#define LLDB_SOURCE_PLUGINS_PROCESS_UTILITY_REGISTERCONTEXT_X86_H
 
 #include <cstddef>
 #include <cstdint>
@@ -352,6 +352,22 @@ union FPR {
 };
 
 LLVM_ENABLE_BITMASK_ENUMS_IN_NAMESPACE();
+
+// Convenience function to combine YMM register data from XSAVE-style input.
+inline YMMReg XStateToYMM(const void* xmm_bytes, const void* ymmh_bytes) {
+  YMMReg ret;
+
+  ::memcpy(ret.bytes, xmm_bytes, sizeof(XMMReg));
+  ::memcpy(ret.bytes + sizeof(XMMReg), ymmh_bytes, sizeof(YMMHReg));
+
+  return ret;
+}
+
+// Convenience function to copy YMM register data into XSAVE-style output.
+inline void YMMToXState(const YMMReg& input, void* xmm_bytes, void* ymmh_bytes) {
+  ::memcpy(xmm_bytes, input.bytes, sizeof(XMMReg));
+  ::memcpy(ymmh_bytes, input.bytes + sizeof(XMMReg), sizeof(YMMHReg));
+}
 
 } // namespace lldb_private
 

@@ -595,9 +595,12 @@ Error writeImportLibrary(StringRef ImportName, StringRef Path,
       ImportType = IMPORT_CONST;
 
     StringRef SymbolName = E.SymbolName.empty() ? E.Name : E.SymbolName;
-    ImportNameType NameType = getNameType(SymbolName, E.Name, Machine, MinGW);
+    ImportNameType NameType = E.Noname
+                                  ? IMPORT_ORDINAL
+                                  : getNameType(SymbolName, E.Name,
+                                                Machine, MinGW);
     Expected<std::string> Name = E.ExtName.empty()
-                                     ? SymbolName
+                                     ? std::string(SymbolName)
                                      : replace(SymbolName, E.Name, E.ExtName);
 
     if (!Name)

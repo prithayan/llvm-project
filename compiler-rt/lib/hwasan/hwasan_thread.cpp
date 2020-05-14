@@ -27,6 +27,11 @@ static u32 RandomSeed() {
 
 void Thread::InitRandomState() {
   random_state_ = flags()->random_tags ? RandomSeed() : unique_id_;
+
+  // Push a random number of zeros onto the ring buffer so that the first stack
+  // tag base will be random.
+  for (tag_t i = 0, e = GenerateRandomTag(); i != e; ++i)
+    stack_allocations_->push(0);
 }
 
 void Thread::Init(uptr stack_buffer_start, uptr stack_buffer_size) {
@@ -85,6 +90,12 @@ void Thread::Destroy() {
   if (heap_allocations_)
     heap_allocations_->Delete();
   DTLS_Destroy();
+  // Unregister this as the current thread.
+  // Instrumented code can not run on this thread from this point onwards, but
+  // malloc/free can still be served. Glibc may call free() very late, after all
+  // TSD destructors are done.
+  CHECK_EQ(GetCurrentThread(), this);
+  *GetCurrentThreadLongPtr() = 0;
 }
 
 void Thread::Print(const char *Prefix) {

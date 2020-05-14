@@ -53,6 +53,9 @@ public:
 
   virtual void EmitAMDGPUSymbolType(StringRef SymbolName, unsigned Type) = 0;
 
+  virtual void emitAMDGPULDS(MCSymbol *Symbol, unsigned Size,
+                             unsigned Align) = 0;
+
   /// \returns True on success, false on failure.
   virtual bool EmitISAVersion(StringRef IsaVersionString) = 0;
 
@@ -107,6 +110,8 @@ public:
 
   void EmitAMDGPUSymbolType(StringRef SymbolName, unsigned Type) override;
 
+  void emitAMDGPULDS(MCSymbol *Sym, unsigned Size, unsigned Align) override;
+
   /// \returns True on success, false on failure.
   bool EmitISAVersion(StringRef IsaVersionString) override;
 
@@ -128,6 +133,7 @@ public:
 
 class AMDGPUTargetELFStreamer final : public AMDGPUTargetStreamer {
   MCStreamer &Streamer;
+  Triple::OSType Os;
 
   void EmitNote(StringRef Name, const MCExpr *DescSize, unsigned NoteType,
                 function_ref<void(MCELFStreamer &)> EmitDesc);
@@ -151,6 +157,8 @@ public:
   void EmitAMDKernelCodeT(const amd_kernel_code_t &Header) override;
 
   void EmitAMDGPUSymbolType(StringRef SymbolName, unsigned Type) override;
+
+  void emitAMDGPULDS(MCSymbol *Sym, unsigned Size, unsigned Align) override;
 
   /// \returns True on success, false on failure.
   bool EmitISAVersion(StringRef IsaVersionString) override;

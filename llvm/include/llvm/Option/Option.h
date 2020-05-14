@@ -130,7 +130,7 @@ public:
 
   /// Get the name of this option with the default prefix.
   std::string getPrefixedName() const {
-    std::string Ret = getPrefix();
+    std::string Ret(getPrefix());
     Ret += getName();
     return Ret;
   }
@@ -206,6 +206,11 @@ public:
   ///                start.
   Arg *accept(const ArgList &Args, unsigned &Index, unsigned ArgSize) const;
 
+private:
+  Arg *acceptInternal(const ArgList &Args, unsigned &Index,
+                      unsigned ArgSize) const;
+
+public:
   void print(raw_ostream &O) const;
   void dump() const;
 };

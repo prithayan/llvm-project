@@ -17,29 +17,20 @@ if(LLVM_BUILD_LLVM_DYLIB)
 
   llvm_map_components_to_libnames(LIB_NAMES ${LLVM_DYLIB_COMPONENTS})
 
-  # libLLVM.so should not have any dependencies on any other LLVM
-  # shared libraries. When using the "all" pseudo-component,
-  # LLVM_AVAILABLE_LIBS is added to the dependencies, which may
-  # contain shared libraries (e.g. libLTO).
-  #
-  # Also exclude libLLVMTableGen for the following reasons:
+  # Exclude libLLVMTableGen for the following reasons:
   #  - it is only used by internal *-tblgen utilities;
   #  - it pollutes the global options space.
-  foreach(lib ${LIB_NAMES})
-    get_target_property(t ${lib} TYPE)
-    if("${lib}" STREQUAL "LLVMTableGen")
-    elseif("x${t}" STREQUAL "xSTATIC_LIBRARY")
-      list(APPEND FILTERED_LIB_NAMES ${lib})
-    endif()
-  endforeach()
-  set(LIB_NAMES ${FILTERED_LIB_NAMES})
+  list(REMOVE_ITEM LIB_NAMES "LLVMTableGen")
 
   if(LLVM_DYLIB_EXPORTED_SYMBOL_FILE)
     set(LLVM_EXPORTED_SYMBOL_FILE ${LLVM_DYLIB_EXPORTED_SYMBOL_FILE})
     add_custom_target(libLLVMExports DEPENDS ${LLVM_EXPORTED_SYMBOL_FILE})
   endif()
 
-  add_llvm_library(LLVM SHARED DISABLE_LLVM_LINK_LLVM_DYLIB SONAME ${SOURCES})
+  if (LLVM_LINK_LLVM_DYLIB)
+    set(INSTALL_WITH_TOOLCHAIN INSTALL_WITH_TOOLCHAIN)
+  endif()
+  add_llvm_library(LLVM SHARED DISABLE_LLVM_LINK_LLVM_DYLIB SONAME ${INSTALL_WITH_TOOLCHAIN} ${SOURCES})
 
   list(REMOVE_DUPLICATES LIB_NAMES)
   if(("${CMAKE_SYSTEM_NAME}" STREQUAL "Linux") OR (MINGW) OR (HAIKU)
@@ -55,7 +46,7 @@ if(LLVM_BUILD_LLVM_DYLIB)
 
     # GNU ld doesn't resolve symbols in the version script.
     set(LIB_NAMES -Wl,--whole-archive ${LIB_NAMES} -Wl,--no-whole-archive)
-    if (NOT LLVM_LINKER_IS_SOLARISLD)
+    if (NOT LLVM_LINKER_IS_SOLARISLD AND NOT MINGW)
       # Solaris ld does not accept global: *; so there is no way to version *all* global symbols
       set(LIB_NAMES -Wl,--version-script,${LLVM_LIBRARY_DIR}/tools/llvm-shlib/simple_version_script.map ${LIB_NAMES})
     endif()
@@ -105,7 +96,7 @@ if(LLVM_BUILD_LLVM_C_DYLIB AND NOT MSVC)
 
   add_custom_target(libLLVMCExports DEPENDS ${LLVM_EXPORTED_SYMBOL_FILE})
 
-  add_llvm_library(LLVM-C SHARED ${SOURCES})
+  add_llvm_library(LLVM-C SHARED ${SOURCES} INSTALL_WITH_TOOLCHAIN)
   
   target_link_libraries(LLVM-C PUBLIC LLVM)
   add_dependencies(LLVM-C libLLVMCExports)
@@ -115,7 +106,7 @@ if(LLVM_BUILD_LLVM_C_DYLIB AND NOT MSVC)
               " -compatibility_version 1 -current_version ${LLVM_VERSION_MAJOR}.${LLVM_VERSION_MINOR}.${LLVM_VERSION_PATCH} -Wl,-reexport_library ${LIB_PATH}")
 endif()
 
-if(MSVC)
+if(LLVM_BUILD_LLVM_C_DYLIB AND MSVC)
   # Build the LLVM-C.dll library that exports the C API.
 
   set(LLVM_LINK_COMPONENTS
@@ -173,12 +164,12 @@ if(MSVC)
   endif()
 
   add_custom_command(OUTPUT ${LLVM_EXPORTED_SYMBOL_FILE}
-    COMMAND ${PYTHON_EXECUTABLE} ${GEN_SCRIPT} --libsfile ${LIBSFILE} ${GEN_UNDERSCORE} --nm "${llvm_nm}" -o ${LLVM_EXPORTED_SYMBOL_FILE}
+    COMMAND "${Python3_EXECUTABLE}" ${GEN_SCRIPT} --libsfile ${LIBSFILE} ${GEN_UNDERSCORE} --nm "${llvm_nm}" -o ${LLVM_EXPORTED_SYMBOL_FILE}
     DEPENDS ${LIB_NAMES} ${llvm_nm_target}
     COMMENT "Generating export list for LLVM-C"
     VERBATIM )
 
   # Finally link the target.
-  add_llvm_library(LLVM-C SHARED ${SOURCES} DEPENDS intrinsics_gen)
+  add_llvm_library(LLVM-C SHARED INSTALL_WITH_TOOLCHAIN ${SOURCES} DEPENDS intrinsics_gen)
 
 endif()

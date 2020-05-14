@@ -1,5 +1,4 @@
-//===-- SBTypeSummary.cpp -----------------------------------------*- C++
-//-*-===//
+//===-- SBTypeSummary.cpp -------------------------------------------------===//
 //
 // Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
 // See https://llvm.org/LICENSE.txt for license information.
@@ -33,7 +32,7 @@ SBTypeSummaryOptions::SBTypeSummaryOptions(
   m_opaque_up = clone(rhs.m_opaque_up);
 }
 
-SBTypeSummaryOptions::~SBTypeSummaryOptions() {}
+SBTypeSummaryOptions::~SBTypeSummaryOptions() = default;
 
 bool SBTypeSummaryOptions::IsValid() {
   LLDB_RECORD_METHOD_NO_ARGS(bool, SBTypeSummaryOptions, IsValid);
@@ -193,7 +192,7 @@ SBTypeSummary::SBTypeSummary(const lldb::SBTypeSummary &rhs)
   LLDB_RECORD_CONSTRUCTOR(SBTypeSummary, (const lldb::SBTypeSummary &), rhs);
 }
 
-SBTypeSummary::~SBTypeSummary() {}
+SBTypeSummary::~SBTypeSummary() = default;
 
 bool SBTypeSummary::IsValid() const {
   LLDB_RECORD_METHOD_CONST_NO_ARGS(bool, SBTypeSummary, IsValid);
@@ -202,7 +201,7 @@ bool SBTypeSummary::IsValid() const {
 SBTypeSummary::operator bool() const {
   LLDB_RECORD_METHOD_CONST_NO_ARGS(bool, SBTypeSummary, operator bool);
 
-  return m_opaque_sp.get() != NULL;
+  return m_opaque_sp.get() != nullptr;
 }
 
 bool SBTypeSummary::IsFunctionCode() {
@@ -244,7 +243,7 @@ const char *SBTypeSummary::GetData() {
   LLDB_RECORD_METHOD_NO_ARGS(const char *, SBTypeSummary, GetData);
 
   if (!IsValid())
-    return NULL;
+    return nullptr;
   if (ScriptSummaryFormat *script_summary_ptr =
           llvm::dyn_cast<ScriptSummaryFormat>(m_opaque_sp.get())) {
     const char *fname = script_summary_ptr->GetFunctionName();

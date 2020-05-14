@@ -223,6 +223,8 @@ Error DumpOutputStyle::dump() {
       return EC;
   }
 
+  P.NewLine();
+
   return Error::success();
 }
 
@@ -894,7 +896,7 @@ Error DumpOutputStyle::dumpUdtStats() {
                       return L.Stat.Size > R.Stat.Size;
                     });
   for (const auto &Stat : NamespacedStatsSorted) {
-    std::string Label = formatv("namespace '{0}'", Stat.Key);
+    std::string Label = std::string(formatv("namespace '{0}'", Stat.Key));
     P.formatLine("{0} | {1:N}  {2:N}",
                  fmt_align(Label, AlignStyle::Right, FieldWidth),
                  fmt_align(Stat.Stat.Count, AlignStyle::Right, CD),
@@ -995,6 +997,10 @@ Error DumpOutputStyle::dumpInlineeLines() {
           P.formatLine("{0,+8} | {1,+5} | ", Entry.Header->Inlinee,
                        fmtle(Entry.Header->SourceLineNum));
           Strings.formatFromChecksumsOffset(P, Entry.Header->FileID, true);
+          for (const auto &ExtraFileID : Entry.ExtraFiles) {
+            P.formatLine("                   ");
+            Strings.formatFromChecksumsOffset(P, ExtraFileID, true);
+          }
         }
         P.NewLine();
       });
@@ -1033,7 +1039,7 @@ Error DumpOutputStyle::dumpXmi() {
           }
           std::vector<std::string> TIs;
           for (const auto I : Xmi.Imports)
-            TIs.push_back(formatv("{0,+10:X+}", fmtle(I)));
+            TIs.push_back(std::string(formatv("{0,+10:X+}", fmtle(I))));
           std::string Result =
               typesetItemList(TIs, P.getIndentLevel() + 35, 12, " ");
           P.formatLine("{0,+32} | {1}", Module, Result);
@@ -1363,9 +1369,10 @@ Error DumpOutputStyle::dumpTypesFromObjectFile() {
   LazyRandomTypeCollection Types(100);
 
   for (const auto &S : getObj().sections()) {
-    StringRef SectionName;
-    if (auto EC = S.getName(SectionName))
-      return errorCodeToError(EC);
+    Expected<StringRef> NameOrErr = S.getName();
+    if (!NameOrErr)
+      return NameOrErr.takeError();
+    StringRef SectionName = *NameOrErr;
 
     // .debug$T is a standard CodeView type section, while .debug$P is the same
     // format but used for MSVC precompiled header object files.
@@ -1376,12 +1383,12 @@ Error DumpOutputStyle::dumpTypesFromObjectFile() {
     else
       continue;
 
-    StringRef Contents;
-    if (auto EC = S.getContents(Contents))
-      return errorCodeToError(EC);
+    Expected<StringRef> ContentsOrErr = S.getContents();
+    if (!ContentsOrErr)
+      return ContentsOrErr.takeError();
 
     uint32_t Magic;
-    BinaryStreamReader Reader(Contents, llvm::support::little);
+    BinaryStreamReader Reader(*ContentsOrErr, llvm::support::little);
     if (auto EC = Reader.readInteger(Magic))
       return EC;
     if (Magic != COFF::DEBUG_SECTION_MAGIC)
@@ -1400,7 +1407,7 @@ Error DumpOutputStyle::dumpTypesFromObjectFile() {
 
       P.formatLine("Local / Global hashes:");
       TypeIndex TI(TypeIndex::FirstNonSimpleIndex);
-      for (const auto &H : zip(LocalHashes, GlobalHashes)) {
+      for (auto H : zip(LocalHashes, GlobalHashes)) {
         AutoIndent Indent2(P);
         LocallyHashedType &L = std::get<0>(H);
         GloballyHashedType &G = std::get<1>(H);
@@ -1545,7 +1552,7 @@ Error DumpOutputStyle::dumpModuleSymsForObj() {
         Dumper.setSymbolGroup(&Strings);
         for (auto Symbol : Symbols) {
           if (auto EC = Visitor.visitSymbolRecord(Symbol)) {
-            SymbolError = llvm::make_unique<Error>(std::move(EC));
+            SymbolError = std::make_unique<Error>(std::move(EC));
             return;
           }
         }

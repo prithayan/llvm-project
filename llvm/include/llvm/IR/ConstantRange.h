@@ -327,16 +327,36 @@ public:
                          const ConstantRange &Other) const;
 
   /// Return a new range representing the possible values resulting
+  /// from an application of the specified overflowing binary operator to a
+  /// left hand side of this range and a right hand side of \p Other given
+  /// the provided knowledge about lack of wrapping \p NoWrapKind.
+  ConstantRange overflowingBinaryOp(Instruction::BinaryOps BinOp,
+                                    const ConstantRange &Other,
+                                    unsigned NoWrapKind) const;
+
+  /// Return a new range representing the possible values resulting
   /// from an addition of a value in this range and a value in \p Other.
   ConstantRange add(const ConstantRange &Other) const;
 
-  /// Return a new range representing the possible values resulting from a
-  /// known NSW addition of a value in this range and \p Other constant.
-  ConstantRange addWithNoSignedWrap(const APInt &Other) const;
+  /// Return a new range representing the possible values resulting
+  /// from an addition with wrap type \p NoWrapKind of a value in this
+  /// range and a value in \p Other.
+  /// If the result range is disjoint, the preferred range is determined by the
+  /// \p PreferredRangeType.
+  ConstantRange addWithNoWrap(const ConstantRange &Other, unsigned NoWrapKind,
+                              PreferredRangeType RangeType = Smallest) const;
 
   /// Return a new range representing the possible values resulting
   /// from a subtraction of a value in this range and a value in \p Other.
   ConstantRange sub(const ConstantRange &Other) const;
+
+  /// Return a new range representing the possible values resulting
+  /// from an subtraction with wrap type \p NoWrapKind of a value in this
+  /// range and a value in \p Other.
+  /// If the result range is disjoint, the preferred range is determined by the
+  /// \p PreferredRangeType.
+  ConstantRange subWithNoWrap(const ConstantRange &Other, unsigned NoWrapKind,
+                              PreferredRangeType RangeType = Smallest) const;
 
   /// Return a new range representing the possible values resulting
   /// from a multiplication of a value in this range and a value in \p Other,
@@ -365,6 +385,13 @@ public:
   ConstantRange udiv(const ConstantRange &Other) const;
 
   /// Return a new range representing the possible values resulting
+  /// from a signed division of a value in this range and a value in
+  /// \p Other. Division by zero and division of SignedMin by -1 are considered
+  /// undefined behavior, in line with IR, and do not contribute towards the
+  /// result.
+  ConstantRange sdiv(const ConstantRange &Other) const;
+
+  /// Return a new range representing the possible values resulting
   /// from an unsigned remainder operation of a value in this range and a
   /// value in \p Other.
   ConstantRange urem(const ConstantRange &Other) const;
@@ -381,6 +408,10 @@ public:
   /// Return a new range representing the possible values resulting
   /// from a binary-or of a value in this range by a value in \p Other.
   ConstantRange binaryOr(const ConstantRange &Other) const;
+
+  /// Return a new range representing the possible values resulting
+  /// from a binary-xor of a value in this range by a value in \p Other.
+  ConstantRange binaryXor(const ConstantRange &Other) const;
 
   /// Return a new range representing the possible values resulting
   /// from a left shift of a value in this range by a value in \p Other.
@@ -407,6 +438,20 @@ public:
   /// Perform a signed saturating subtraction of two constant ranges.
   ConstantRange ssub_sat(const ConstantRange &Other) const;
 
+  /// Perform an unsigned saturating multiplication of two constant ranges.
+  ConstantRange umul_sat(const ConstantRange &Other) const;
+
+  /// Perform a signed saturating multiplication of two constant ranges.
+  ConstantRange smul_sat(const ConstantRange &Other) const;
+
+  /// Perform an unsigned saturating left shift of this constant range by a
+  /// value in \p Other.
+  ConstantRange ushl_sat(const ConstantRange &Other) const;
+
+  /// Perform a signed saturating left shift of this constant range by a
+  /// value in \p Other.
+  ConstantRange sshl_sat(const ConstantRange &Other) const;
+
   /// Return a new range that is the logical not of the current set.
   ConstantRange inverse() const;
 
@@ -416,7 +461,16 @@ public:
 
   /// Represents whether an operation on the given constant range is known to
   /// always or never overflow.
-  enum class OverflowResult { AlwaysOverflows, MayOverflow, NeverOverflows };
+  enum class OverflowResult {
+    /// Always overflows in the direction of signed/unsigned min value.
+    AlwaysOverflowsLow,
+    /// Always overflows in the direction of signed/unsigned max value.
+    AlwaysOverflowsHigh,
+    /// May or may not overflow.
+    MayOverflow,
+    /// Never overflows.
+    NeverOverflows,
+  };
 
   /// Return whether unsigned add of the two ranges always/never overflows.
   OverflowResult unsignedAddMayOverflow(const ConstantRange &Other) const;

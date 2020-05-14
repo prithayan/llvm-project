@@ -6,8 +6,8 @@
 //
 //===----------------------------------------------------------------------===//
 
-#ifndef lldb_Host_HostProcesPosix_h_
-#define lldb_Host_HostProcesPosix_h_
+#ifndef LLDB_HOST_POSIX_HOSTPROCESSPOSIX_H
+#define LLDB_HOST_POSIX_HOSTPROCESSPOSIX_H
 
 #include "lldb/Host/HostNativeProcessBase.h"
 #include "lldb/Utility/Status.h"
@@ -32,10 +32,11 @@ public:
   lldb::pid_t GetProcessId() const override;
   bool IsRunning() const override;
 
-  HostThread StartMonitoring(const Host::MonitorChildProcessCallback &callback,
-                             bool monitor_signals) override;
+  llvm::Expected<HostThread>
+  StartMonitoring(const Host::MonitorChildProcessCallback &callback,
+                  bool monitor_signals) override;
 };
 
 } // namespace lldb_private
 
-#endif // lldb_Host_HostProcesPosix_h_
+#endif // LLDB_HOST_POSIX_HOSTPROCESSPOSIX_H

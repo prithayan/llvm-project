@@ -9,6 +9,7 @@
 #include "clang/StaticAnalyzer/Frontend/CheckerRegistry.h"
 #include "clang/Basic/Diagnostic.h"
 #include "clang/Basic/LLVM.h"
+#include "clang/Driver/DriverDiagnostic.h"
 #include "clang/Frontend/FrontendDiagnostic.h"
 #include "clang/StaticAnalyzer/Checkers/BuiltinCheckerRegistration.h"
 #include "clang/StaticAnalyzer/Core/AnalyzerOptions.h"
@@ -50,17 +51,15 @@ using CheckerNameLT = FullNameLT<CheckerRegistry::CheckerInfo>;
 } // end of anonymous namespace
 
 template <class CheckerOrPackageInfoList>
-static
-    typename std::conditional<std::is_const<CheckerOrPackageInfoList>::value,
-                              typename CheckerOrPackageInfoList::const_iterator,
-                              typename CheckerOrPackageInfoList::iterator>::type
-    binaryFind(CheckerOrPackageInfoList &Collection, StringRef FullName) {
+static std::conditional_t<std::is_const<CheckerOrPackageInfoList>::value,
+                          typename CheckerOrPackageInfoList::const_iterator,
+                          typename CheckerOrPackageInfoList::iterator>
+binaryFind(CheckerOrPackageInfoList &Collection, StringRef FullName) {
 
   using CheckerOrPackage = typename CheckerOrPackageInfoList::value_type;
   using CheckerOrPackageFullNameLT = FullNameLT<CheckerOrPackage>;
 
-  assert(std::is_sorted(Collection.begin(), Collection.end(),
-                        CheckerOrPackageFullNameLT{}) &&
+  assert(llvm::is_sorted(Collection, CheckerOrPackageFullNameLT{}) &&
          "In order to efficiently gather checkers/packages, this function "
          "expects them to be already sorted!");
 
@@ -109,9 +108,9 @@ CheckerRegistry::getMutableCheckersForCmdLineArg(StringRef CmdLineArg) {
 
 CheckerRegistry::CheckerRegistry(
     ArrayRef<std::string> Plugins, DiagnosticsEngine &Diags,
-    AnalyzerOptions &AnOpts, const LangOptions &LangOpts,
+    AnalyzerOptions &AnOpts,
     ArrayRef<std::function<void(CheckerRegistry &)>> CheckerRegistrationFns)
-    : Diags(Diags), AnOpts(AnOpts), LangOpts(LangOpts) {
+    : Diags(Diags), AnOpts(AnOpts) {
 
   // Register builtin checkers.
 #define GET_CHECKERS
@@ -179,12 +178,16 @@ CheckerRegistry::CheckerRegistry(
   addDependency(FULLNAME, DEPENDENCY);
 
 #define GET_CHECKER_OPTIONS
-#define CHECKER_OPTION(TYPE, FULLNAME, CMDFLAG, DESC, DEFAULT_VAL)             \
-  addCheckerOption(TYPE, FULLNAME, CMDFLAG, DEFAULT_VAL, DESC);
+#define CHECKER_OPTION(TYPE, FULLNAME, CMDFLAG, DESC, DEFAULT_VAL,             \
+                       DEVELOPMENT_STATUS, IS_HIDDEN)                          \
+  addCheckerOption(TYPE, FULLNAME, CMDFLAG, DEFAULT_VAL, DESC,                 \
+                   DEVELOPMENT_STATUS, IS_HIDDEN);
 
 #define GET_PACKAGE_OPTIONS
-#define PACKAGE_OPTION(TYPE, FULLNAME, CMDFLAG, DESC, DEFAULT_VAL)             \
-  addPackageOption(TYPE, FULLNAME, CMDFLAG, DEFAULT_VAL, DESC);
+#define PACKAGE_OPTION(TYPE, FULLNAME, CMDFLAG, DESC, DEFAULT_VAL,             \
+                       DEVELOPMENT_STATUS, IS_HIDDEN)                          \
+  addPackageOption(TYPE, FULLNAME, CMDFLAG, DEFAULT_VAL, DESC,                 \
+                   DEVELOPMENT_STATUS, IS_HIDDEN);
 
 #include "clang/StaticAnalyzer/Checkers/Checkers.inc"
 #undef CHECKER_DEPENDENCY
@@ -199,12 +202,12 @@ CheckerRegistry::CheckerRegistry(
 
   // Parse '-analyzer-checker' and '-analyzer-disable-checker' options from the
   // command line.
-  for (const std::pair<std::string, bool> &Opt : AnOpts.CheckersControlList) {
+  for (const std::pair<std::string, bool> &Opt : AnOpts.CheckersAndPackages) {
     CheckerInfoListRange CheckerForCmdLineArg =
         getMutableCheckersForCmdLineArg(Opt.first);
 
     if (CheckerForCmdLineArg.begin() == CheckerForCmdLineArg.end()) {
-      Diags.Report(diag::err_unknown_analyzer_checker) << Opt.first;
+      Diags.Report(diag::err_unknown_analyzer_checker_or_package) << Opt.first;
       Diags.Report(diag::note_suggest_disabling_all_checkers);
     }
 
@@ -213,60 +216,22 @@ CheckerRegistry::CheckerRegistry(
                                  : StateFromCmdLine::State_Disabled;
     }
   }
+  validateCheckerOptions();
 }
-
-/// Collects dependencies in \p ret, returns false on failure.
-static bool
-collectDependenciesImpl(const CheckerRegistry::ConstCheckerInfoList &Deps,
-                        const LangOptions &LO,
-                        CheckerRegistry::CheckerInfoSet &Ret);
 
 /// Collects dependenies in \p enabledCheckers. Return None on failure.
 LLVM_NODISCARD
 static llvm::Optional<CheckerRegistry::CheckerInfoSet>
 collectDependencies(const CheckerRegistry::CheckerInfo &checker,
-                    const LangOptions &LO) {
+                    const CheckerManager &Mgr);
 
-  CheckerRegistry::CheckerInfoSet Ret;
-  // Add dependencies to the enabled checkers only if all of them can be
-  // enabled.
-  if (!collectDependenciesImpl(checker.Dependencies, LO, Ret))
-    return None;
-
-  return Ret;
-}
-
-static bool
-collectDependenciesImpl(const CheckerRegistry::ConstCheckerInfoList &Deps,
-                        const LangOptions &LO,
-                        CheckerRegistry::CheckerInfoSet &Ret) {
-
-  for (const CheckerRegistry::CheckerInfo *Dependency : Deps) {
-
-    if (Dependency->isDisabled(LO))
-      return false;
-
-    // Collect dependencies recursively.
-    if (!collectDependenciesImpl(Dependency->Dependencies, LO, Ret))
-      return false;
-
-    Ret.insert(Dependency);
-  }
-
-  return true;
-}
-
-CheckerRegistry::CheckerInfoSet CheckerRegistry::getEnabledCheckers() const {
-
-  CheckerInfoSet EnabledCheckers;
-
+void CheckerRegistry::initializeRegistry(const CheckerManager &Mgr) {
   for (const CheckerInfo &Checker : Checkers) {
-    if (!Checker.isEnabled(LangOpts))
+    if (!Checker.isEnabled(Mgr))
       continue;
 
     // Recursively enable its dependencies.
-    llvm::Optional<CheckerInfoSet> Deps =
-        collectDependencies(Checker, LangOpts);
+    llvm::Optional<CheckerInfoSet> Deps = collectDependencies(Checker, Mgr);
 
     if (!Deps) {
       // If we failed to enable any of the dependencies, don't enable this
@@ -280,8 +245,47 @@ CheckerRegistry::CheckerInfoSet CheckerRegistry::getEnabledCheckers() const {
     // Enable the checker.
     EnabledCheckers.insert(&Checker);
   }
+}
 
-  return EnabledCheckers;
+/// Collects dependencies in \p ret, returns false on failure.
+static bool
+collectDependenciesImpl(const CheckerRegistry::ConstCheckerInfoList &Deps,
+                        const CheckerManager &Mgr,
+                        CheckerRegistry::CheckerInfoSet &Ret);
+
+/// Collects dependenies in \p enabledCheckers. Return None on failure.
+LLVM_NODISCARD
+static llvm::Optional<CheckerRegistry::CheckerInfoSet>
+collectDependencies(const CheckerRegistry::CheckerInfo &checker,
+                    const CheckerManager &Mgr) {
+
+  CheckerRegistry::CheckerInfoSet Ret;
+  // Add dependencies to the enabled checkers only if all of them can be
+  // enabled.
+  if (!collectDependenciesImpl(checker.Dependencies, Mgr, Ret))
+    return None;
+
+  return Ret;
+}
+
+static bool
+collectDependenciesImpl(const CheckerRegistry::ConstCheckerInfoList &Deps,
+                        const CheckerManager &Mgr,
+                        CheckerRegistry::CheckerInfoSet &Ret) {
+
+  for (const CheckerRegistry::CheckerInfo *Dependency : Deps) {
+
+    if (Dependency->isDisabled(Mgr))
+      return false;
+
+    // Collect dependencies recursively.
+    if (!collectDependenciesImpl(Dependency->Dependencies, Mgr, Ret))
+      return false;
+
+    Ret.insert(Dependency);
+  }
+
+  return true;
 }
 
 void CheckerRegistry::resolveDependencies() {
@@ -298,40 +302,90 @@ void CheckerRegistry::resolveDependencies() {
 
     CheckerIt->Dependencies.emplace_back(&*DependencyIt);
   }
-
-  Dependencies.clear();
 }
 
 void CheckerRegistry::addDependency(StringRef FullName, StringRef Dependency) {
   Dependencies.emplace_back(FullName, Dependency);
 }
 
+/// Insert the checker/package option to AnalyzerOptions' config table, and
+/// validate it, if the user supplied it on the command line.
+static void insertAndValidate(StringRef FullName,
+                              const CheckerRegistry::CmdLineOption &Option,
+                              AnalyzerOptions &AnOpts,
+                              DiagnosticsEngine &Diags) {
+
+  std::string FullOption = (FullName + ":" + Option.OptionName).str();
+
+  auto It =
+      AnOpts.Config.insert({FullOption, std::string(Option.DefaultValStr)});
+
+  // Insertation was successful -- CmdLineOption's constructor will validate
+  // whether values received from plugins or TableGen files are correct.
+  if (It.second)
+    return;
+
+  // Insertion failed, the user supplied this package/checker option on the
+  // command line. If the supplied value is invalid, we'll restore the option
+  // to it's default value, and if we're in non-compatibility mode, we'll also
+  // emit an error.
+
+  StringRef SuppliedValue = It.first->getValue();
+
+  if (Option.OptionType == "bool") {
+    if (SuppliedValue != "true" && SuppliedValue != "false") {
+      if (AnOpts.ShouldEmitErrorsOnInvalidConfigValue) {
+        Diags.Report(diag::err_analyzer_checker_option_invalid_input)
+            << FullOption << "a boolean value";
+      }
+
+      It.first->setValue(std::string(Option.DefaultValStr));
+    }
+    return;
+  }
+
+  if (Option.OptionType == "int") {
+    int Tmp;
+    bool HasFailed = SuppliedValue.getAsInteger(0, Tmp);
+    if (HasFailed) {
+      if (AnOpts.ShouldEmitErrorsOnInvalidConfigValue) {
+        Diags.Report(diag::err_analyzer_checker_option_invalid_input)
+            << FullOption << "an integer value";
+      }
+
+      It.first->setValue(std::string(Option.DefaultValStr));
+    }
+    return;
+  }
+}
+
 template <class T>
 static void
 insertOptionToCollection(StringRef FullName, T &Collection,
-                         const CheckerRegistry::CmdLineOption &&Option) {
+                         const CheckerRegistry::CmdLineOption &Option,
+                         AnalyzerOptions &AnOpts, DiagnosticsEngine &Diags) {
   auto It = binaryFind(Collection, FullName);
   assert(It != Collection.end() &&
          "Failed to find the checker while attempting to add a command line "
          "option to it!");
 
-  It->CmdLineOptions.emplace_back(std::move(Option));
+  insertAndValidate(FullName, Option, AnOpts, Diags);
+
+  It->CmdLineOptions.emplace_back(Option);
 }
 
 void CheckerRegistry::resolveCheckerAndPackageOptions() {
   for (const std::pair<StringRef, CmdLineOption> &CheckerOptEntry :
        CheckerOptions) {
     insertOptionToCollection(CheckerOptEntry.first, Checkers,
-                             std::move(CheckerOptEntry.second));
+                             CheckerOptEntry.second, AnOpts, Diags);
   }
-  CheckerOptions.clear();
 
   for (const std::pair<StringRef, CmdLineOption> &PackageOptEntry :
        PackageOptions) {
-    insertOptionToCollection(PackageOptEntry.first, Checkers,
-                             std::move(PackageOptEntry.second));
+    insertOptionToCollection(PackageOptEntry.first, Packages,
+                             PackageOptEntry.second, AnOpts, Diags);
   }
-  PackageOptions.clear();
 }
 
 void CheckerRegistry::addPackage(StringRef FullName) {
@@ -342,10 +396,12 @@ void CheckerRegistry::addPackageOption(StringRef OptionType,
                                        StringRef PackageFullName,
                                        StringRef OptionName,
                                        StringRef DefaultValStr,
-                                       StringRef Description) {
+                                       StringRef Description,
+                                       StringRef DevelopmentStatus,
+                                       bool IsHidden) {
   PackageOptions.emplace_back(
-      PackageFullName,
-      CmdLineOption{OptionType, OptionName, DefaultValStr, Description});
+      PackageFullName, CmdLineOption{OptionType, OptionName, DefaultValStr,
+                                     Description, DevelopmentStatus, IsHidden});
 }
 
 void CheckerRegistry::addChecker(InitializationFunction Rfn,
@@ -367,42 +423,88 @@ void CheckerRegistry::addCheckerOption(StringRef OptionType,
                                        StringRef CheckerFullName,
                                        StringRef OptionName,
                                        StringRef DefaultValStr,
-                                       StringRef Description) {
+                                       StringRef Description,
+                                       StringRef DevelopmentStatus,
+                                       bool IsHidden) {
   CheckerOptions.emplace_back(
-      CheckerFullName,
-      CmdLineOption{OptionType, OptionName, DefaultValStr, Description});
+      CheckerFullName, CmdLineOption{OptionType, OptionName, DefaultValStr,
+                                     Description, DevelopmentStatus, IsHidden});
 }
 
 void CheckerRegistry::initializeManager(CheckerManager &CheckerMgr) const {
-  // Collect checkers enabled by the options.
-  CheckerInfoSet enabledCheckers = getEnabledCheckers();
-
   // Initialize the CheckerManager with all enabled checkers.
-  for (const auto *Checker : enabledCheckers) {
-    CheckerMgr.setCurrentCheckName(CheckName(Checker->FullName));
+  for (const auto *Checker : EnabledCheckers) {
+    CheckerMgr.setCurrentCheckerName(CheckerNameRef(Checker->FullName));
     Checker->Initialize(CheckerMgr);
+  }
+}
+
+static void
+isOptionContainedIn(const CheckerRegistry::CmdLineOptionList &OptionList,
+                    StringRef SuppliedChecker, StringRef SuppliedOption,
+                    const AnalyzerOptions &AnOpts, DiagnosticsEngine &Diags) {
+
+  if (!AnOpts.ShouldEmitErrorsOnInvalidConfigValue)
+    return;
+
+  using CmdLineOption = CheckerRegistry::CmdLineOption;
+
+  auto SameOptName = [SuppliedOption](const CmdLineOption &Opt) {
+    return Opt.OptionName == SuppliedOption;
+  };
+
+  auto OptionIt = llvm::find_if(OptionList, SameOptName);
+
+  if (OptionIt == OptionList.end()) {
+    Diags.Report(diag::err_analyzer_checker_option_unknown)
+        << SuppliedChecker << SuppliedOption;
+    return;
   }
 }
 
 void CheckerRegistry::validateCheckerOptions() const {
   for (const auto &Config : AnOpts.Config) {
-    size_t Pos = Config.getKey().find(':');
-    if (Pos == StringRef::npos)
+
+    StringRef SuppliedCheckerOrPackage;
+    StringRef SuppliedOption;
+    std::tie(SuppliedCheckerOrPackage, SuppliedOption) =
+        Config.getKey().split(':');
+
+    if (SuppliedOption.empty())
       continue;
 
-    bool HasChecker = false;
-    StringRef CheckerName = Config.getKey().substr(0, Pos);
-    for (const auto &Checker : Checkers) {
-      if (Checker.FullName.startswith(CheckerName) &&
-          (Checker.FullName.size() == Pos || Checker.FullName[Pos] == '.')) {
-        HasChecker = true;
-        break;
-      }
+    // AnalyzerOptions' config table contains the user input, so an entry could
+    // look like this:
+    //
+    //   cor:NoFalsePositives=true
+    //
+    // Since lower_bound would look for the first element *not less* than "cor",
+    // it would return with an iterator to the first checker in the core, so we
+    // we really have to use find here, which uses operator==.
+    auto CheckerIt =
+        llvm::find(Checkers, CheckerInfo(SuppliedCheckerOrPackage));
+    if (CheckerIt != Checkers.end()) {
+      isOptionContainedIn(CheckerIt->CmdLineOptions, SuppliedCheckerOrPackage,
+                          SuppliedOption, AnOpts, Diags);
+      continue;
     }
-    if (!HasChecker)
-      Diags.Report(diag::err_unknown_analyzer_checker) << CheckerName;
+
+    auto PackageIt =
+        llvm::find(Packages, PackageInfo(SuppliedCheckerOrPackage));
+    if (PackageIt != Packages.end()) {
+      isOptionContainedIn(PackageIt->CmdLineOptions, SuppliedCheckerOrPackage,
+                          SuppliedOption, AnOpts, Diags);
+      continue;
+    }
+
+    Diags.Report(diag::err_unknown_analyzer_checker_or_package)
+        << SuppliedCheckerOrPackage;
   }
 }
+
+//===----------------------------------------------------------------------===//
+// Printing functions.
+//===----------------------------------------------------------------------===//
 
 void CheckerRegistry::printCheckerWithDescList(raw_ostream &Out,
                                                size_t MaxNameChars) const {
@@ -421,29 +523,101 @@ void CheckerRegistry::printCheckerWithDescList(raw_ostream &Out,
   }
 
   const size_t InitialPad = 2;
-  for (const auto &Checker : Checkers) {
-    if (!AnOpts.ShowCheckerHelpHidden && Checker.IsHidden)
-      continue;
 
-    Out.indent(InitialPad) << Checker.FullName;
-
-    int Pad = OptionFieldWidth - Checker.FullName.size();
-
-    // Break on long option names.
-    if (Pad < 0) {
-      Out << '\n';
-      Pad = OptionFieldWidth + InitialPad;
-    }
-    Out.indent(Pad + 2) << Checker.Desc;
-
+  auto Print = [=](llvm::raw_ostream &Out, const CheckerInfo &Checker,
+                   StringRef Description) {
+    AnalyzerOptions::printFormattedEntry(Out, {Checker.FullName, Description},
+                                         InitialPad, OptionFieldWidth);
     Out << '\n';
+  };
+
+  for (const auto &Checker : Checkers) {
+    // The order of this if branches is significant, we wouldn't like to display
+    // developer checkers even in the alpha output. For example,
+    // alpha.cplusplus.IteratorModeling is a modeling checker, hence it's hidden
+    // by default, and users (even when the user is a developer of an alpha
+    // checker) shouldn't normally tinker with whether they should be enabled.
+
+    if (Checker.IsHidden) {
+      if (AnOpts.ShowCheckerHelpDeveloper)
+        Print(Out, Checker, Checker.Desc);
+      continue;
+    }
+
+    if (Checker.FullName.startswith("alpha")) {
+      if (AnOpts.ShowCheckerHelpAlpha)
+        Print(Out, Checker,
+              ("(Enable only for development!) " + Checker.Desc).str());
+      continue;
+    }
+
+    if (AnOpts.ShowCheckerHelp)
+        Print(Out, Checker, Checker.Desc);
   }
 }
 
 void CheckerRegistry::printEnabledCheckerList(raw_ostream &Out) const {
-  // Collect checkers enabled by the options.
-  CheckerInfoSet EnabledCheckers = getEnabledCheckers();
-
   for (const auto *i : EnabledCheckers)
     Out << i->FullName << '\n';
+}
+
+void CheckerRegistry::printCheckerOptionList(raw_ostream &Out) const {
+  Out << "OVERVIEW: Clang Static Analyzer Checker and Package Option List\n\n";
+  Out << "USAGE: -analyzer-config <OPTION1=VALUE,OPTION2=VALUE,...>\n\n";
+  Out << "       -analyzer-config OPTION1=VALUE, -analyzer-config "
+         "OPTION2=VALUE, ...\n\n";
+  Out << "OPTIONS:\n\n";
+
+  std::multimap<StringRef, const CmdLineOption &> OptionMap;
+
+  for (const CheckerInfo &Checker : Checkers) {
+    for (const CmdLineOption &Option : Checker.CmdLineOptions) {
+      OptionMap.insert({Checker.FullName, Option});
+    }
+  }
+
+  for (const PackageInfo &Package : Packages) {
+    for (const CmdLineOption &Option : Package.CmdLineOptions) {
+      OptionMap.insert({Package.FullName, Option});
+    }
+  }
+
+  auto Print = [] (llvm::raw_ostream &Out, StringRef FullOption, StringRef Desc) {
+    AnalyzerOptions::printFormattedEntry(Out, {FullOption, Desc},
+                                         /*InitialPad*/ 2,
+                                         /*EntryWidth*/ 50,
+                                         /*MinLineWidth*/ 90);
+    Out << "\n\n";
+  };
+  for (const std::pair<const StringRef, const CmdLineOption &> &Entry :
+       OptionMap) {
+    const CmdLineOption &Option = Entry.second;
+    std::string FullOption = (Entry.first + ":" + Option.OptionName).str();
+
+    std::string Desc =
+        ("(" + Option.OptionType + ") " + Option.Description + " (default: " +
+         (Option.DefaultValStr.empty() ? "\"\"" : Option.DefaultValStr) + ")")
+            .str();
+
+    // The list of these if branches is significant, we wouldn't like to
+    // display hidden alpha checker options for
+    // -analyzer-checker-option-help-alpha.
+
+    if (Option.IsHidden) {
+      if (AnOpts.ShowCheckerOptionDeveloperList)
+        Print(Out, FullOption, Desc);
+      continue;
+    }
+
+    if (Option.DevelopmentStatus == "alpha" ||
+        Entry.first.startswith("alpha")) {
+      if (AnOpts.ShowCheckerOptionAlphaList)
+        Print(Out, FullOption,
+              llvm::Twine("(Enable only for development!) " + Desc).str());
+      continue;
+    }
+
+    if (AnOpts.ShowCheckerOptionList)
+      Print(Out, FullOption, Desc);
+  }
 }

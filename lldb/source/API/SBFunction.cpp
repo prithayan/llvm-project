@@ -1,4 +1,4 @@
-//===-- SBFunction.cpp ------------------------------------------*- C++ -*-===//
+//===-- SBFunction.cpp ----------------------------------------------------===//
 //
 // Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
 // See https://llvm.org/LICENSE.txt for license information.
@@ -22,7 +22,7 @@
 using namespace lldb;
 using namespace lldb_private;
 
-SBFunction::SBFunction() : m_opaque_ptr(NULL) {
+SBFunction::SBFunction() : m_opaque_ptr(nullptr) {
   LLDB_RECORD_CONSTRUCTOR_NO_ARGS(SBFunction);
 }
 
@@ -42,7 +42,7 @@ const SBFunction &SBFunction::operator=(const SBFunction &rhs) {
   return LLDB_RECORD_RESULT(*this);
 }
 
-SBFunction::~SBFunction() { m_opaque_ptr = NULL; }
+SBFunction::~SBFunction() { m_opaque_ptr = nullptr; }
 
 bool SBFunction::IsValid() const {
   LLDB_RECORD_METHOD_CONST_NO_ARGS(bool, SBFunction, IsValid);
@@ -51,13 +51,13 @@ bool SBFunction::IsValid() const {
 SBFunction::operator bool() const {
   LLDB_RECORD_METHOD_CONST_NO_ARGS(bool, SBFunction, operator bool);
 
-  return m_opaque_ptr != NULL;
+  return m_opaque_ptr != nullptr;
 }
 
 const char *SBFunction::GetName() const {
   LLDB_RECORD_METHOD_CONST_NO_ARGS(const char *, SBFunction, GetName);
 
-  const char *cstr = NULL;
+  const char *cstr = nullptr;
   if (m_opaque_ptr)
     cstr = m_opaque_ptr->GetName().AsCString();
 
@@ -67,11 +67,9 @@ const char *SBFunction::GetName() const {
 const char *SBFunction::GetDisplayName() const {
   LLDB_RECORD_METHOD_CONST_NO_ARGS(const char *, SBFunction, GetDisplayName);
 
-  const char *cstr = NULL;
+  const char *cstr = nullptr;
   if (m_opaque_ptr)
-    cstr = m_opaque_ptr->GetMangled()
-               .GetDisplayDemangledName(m_opaque_ptr->GetLanguage())
-               .AsCString();
+    cstr = m_opaque_ptr->GetMangled().GetDisplayDemangledName().AsCString();
 
   return cstr;
 }
@@ -79,7 +77,7 @@ const char *SBFunction::GetDisplayName() const {
 const char *SBFunction::GetMangledName() const {
   LLDB_RECORD_METHOD_CONST_NO_ARGS(const char *, SBFunction, GetMangledName);
 
-  const char *cstr = NULL;
+  const char *cstr = nullptr;
   if (m_opaque_ptr)
     cstr = m_opaque_ptr->GetMangled().GetMangledName().AsCString();
   return cstr;
@@ -118,7 +116,7 @@ SBInstructionList SBFunction::GetInstructions(SBTarget target) {
   LLDB_RECORD_METHOD(lldb::SBInstructionList, SBFunction, GetInstructions,
                      (lldb::SBTarget), target);
 
-  return LLDB_RECORD_RESULT(GetInstructions(target, NULL));
+  return LLDB_RECORD_RESULT(GetInstructions(target, nullptr));
 }
 
 SBInstructionList SBFunction::GetInstructions(SBTarget target,
@@ -128,20 +126,15 @@ SBInstructionList SBFunction::GetInstructions(SBTarget target,
 
   SBInstructionList sb_instructions;
   if (m_opaque_ptr) {
-    ExecutionContext exe_ctx;
     TargetSP target_sp(target.GetSP());
     std::unique_lock<std::recursive_mutex> lock;
-    if (target_sp) {
-      lock = std::unique_lock<std::recursive_mutex>(target_sp->GetAPIMutex());
-      target_sp->CalculateExecutionContext(exe_ctx);
-      exe_ctx.SetProcessSP(target_sp->GetProcessSP());
-    }
     ModuleSP module_sp(
         m_opaque_ptr->GetAddressRange().GetBaseAddress().GetModule());
-    if (module_sp) {
+    if (target_sp && module_sp) {
+      lock = std::unique_lock<std::recursive_mutex>(target_sp->GetAPIMutex());
       const bool prefer_file_cache = false;
       sb_instructions.SetDisassembler(Disassembler::DisassembleRange(
-          module_sp->GetArchitecture(), NULL, flavor, exe_ctx,
+          module_sp->GetArchitecture(), nullptr, flavor, *target_sp,
           m_opaque_ptr->GetAddressRange(), prefer_file_cache));
     }
   }

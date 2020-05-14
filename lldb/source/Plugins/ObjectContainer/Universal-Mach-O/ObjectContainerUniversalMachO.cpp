@@ -1,4 +1,4 @@
-//===-- ObjectContainerUniversalMachO.cpp -----------------------*- C++ -*-===//
+//===-- ObjectContainerUniversalMachO.cpp ---------------------------------===//
 //
 // Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
 // See https://llvm.org/LICENSE.txt for license information.
@@ -19,6 +19,9 @@
 using namespace lldb;
 using namespace lldb_private;
 using namespace llvm::MachO;
+
+LLDB_PLUGIN_DEFINE_ADV(ObjectContainerUniversalMachO,
+                       ObjectContainerMachOArchive)
 
 void ObjectContainerUniversalMachO::Initialize() {
   PluginManager::RegisterPlugin(GetPluginNameStatic(),
@@ -57,7 +60,7 @@ ObjectContainer *ObjectContainerUniversalMachO::CreateInstance(
       }
     }
   }
-  return NULL;
+  return nullptr;
 }
 
 bool ObjectContainerUniversalMachO::MagicBytesMatch(const DataExtractor &data) {

@@ -9,9 +9,11 @@
 let Component = "Driver" in {
 
 def err_drv_no_such_file : Error<"no such file or directory: '%0'">;
+def err_drv_no_such_file_with_suggestion : Error<
+  "no such file or directory: '%0'; did you mean '%1'?">;
 def err_drv_unsupported_opt : Error<"unsupported option '%0'">;
-def err_drv_unsupported_opt_with_suggestion
-  : Error<"unsupported option '%0', did you mean '%1'?">;
+def err_drv_unsupported_opt_with_suggestion : Error<
+  "unsupported option '%0'; did you mean '%1'?">;
 def err_drv_unsupported_opt_for_target : Error<
   "unsupported option '%0' for target '%1'">;
 def err_drv_unsupported_option_argument : Error<
@@ -27,18 +29,48 @@ def err_drv_invalid_riscv_arch_name : Error<
   "invalid arch name '%0', %1">;
 def err_drv_invalid_riscv_ext_arch_name : Error<
   "invalid arch name '%0', %1 '%2'">;
+def warn_drv_avr_mcu_not_specified : Warning<
+  "no target microcontroller specified on command line, cannot "
+  "link standard libraries, please pass -mmcu=<mcu name>">,
+  InGroup<AVRRtlibLinkingQuirks>;
+def warn_drv_avr_gcc_not_found: Warning<
+  "no avr-gcc installation can be found on the system, "
+  "cannot link standard libraries">,
+  InGroup<AVRRtlibLinkingQuirks>;
+def warn_drv_avr_libc_not_found: Warning<
+  "no avr-libc installation can be found on the system, "
+  "cannot link standard libraries">,
+  InGroup<AVRRtlibLinkingQuirks>;
+def warn_drv_avr_family_linking_stdlibs_not_implemented: Warning<
+  "support for linking stdlibs for microcontroller '%0' is not implemented">,
+  InGroup<AVRRtlibLinkingQuirks>;
+def warn_drv_avr_stdlib_not_linked: Warning<
+  "standard library not linked and so no interrupt vector table or "
+  "compiler runtime routines will be linked">,
+  InGroup<AVRRtlibLinkingQuirks>;
 def err_drv_cuda_bad_gpu_arch : Error<"Unsupported CUDA gpu architecture: %0">;
 def err_drv_no_cuda_installation : Error<
-  "cannot find CUDA installation.  Provide its path via --cuda-path, or pass "
+  "cannot find CUDA installation. Provide its path via --cuda-path, or pass "
   "-nocudainc to build without CUDA includes.">;
 def err_drv_no_cuda_libdevice : Error<
   "cannot find libdevice for %0. Provide path to different CUDA installation "
   "via --cuda-path, or pass -nocudalib to build without linking with libdevice.">;
+
+def err_drv_no_rocm_installation : Error<
+  "cannot find ROCm installation.  Provide its path via --rocm-path, or pass "
+  "-nogpulib.">;
+def err_drv_no_rocm_device_lib : Error<
+  "cannot find device library for %0. Provide path to different ROCm installation "
+  "via --rocm-path, or pass -nogpulib to build without linking default libraries.">;
+
 def err_drv_cuda_version_unsupported : Error<
   "GPU arch %0 is supported by CUDA versions between %1 and %2 (inclusive), "
-  "but installation at %3 is %4.  Use --cuda-path to specify a different CUDA "
+  "but installation at %3 is %4. Use --cuda-path to specify a different CUDA "
   "install, pass a different GPU arch with --cuda-gpu-arch, or pass "
   "--no-cuda-version-check.">;
+def warn_drv_unknown_cuda_version: Warning<
+  "Unknown CUDA version %0. Assuming the latest supported version %1">,
+  InGroup<CudaUnknownVersion>;
 def err_drv_cuda_host_arch : Error<"unsupported architecture '%0' for host compilation.">;
 def err_drv_mix_cuda_hip : Error<"Mixed Cuda and HIP compilation is not supported.">;
 def err_drv_invalid_thread_model_for_target : Error<
@@ -70,6 +102,8 @@ def err_no_external_assembler : Error<
   "there is no external assembler that can be used on this platform">;
 def err_drv_unable_to_remove_file : Error<
   "unable to remove file: %0">;
+def err_drv_unable_to_set_working_directory : Error <
+  "unable to set working directory: %0">;
 def err_drv_command_failure : Error<
   "unable to execute command: %0">;
 def err_drv_invalid_darwin_version : Error<
@@ -120,10 +154,14 @@ def err_drv_missing_arg_mtp : Error<
   "missing argument to '%0'">;
 def err_drv_invalid_libcxx_deployment : Error<
   "invalid deployment target for -stdlib=libc++ (requires %0 or later)">;
-def err_drv_invalid_argument_to_fdebug_prefix_map : Error<
-  "invalid argument '%0' to -fdebug-prefix-map">;
+def err_drv_invalid_argument_to_option : Error<
+  "invalid argument '%0' to -%1">;
 def err_drv_malformed_sanitizer_blacklist : Error<
   "malformed sanitizer blacklist: '%0'">;
+def err_drv_malformed_sanitizer_coverage_whitelist : Error<
+  "malformed sanitizer coverage whitelist: '%0'">;
+def err_drv_malformed_sanitizer_coverage_blacklist : Error<
+  "malformed sanitizer coverage blacklist: '%0'">;
 def err_drv_duplicate_config : Error<
   "no more than one option '--config' is allowed">;
 def err_drv_config_file_not_exist : Error<
@@ -136,6 +174,8 @@ def err_drv_cannot_read_config_file : Error<
   "cannot read configuration file '%0'">;
 def err_drv_nested_config_file: Error<
   "option '--config' is not allowed inside configuration file">;
+def err_drv_arg_requires_bitcode_input: Error<
+  "option '%0' requires input to be LLVM bitcode">;
 
 def err_target_unsupported_arch
   : Error<"the target architecture '%0' is not supported by the target '%1'">;
@@ -147,20 +187,17 @@ def err_arch_unsupported_isa
 def err_drv_I_dash_not_supported : Error<
   "'%0' not supported, please use -iquote instead">;
 def err_drv_unknown_argument : Error<"unknown argument: '%0'">;
-def err_drv_unknown_argument_with_suggestion
-  : Error<"unknown argument '%0', did you mean '%1'?">;
+def err_drv_unknown_argument_with_suggestion : Error<
+  "unknown argument '%0'; did you mean '%1'?">;
 def warn_drv_unknown_argument_clang_cl : Warning<
   "unknown argument ignored in clang-cl: '%0'">,
   InGroup<UnknownArgument>;
 def warn_drv_unknown_argument_clang_cl_with_suggestion : Warning<
-  "unknown argument ignored in clang-cl '%0' (did you mean '%1'?)">,
+  "unknown argument ignored in clang-cl '%0'; did you mean '%1'?">,
   InGroup<UnknownArgument>;
 
 def warn_drv_ycyu_different_arg_clang_cl : Warning<
   "support for '/Yc' and '/Yu' with different filenames not implemented yet; flags ignored">,
-  InGroup<ClangClPch>;
-def warn_drv_ycyu_no_fi_arg_clang_cl : Warning<
-  "support for '%0' without a corresponding /FI flag not implemented yet; flag ignored">,
   InGroup<ClangClPch>;
 def warn_drv_yc_multiple_inputs_clang_cl : Warning<
   "support for '/Yc' with more than one source file not implemented yet; flag ignored">,
@@ -206,7 +243,9 @@ def err_drv_gnustep_objc_runtime_incompatible_binary : Error<
 def err_drv_emit_llvm_link : Error<
    "-emit-llvm cannot be used when linking">;
 def err_drv_optimization_remark_pattern : Error<
-  "%0 in '%1'">;
+  "in pattern '%1': %0">;
+def err_drv_optimization_remark_format : Error<
+  "unknown remark serializer format: '%0'">;
 def err_drv_no_neon_modifier : Error<"[no]neon is not accepted as modifier, please use [no]simd instead">;
 def err_drv_invalid_omp_target : Error<"OpenMP target is invalid: '%0'">;
 def err_drv_omp_host_ir_file_not_found : Error<
@@ -226,6 +265,9 @@ def err_drv_unsupported_embed_bitcode
 def err_drv_bitcode_unsupported_on_toolchain : Error<
   "-fembed-bitcode is not supported on versions of iOS prior to 6.0">;
 
+def err_drv_invalid_malign_branch_EQ : Error<
+  "invalid argument '%0' to -malign-branch=; each element must be one of: %1">;
+
 def warn_O4_is_O3 : Warning<"-O4 is equivalent to -O3">, InGroup<Deprecated>;
 def warn_drv_optimization_value : Warning<"optimization level '%0' is not supported; using '%1%2' instead">,
   InGroup<InvalidCommandLineArgument>;
@@ -241,6 +283,9 @@ def warn_drv_unsupported_debug_info_opt_for_target : Warning<
   InGroup<UnsupportedTargetOpt>;
 def warn_c_kext : Warning<
   "ignoring -fapple-kext which is valid for C++ and Objective-C++ only">;
+def warn_ignoring_fdiscard_for_bitcode : Warning<
+  "ignoring -fdiscard-value-names for LLVM Bitcode">,
+  InGroup<UnusedCommandLineArgument>;
 def warn_drv_input_file_unused : Warning<
   "%0: '%1' input unused%select{ when '%3' is present|}2">,
   InGroup<UnusedCommandLineArgument>;
@@ -307,8 +352,12 @@ def err_analyzer_config_multiple_values : Error<
 def err_analyzer_config_invalid_input : Error<
   "invalid input for analyzer-config option '%0', that expects %1 value">;
 def err_analyzer_config_unknown : Error<"unknown analyzer-config '%0'">;
+def err_analyzer_checker_option_unknown : Error<
+  "checker '%0' has no option called '%1'">;
 def err_analyzer_checker_option_invalid_input : Error<
   "invalid input for checker option '%0', that expects %1">;
+def err_analyzer_checker_incompatible_analyzer_option : Error<
+  "checker cannot be enabled with analyzer option '%0' == %1">;
 
 def err_drv_invalid_hvx_length : Error<
   "-mhvx-length is not supported without a -mhvx/-mhvx= flag">;
@@ -339,6 +388,12 @@ def err_drv_ropi_rwpi_incompatible_with_pic : Error<
 def err_drv_ropi_incompatible_with_cxx : Error<
   "ROPI is not compatible with c++">;
 
+def err_stack_tagging_requires_hardware_feature : Error<
+  "'-fsanitize=memtag' requires hardware support (+memtag)">;
+
+def err_cmse_pi_are_incompatible : Error<
+  "cmse is not compatible with %select{RWPI|ROPI}0">;
+
 def warn_target_unsupported_nan2008 : Warning<
   "ignoring '-mnan=2008' option because the '%0' architecture does not support it">,
   InGroup<UnsupportedNan>;
@@ -354,10 +409,16 @@ def warn_target_unsupported_abs2008 : Warning<
 def warn_target_unsupported_compact_branches : Warning<
   "ignoring '-mcompact-branches=' option because the '%0' architecture does not"
   " support it">, InGroup<UnsupportedCB>;
+def warn_target_unsupported_extension : Warning<
+  "ignoring extension '%0' because the '%1' architecture does not support it">,
+   InGroup<InvalidCommandLineArgument>;
 def warn_drv_unsupported_gpopt : Warning<
   "ignoring '-mgpopt' option as it cannot be used with %select{|the implicit"
   " usage of }0-mabicalls">,
   InGroup<UnsupportedGPOpt>;
+def warn_drv_unsupported_sdata : Warning<
+  "ignoring '-msmall-data-limit=' with -mcmodel=large for -fpic or RV64">,
+  InGroup<OptionIgnored>;
 def warn_drv_unsupported_longcalls : Warning<
   "ignoring '-mlong-calls' option as it is not currently supported with "
   "%select{|the implicit usage of }0-mabicalls">,
@@ -372,6 +433,8 @@ def err_drv_unsupported_indirect_jump_opt : Error<
   "'-mindirect-jump=%0' is unsupported with the '%1' architecture">;
 def err_drv_unknown_indirect_jump_opt : Error<
   "unknown '-mindirect-jump=' option '%0'">;
+def err_drv_unsupported_fpatchable_function_entry_argument : Error<
+  "the second argument of '-fpatchable-function-entry' must be smaller than the first argument">;
 
 def warn_drv_unable_to_find_directory_expected : Warning<
   "unable to find %0 directory, expected to be in '%1'">,
@@ -401,13 +464,13 @@ def note_drv_verify_prefix_spelling : Note<
   "-verify prefixes must start with a letter and contain only alphanumeric"
   " characters, hyphens, and underscores">;
 
-def warn_drv_experimental_isel_incomplete : Warning<
-  "-fexperimental-isel support for the '%0' architecture is incomplete">,
-  InGroup<ExperimentalISel>;
+def warn_drv_global_isel_incomplete : Warning<
+  "-fglobal-isel support for the '%0' architecture is incomplete">,
+  InGroup<GlobalISel>;
 
-def warn_drv_experimental_isel_incomplete_opt : Warning<
-  "-fexperimental-isel support is incomplete for this architecture at the current optimization level">,
-  InGroup<ExperimentalISel>;
+def warn_drv_global_isel_incomplete_opt : Warning<
+  "-fglobal-isel support is incomplete for this architecture at the current optimization level">,
+  InGroup<GlobalISel>;
 
 def warn_drv_moutline_unsupported_opt : Warning<
   "The '%0' architecture does not support -moutline; flag ignored">,
@@ -432,4 +495,10 @@ def warn_drv_msp430_hwmult_no_device : Warning<"no MCU device specified, but "
   "specify a MSP430 device, or -mhwmult to set hardware multiply type "
   "explicitly.">, InGroup<InvalidCommandLineArgument>;
 
+def warn_drv_libstdcxx_not_found : Warning<
+  "include path for libstdc++ headers not found; pass '-stdlib=libc++' on the "
+  "command line to use the libc++ standard library instead">,
+  InGroup<DiagGroup<"stdlibcxx-not-found">>;
+
+def err_drv_cannot_mix_options : Error<"cannot specify '%1' along with '%0'">;
 }

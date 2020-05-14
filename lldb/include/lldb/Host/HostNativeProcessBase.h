@@ -6,8 +6,8 @@
 //
 //===----------------------------------------------------------------------===//
 
-#ifndef lldb_Host_HostNativeProcessBase_h_
-#define lldb_Host_HostNativeProcessBase_h_
+#ifndef LLDB_HOST_HOSTNATIVEPROCESSBASE_H
+#define LLDB_HOST_HOSTNATIVEPROCESSBASE_H
 
 #include "lldb/Host/HostProcess.h"
 #include "lldb/Utility/Status.h"
@@ -35,7 +35,7 @@ public:
 
   lldb::process_t GetSystemHandle() const { return m_process; }
 
-  virtual HostThread
+  virtual llvm::Expected<HostThread>
   StartMonitoring(const Host::MonitorChildProcessCallback &callback,
                   bool monitor_signals) = 0;
 

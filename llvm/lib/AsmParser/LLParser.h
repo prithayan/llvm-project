@@ -18,16 +18,13 @@
 #include "llvm/ADT/StringMap.h"
 #include "llvm/IR/Attributes.h"
 #include "llvm/IR/Instructions.h"
-#include "llvm/IR/Module.h"
 #include "llvm/IR/ModuleSummaryIndex.h"
 #include "llvm/IR/Operator.h"
 #include "llvm/IR/Type.h"
-#include "llvm/IR/ValueHandle.h"
 #include <map>
 
 namespace llvm {
   class Module;
-  class OpaqueType;
   class Function;
   class Value;
   class BasicBlock;
@@ -38,7 +35,6 @@ namespace llvm {
   class MDString;
   class MDNode;
   struct SlotMapping;
-  class StructType;
 
   /// ValID - Represents a reference of a definition of some sort with no type.
   /// There are several cases where we have to parse the value but where the
@@ -281,14 +277,14 @@ namespace llvm {
     void ParseOptionalVisibility(unsigned &Res);
     void ParseOptionalDLLStorageClass(unsigned &Res);
     bool ParseOptionalCallingConv(unsigned &CC);
-    bool ParseOptionalAlignment(unsigned &Alignment);
+    bool ParseOptionalAlignment(MaybeAlign &Alignment);
     bool ParseOptionalDerefAttrBytes(lltok::Kind AttrKind, uint64_t &Bytes);
     bool ParseScopeAndOrdering(bool isAtomic, SyncScope::ID &SSID,
                                AtomicOrdering &Ordering);
     bool ParseScope(SyncScope::ID &SSID);
     bool ParseOrdering(AtomicOrdering &Ordering);
     bool ParseOptionalStackAlignment(unsigned &Alignment);
-    bool ParseOptionalCommaAlign(unsigned &Alignment, bool &AteExtraComma);
+    bool ParseOptionalCommaAlign(MaybeAlign &Alignment, bool &AteExtraComma);
     bool ParseOptionalCommaAddrSpace(unsigned &AddrSpace, LocTy &Loc,
                                      bool &AteExtraComma);
     bool ParseOptionalCommaInAlloca(bool &IsInAlloca);
@@ -308,6 +304,7 @@ namespace llvm {
     bool ParseTopLevelEntities();
     bool ValidateEndOfModule();
     bool ValidateEndOfIndex();
+    bool ParseTargetDefinitions();
     bool ParseTargetDefinition();
     bool ParseModuleAsm();
     bool ParseSourceFileName();
@@ -339,6 +336,8 @@ namespace llvm {
     bool ParseFnAttributeValuePairs(AttrBuilder &B,
                                     std::vector<unsigned> &FwdRefAttrGrps,
                                     bool inAttrGrp, LocTy &BuiltinLoc);
+    bool ParseByValWithOptionalType(Type *&Result);
+    bool ParsePreallocated(Type *&Result);
 
     // Module Summary Index Parsing.
     bool SkipModuleSummaryEntry();
@@ -346,6 +345,7 @@ namespace llvm {
     bool ParseModuleEntry(unsigned ID);
     bool ParseModuleReference(StringRef &ModulePath);
     bool ParseGVReference(ValueInfo &VI, unsigned &GVId);
+    bool ParseSummaryIndexFlags();
     bool ParseGVEntry(unsigned ID);
     bool ParseFunctionSummary(std::string Name, GlobalValue::GUID, unsigned ID);
     bool ParseVariableSummary(std::string Name, GlobalValue::GUID, unsigned ID);
@@ -368,9 +368,11 @@ namespace llvm {
                          IdToIndexMapType &IdToIndexMap, unsigned Index);
     bool ParseVFuncId(FunctionSummary::VFuncId &VFuncId,
                       IdToIndexMapType &IdToIndexMap, unsigned Index);
+    bool ParseOptionalVTableFuncs(VTableFuncList &VTableFuncs);
     bool ParseOptionalRefs(std::vector<ValueInfo> &Refs);
     bool ParseTypeIdEntry(unsigned ID);
     bool ParseTypeIdSummary(TypeIdSummary &TIS);
+    bool ParseTypeIdCompatibleVtableEntry(unsigned ID);
     bool ParseTypeTestResolution(TypeTestResolution &TTRes);
     bool ParseOptionalWpdResolutions(
         std::map<uint64_t, WholeProgramDevirtResolution> &WPDResMap);
@@ -597,6 +599,7 @@ namespace llvm {
     int ParseGetElementPtr(Instruction *&Inst, PerFunctionState &PFS);
     int ParseExtractValue(Instruction *&Inst, PerFunctionState &PFS);
     int ParseInsertValue(Instruction *&Inst, PerFunctionState &PFS);
+    bool ParseFreeze(Instruction *&I, PerFunctionState &PFS);
 
     // Use-list order directives.
     bool ParseUseListOrder(PerFunctionState *PFS = nullptr);

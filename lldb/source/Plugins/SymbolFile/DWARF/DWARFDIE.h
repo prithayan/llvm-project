@@ -6,8 +6,8 @@
 //
 //===----------------------------------------------------------------------===//
 
-#ifndef SymbolFileDWARF_DWARFDIE_h_
-#define SymbolFileDWARF_DWARFDIE_h_
+#ifndef LLDB_SOURCE_PLUGINS_SYMBOLFILE_DWARF_DWARFDIE_H
+#define LLDB_SOURCE_PLUGINS_SYMBOLFILE_DWARF_DWARFDIE_H
 
 #include "DWARFBaseDIE.h"
 #include "llvm/ADT/SmallSet.h"
@@ -22,10 +22,6 @@ public:
   bool IsMethod() const;
 
   // Accessors
-  lldb::ModuleSP GetContainingDWOModule() const;
-
-  DWARFDIE
-  GetContainingDWOModuleDIE() const;
 
   // Accessing information about a DIE
   const char *GetMangledName() const;
@@ -34,10 +30,15 @@ public:
 
   const char *GetQualifiedName(std::string &storage) const;
 
+  using DWARFBaseDIE::GetName;
+  void GetName(lldb_private::Stream &s) const;
+
+  void AppendTypeName(lldb_private::Stream &s) const;
+
   lldb_private::Type *ResolveType() const;
 
   // Resolve a type by UID using this DIE's DWARF file
-  lldb_private::Type *ResolveTypeUID(const DIERef &die_ref) const;
+  lldb_private::Type *ResolveTypeUID(const DWARFDIE &die) const;
 
   // Functions for obtaining DIE relations and references
 
@@ -69,12 +70,10 @@ public:
   // DeclContext related functions
   std::vector<DWARFDIE> GetDeclContextDIEs() const;
 
-  void GetDWARFDeclContext(DWARFDeclContext &dwarf_decl_ctx) const;
-
   /// Return this DIE's decl context as it is needed to look up types
   /// in Clang's -gmodules debug info format.
-  void
-  GetDeclContext(std::vector<lldb_private::CompilerContext> &context) const;
+  void GetDeclContext(
+      llvm::SmallVectorImpl<lldb_private::CompilerContext> &context) const;
 
   // Getting attribute values from the DIE.
   //
@@ -89,14 +88,6 @@ public:
                             int &decl_line, int &decl_column, int &call_file,
                             int &call_line, int &call_column,
                             lldb_private::DWARFExpression *frame_base) const;
-
-  // CompilerDecl related functions
-
-  lldb_private::CompilerDecl GetDecl() const;
-
-  lldb_private::CompilerDeclContext GetDeclContext() const;
-
-  lldb_private::CompilerDeclContext GetContainingDeclContext() const;
 };
 
-#endif // SymbolFileDWARF_DWARFDIE_h_
+#endif // LLDB_SOURCE_PLUGINS_SYMBOLFILE_DWARF_DWARFDIE_H

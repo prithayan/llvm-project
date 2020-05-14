@@ -6,7 +6,7 @@
 //
 //===----------------------------------------------------------------------===//
 //
-// UNSUPPORTED: libcpp-no-exceptions
+// UNSUPPORTED: no-exceptions
 // UNSUPPORTED: libcpp-has-no-threads
 // UNSUPPORTED: c++98, c++03
 
@@ -19,6 +19,7 @@
 #include <future>
 #include <cassert>
 
+#include "test_macros.h"
 #include "test_allocator.h"
 
 int main(int, char**)

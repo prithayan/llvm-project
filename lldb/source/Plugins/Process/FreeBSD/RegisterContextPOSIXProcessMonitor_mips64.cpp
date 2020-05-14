@@ -1,4 +1,4 @@
-//===-- RegisterContextPOSIXProcessMonitor_mips64.cpp -----------*- C++ -*-===//
+//===-- RegisterContextPOSIXProcessMonitor_mips64.cpp ---------------------===//
 //
 // Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
 // See https://llvm.org/LICENSE.txt for license information.
@@ -160,7 +160,7 @@ bool RegisterContextPOSIXProcessMonitor_mips64::ReadAllRegisterValues(
     DataBufferSP &data_sp) {
   bool success = false;
   data_sp.reset(new DataBufferHeap(REG_CONTEXT_SIZE, 0));
-  if (data_sp && ReadGPR() && ReadFPR()) {
+  if (ReadGPR() && ReadFPR()) {
     uint8_t *dst = data_sp->GetBytes();
     success = dst != 0;
 

@@ -1,4 +1,4 @@
-//===-- SBData.cpp ----------------------------------------------*- C++ -*-===//
+//===-- SBData.cpp --------------------------------------------------------===//
 //
 // Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
 // See https://llvm.org/LICENSE.txt for license information.
@@ -41,7 +41,7 @@ const SBData &SBData::operator=(const SBData &rhs) {
   return LLDB_RECORD_RESULT(*this);
 }
 
-SBData::~SBData() {}
+SBData::~SBData() = default;
 
 void SBData::SetOpaque(const lldb::DataExtractorSP &data_sp) {
   m_opaque_sp = data_sp;
@@ -64,7 +64,7 @@ bool SBData::IsValid() {
 SBData::operator bool() const {
   LLDB_RECORD_METHOD_CONST_NO_ARGS(bool, SBData, operator bool);
 
-  return m_opaque_sp.get() != NULL;
+  return m_opaque_sp.get() != nullptr;
 }
 
 uint8_t SBData::GetAddressByteSize() {
@@ -312,13 +312,13 @@ const char *SBData::GetString(lldb::SBError &error, lldb::offset_t offset) {
   LLDB_RECORD_METHOD(const char *, SBData, GetString,
                      (lldb::SBError &, lldb::offset_t), error, offset);
 
-  const char *value = 0;
+  const char *value = nullptr;
   if (!m_opaque_sp.get()) {
     error.SetErrorString("no value to read from");
   } else {
     uint32_t old_offset = offset;
     value = m_opaque_sp->GetCStr(&offset);
-    if (offset == old_offset || (value == NULL))
+    if (offset == old_offset || (value == nullptr))
       error.SetErrorString("unable to read data");
   }
   return value;
@@ -346,13 +346,13 @@ size_t SBData::ReadRawData(lldb::SBError &error, lldb::offset_t offset,
                     (lldb::SBError &, lldb::offset_t, void *, size_t), error,
                     offset, buf, size);
 
-  void *ok = NULL;
+  void *ok = nullptr;
   if (!m_opaque_sp.get()) {
     error.SetErrorString("no value to read from");
   } else {
     uint32_t old_offset = offset;
     ok = m_opaque_sp->GetU8(&offset, buf, size);
-    if ((offset == old_offset) || (ok == NULL))
+    if ((offset == old_offset) || (ok == nullptr))
       error.SetErrorString("unable to read data");
   }
   return ok ? size : 0;

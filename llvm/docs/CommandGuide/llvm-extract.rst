@@ -1,6 +1,8 @@
 llvm-extract - extract a function from an LLVM module
 =====================================================
 
+.. program:: llvm-extract
+
 SYNOPSIS
 --------
 
@@ -53,6 +55,10 @@ OPTIONS
  bitcode.  All global variables matching the regular expression will be
  extracted.  May be specified multiple times.
 
+**--keep-const-init**
+
+ Preserve the values of constant globals.
+
 **-help**
 
  Print a summary of command line options.
@@ -75,5 +81,4 @@ occurs, it will exit with a non-zero value.
 SEE ALSO
 --------
 
-bugpoint
-
+:manpage:`bugpoint(1)`

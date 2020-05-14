@@ -6,8 +6,8 @@
 //
 //===----------------------------------------------------------------------===//
 
-#ifndef SymbolFileDWARF_DWARFDebugAbbrev_h_
-#define SymbolFileDWARF_DWARFDebugAbbrev_h_
+#ifndef LLDB_SOURCE_PLUGINS_SYMBOLFILE_DWARF_DWARFDEBUGABBREV_H
+#define LLDB_SOURCE_PLUGINS_SYMBOLFILE_DWARF_DWARFDEBUGABBREV_H
 
 #include <list>
 #include <map>
@@ -45,6 +45,10 @@ public:
   const DWARFAbbreviationDeclaration *
   GetAbbreviationDeclaration(dw_uleb128_t abbrCode) const;
 
+  /// Unit test accessor functions.
+  /// @{
+  uint32_t GetIndexOffset() const { return m_idx_offset; }
+  /// @}
 private:
   dw_offset_t m_offset;
   uint32_t m_idx_offset;
@@ -74,4 +78,4 @@ protected:
   mutable DWARFAbbreviationDeclarationCollMapConstIter m_prev_abbr_offset_pos;
 };
 
-#endif // SymbolFileDWARF_DWARFDebugAbbrev_h_
+#endif // LLDB_SOURCE_PLUGINS_SYMBOLFILE_DWARF_DWARFDEBUGABBREV_H

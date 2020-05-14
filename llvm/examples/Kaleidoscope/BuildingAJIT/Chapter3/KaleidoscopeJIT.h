@@ -64,28 +64,30 @@ private:
 public:
   KaleidoscopeJIT()
       : TM(EngineBuilder().selectTarget()), DL(TM->createDataLayout()),
-        ObjectLayer(ES,
+        ObjectLayer(AcknowledgeORCv1Deprecation, ES,
                     [this](VModuleKey K) {
                       return LegacyRTDyldObjectLinkingLayer::Resources{
                           std::make_shared<SectionMemoryManager>(),
                           Resolvers[K]};
                     }),
-        CompileLayer(ObjectLayer, SimpleCompiler(*TM)),
-        OptimizeLayer(CompileLayer,
+        CompileLayer(AcknowledgeORCv1Deprecation, ObjectLayer,
+                     SimpleCompiler(*TM)),
+        OptimizeLayer(AcknowledgeORCv1Deprecation, CompileLayer,
                       [this](std::unique_ptr<Module> M) {
                         return optimizeModule(std::move(M));
                       }),
         CompileCallbackManager(cantFail(orc::createLocalCompileCallbackManager(
             TM->getTargetTriple(), ES, 0))),
-        CODLayer(ES, OptimizeLayer,
-                 [&](orc::VModuleKey K) { return Resolvers[K]; },
-                 [&](orc::VModuleKey K, std::shared_ptr<SymbolResolver> R) {
-                   Resolvers[K] = std::move(R);
-                 },
-                 [](Function &F) { return std::set<Function *>({&F}); },
-                 *CompileCallbackManager,
-                 orc::createLocalIndirectStubsManagerBuilder(
-                     TM->getTargetTriple())) {
+        CODLayer(
+            AcknowledgeORCv1Deprecation, ES, OptimizeLayer,
+            [&](orc::VModuleKey K) { return Resolvers[K]; },
+            [&](orc::VModuleKey K, std::shared_ptr<SymbolResolver> R) {
+              Resolvers[K] = std::move(R);
+            },
+            [](Function &F) { return std::set<Function *>({&F}); },
+            *CompileCallbackManager,
+            orc::createLocalIndirectStubsManagerBuilder(
+                TM->getTargetTriple())) {
     llvm::sys::DynamicLibrary::LoadLibraryPermanently(nullptr);
   }
 
@@ -98,13 +100,13 @@ public:
     // Build a resolver and associate it with the new key.
     Resolvers[K] = createLegacyLookupResolver(
         ES,
-        [this](const std::string &Name) -> JITSymbol {
-          if (auto Sym = CompileLayer.findSymbol(Name, false))
+        [this](StringRef Name) -> JITSymbol {
+          if (auto Sym = CompileLayer.findSymbol(std::string(Name), false))
             return Sym;
           else if (auto Err = Sym.takeError())
             return std::move(Err);
-          if (auto SymAddr =
-                  RTDyldMemoryManager::getSymbolAddressInProcess(Name))
+          if (auto SymAddr = RTDyldMemoryManager::getSymbolAddressInProcess(
+                  std::string(Name)))
             return JITSymbol(SymAddr, JITSymbolFlags::Exported);
           return nullptr;
         },
@@ -129,7 +131,7 @@ public:
 private:
   std::unique_ptr<Module> optimizeModule(std::unique_ptr<Module> M) {
     // Create a function pass manager.
-    auto FPM = llvm::make_unique<legacy::FunctionPassManager>(M.get());
+    auto FPM = std::make_unique<legacy::FunctionPassManager>(M.get());
 
     // Add some optimizations.
     FPM->add(createInstructionCombiningPass());

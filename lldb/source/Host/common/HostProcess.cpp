@@ -1,4 +1,4 @@
-//===-- HostProcess.cpp -----------------------------------------*- C++ -*-===//
+//===-- HostProcess.cpp ---------------------------------------------------===//
 //
 // Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
 // See https://llvm.org/LICENSE.txt for license information.
@@ -32,7 +32,7 @@ lldb::pid_t HostProcess::GetProcessId() const {
 
 bool HostProcess::IsRunning() const { return m_native_process->IsRunning(); }
 
-HostThread
+llvm::Expected<HostThread>
 HostProcess::StartMonitoring(const Host::MonitorChildProcessCallback &callback,
                              bool monitor_signals) {
   return m_native_process->StartMonitoring(callback, monitor_signals);

@@ -69,9 +69,9 @@ static __inline int rep_clz(rep_t a) {
   return __builtin_clzl(a);
 #else
   if (a & REP_C(0xffffffff00000000))
-    return __builtin_clz(a >> 32);
+    return clzsi(a >> 32);
   else
-    return 32 + __builtin_clz(a & REP_C(0xffffffff));
+    return 32 + clzsi(a & REP_C(0xffffffff));
 #endif
 }
 
@@ -100,7 +100,7 @@ static __inline void wideMultiply(rep_t a, rep_t b, rep_t *hi, rep_t *lo) {
 COMPILER_RT_ABI fp_t __adddf3(fp_t a, fp_t b);
 
 #elif defined QUAD_PRECISION
-#if __LDBL_MANT_DIG__ == 113
+#if __LDBL_MANT_DIG__ == 113 && defined(__SIZEOF_INT128__)
 #define CRT_LDBL_128BIT
 typedef __uint128_t rep_t;
 typedef __int128_t srep_t;
@@ -193,7 +193,7 @@ static __inline void wideMultiply(rep_t a, rep_t b, rep_t *hi, rep_t *lo) {
 #undef Word_HiMask
 #undef Word_LoMask
 #undef Word_FullMask
-#endif // __LDBL_MANT_DIG__ == 113
+#endif // __LDBL_MANT_DIG__ == 113 && __SIZEOF_INT128__
 #else
 #error SINGLE_PRECISION, DOUBLE_PRECISION or QUAD_PRECISION must be defined.
 #endif
@@ -245,7 +245,7 @@ static __inline void wideLeftShift(rep_t *hi, rep_t *lo, int count) {
 static __inline void wideRightShiftWithSticky(rep_t *hi, rep_t *lo,
                                               unsigned int count) {
   if (count < typeWidth) {
-    const bool sticky = *lo << (typeWidth - count);
+    const bool sticky = (*lo << (typeWidth - count)) != 0;
     *lo = *hi << (typeWidth - count) | *lo >> count | sticky;
     *hi = *hi >> count;
   } else if (count < 2 * typeWidth) {

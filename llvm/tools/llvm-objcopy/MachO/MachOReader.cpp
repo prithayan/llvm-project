@@ -28,10 +28,11 @@ void MachOReader::readHeader(Object &O) const {
 }
 
 template <typename SectionType>
-Section constructSectionCommon(SectionType Sec) {
-  Section S;
-  memcpy(S.Sectname, Sec.sectname, sizeof(Sec.sectname));
-  memcpy(S.Segname, Sec.segname, sizeof(Sec.segname));
+Section constructSectionCommon(SectionType Sec, uint32_t Index) {
+  StringRef SegName(Sec.segname, strnlen(Sec.segname, sizeof(Sec.segname)));
+  StringRef SectName(Sec.sectname, strnlen(Sec.sectname, sizeof(Sec.sectname)));
+  Section S(SegName, SectName);
+  S.Index = Index;
   S.Addr = Sec.addr;
   S.Size = Sec.size;
   S.Offset = Sec.offset;
@@ -45,41 +46,43 @@ Section constructSectionCommon(SectionType Sec) {
   return S;
 }
 
-template <typename SectionType> Section constructSection(SectionType Sec);
+template <typename SectionType>
+Section constructSection(SectionType Sec, uint32_t Index);
 
-template <> Section constructSection(MachO::section Sec) {
-  return constructSectionCommon(Sec);
+template <> Section constructSection(MachO::section Sec, uint32_t Index) {
+  return constructSectionCommon(Sec, Index);
 }
 
-template <> Section constructSection(MachO::section_64 Sec) {
-  Section S = constructSectionCommon(Sec);
+template <> Section constructSection(MachO::section_64 Sec, uint32_t Index) {
+  Section S = constructSectionCommon(Sec, Index);
   S.Reserved3 = Sec.reserved3;
   return S;
 }
 
 // TODO: get rid of reportError and make MachOReader return Expected<> instead.
 template <typename SectionType, typename SegmentType>
-std::vector<Section>
+std::vector<std::unique_ptr<Section>>
 extractSections(const object::MachOObjectFile::LoadCommandInfo &LoadCmd,
                 const object::MachOObjectFile &MachOObj,
-                size_t &NextSectionIndex) {
+                uint32_t &NextSectionIndex) {
   auto End = LoadCmd.Ptr + LoadCmd.C.cmdsize;
   const SectionType *Curr =
       reinterpret_cast<const SectionType *>(LoadCmd.Ptr + sizeof(SegmentType));
-  std::vector<Section> Sections;
+  std::vector<std::unique_ptr<Section>> Sections;
   for (; reinterpret_cast<const void *>(Curr) < End; Curr++) {
     if (MachOObj.isLittleEndian() != sys::IsLittleEndianHost) {
       SectionType Sec;
       memcpy((void *)&Sec, Curr, sizeof(SectionType));
       MachO::swapStruct(Sec);
-      Sections.push_back(constructSection(Sec));
+      Sections.push_back(
+          std::make_unique<Section>(constructSection(Sec, NextSectionIndex)));
     } else {
-      Sections.push_back(constructSection(*Curr));
+      Sections.push_back(
+          std::make_unique<Section>(constructSection(*Curr, NextSectionIndex)));
     }
 
-    Section &S = Sections.back();
+    Section &S = *Sections.back();
 
-    StringRef SectName(S.Sectname);
     Expected<object::SectionRef> SecRef =
         MachOObj.getSection(NextSectionIndex++);
     if (!SecRef)
@@ -95,8 +98,15 @@ extractSections(const object::MachOObjectFile::LoadCommandInfo &LoadCmd,
     S.Relocations.reserve(S.NReloc);
     for (auto RI = MachOObj.section_rel_begin(SecRef->getRawDataRefImpl()),
               RE = MachOObj.section_rel_end(SecRef->getRawDataRefImpl());
-         RI != RE; ++RI)
-      S.Relocations.push_back(MachOObj.getRelocation(RI->getRawDataRefImpl()));
+         RI != RE; ++RI) {
+      RelocationInfo R;
+      R.Symbol = nullptr; // We'll fill this field later.
+      R.Info = MachOObj.getRelocation(RI->getRawDataRefImpl());
+      R.Scattered = MachOObj.isRelocationScattered(R.Info);
+      R.Extern = !R.Scattered && MachOObj.getPlainRelocationExternal(R.Info);
+      S.Relocations.push_back(R);
+    }
+
     assert(S.NReloc == S.Relocations.size() &&
            "Incorrect number of relocations");
   }
@@ -105,7 +115,7 @@ extractSections(const object::MachOObjectFile::LoadCommandInfo &LoadCmd,
 
 void MachOReader::readLoadCommands(Object &O) const {
   // For MachO sections indices start from 1.
-  size_t NextSectionIndex = 1;
+  uint32_t NextSectionIndex = 1;
   for (auto LoadCmd : MachOObj.load_commands()) {
     LoadCommand LC;
     switch (LoadCmd.C.cmd) {
@@ -121,9 +131,18 @@ void MachOReader::readLoadCommands(Object &O) const {
     case MachO::LC_SYMTAB:
       O.SymTabCommandIndex = O.LoadCommands.size();
       break;
+    case MachO::LC_DYSYMTAB:
+      O.DySymTabCommandIndex = O.LoadCommands.size();
+      break;
     case MachO::LC_DYLD_INFO:
     case MachO::LC_DYLD_INFO_ONLY:
       O.DyLdInfoCommandIndex = O.LoadCommands.size();
+      break;
+    case MachO::LC_DATA_IN_CODE:
+      O.DataInCodeCommandIndex = O.LoadCommands.size();
+      break;
+    case MachO::LC_FUNCTION_STARTS:
+      O.FunctionStartsCommandIndex = O.LoadCommands.size();
       break;
     }
 #define HANDLE_LOAD_COMMAND(LCName, LCValue, LCStruct)                         \
@@ -132,10 +151,11 @@ void MachOReader::readLoadCommands(Object &O) const {
            sizeof(MachO::LCStruct));                                           \
     if (MachOObj.isLittleEndian() != sys::IsLittleEndianHost)                  \
       MachO::swapStruct(LC.MachOLoadCommand.LCStruct##_data);                  \
-    LC.Payload = ArrayRef<uint8_t>(                                            \
-        reinterpret_cast<uint8_t *>(const_cast<char *>(LoadCmd.Ptr)) +         \
-            sizeof(MachO::LCStruct),                                           \
-        LoadCmd.C.cmdsize - sizeof(MachO::LCStruct));                          \
+    if (LoadCmd.C.cmdsize > sizeof(MachO::LCStruct))                           \
+      LC.Payload = ArrayRef<uint8_t>(                                          \
+          reinterpret_cast<uint8_t *>(const_cast<char *>(LoadCmd.Ptr)) +       \
+              sizeof(MachO::LCStruct),                                         \
+          LoadCmd.C.cmdsize - sizeof(MachO::LCStruct));                        \
     break;
 
     switch (LoadCmd.C.cmd) {
@@ -144,10 +164,11 @@ void MachOReader::readLoadCommands(Object &O) const {
              sizeof(MachO::load_command));
       if (MachOObj.isLittleEndian() != sys::IsLittleEndianHost)
         MachO::swapStruct(LC.MachOLoadCommand.load_command_data);
-      LC.Payload = ArrayRef<uint8_t>(
-          reinterpret_cast<uint8_t *>(const_cast<char *>(LoadCmd.Ptr)) +
-              sizeof(MachO::load_command),
-          LoadCmd.C.cmdsize - sizeof(MachO::load_command));
+      if (LoadCmd.C.cmdsize > sizeof(MachO::load_command))
+        LC.Payload = ArrayRef<uint8_t>(
+            reinterpret_cast<uint8_t *>(const_cast<char *>(LoadCmd.Ptr)) +
+                sizeof(MachO::load_command),
+            LoadCmd.C.cmdsize - sizeof(MachO::load_command));
       break;
 #include "llvm/BinaryFormat/MachO.def"
     }
@@ -155,35 +176,55 @@ void MachOReader::readLoadCommands(Object &O) const {
   }
 }
 
-template <typename nlist_t> NListEntry constructNameList(const nlist_t &nlist) {
-  NListEntry NL;
-  NL.n_strx = nlist.n_strx;
-  NL.n_type = nlist.n_type;
-  NL.n_sect = nlist.n_sect;
-  NL.n_desc = nlist.n_desc;
-  NL.n_value = nlist.n_value;
-  return NL;
+template <typename nlist_t>
+SymbolEntry constructSymbolEntry(StringRef StrTable, const nlist_t &nlist) {
+  assert(nlist.n_strx < StrTable.size() &&
+         "n_strx exceeds the size of the string table");
+  SymbolEntry SE;
+  SE.Name = StringRef(StrTable.data() + nlist.n_strx).str();
+  SE.n_type = nlist.n_type;
+  SE.n_sect = nlist.n_sect;
+  SE.n_desc = nlist.n_desc;
+  SE.n_value = nlist.n_value;
+  return SE;
 }
 
 void MachOReader::readSymbolTable(Object &O) const {
+  StringRef StrTable = MachOObj.getStringTableData();
   for (auto Symbol : MachOObj.symbols()) {
-    NListEntry NLE =
-        MachOObj.is64Bit()
-            ? constructNameList<MachO::nlist_64>(
-                  MachOObj.getSymbol64TableEntry(Symbol.getRawDataRefImpl()))
-            : constructNameList<MachO::nlist>(
-                  MachOObj.getSymbolTableEntry(Symbol.getRawDataRefImpl()));
-    O.SymTable.NameList.push_back(NLE);
+    SymbolEntry SE =
+        (MachOObj.is64Bit()
+             ? constructSymbolEntry(StrTable, MachOObj.getSymbol64TableEntry(
+                                                  Symbol.getRawDataRefImpl()))
+             : constructSymbolEntry(StrTable, MachOObj.getSymbolTableEntry(
+                                                  Symbol.getRawDataRefImpl())));
+
+    O.SymTable.Symbols.push_back(std::make_unique<SymbolEntry>(SE));
   }
 }
 
-void MachOReader::readStringTable(Object &O) const {
-  StringRef Data = MachOObj.getStringTableData();
-  SmallVector<StringRef, 10> Strs;
-  Data.split(Strs, '\0');
-  O.StrTable.Strings.reserve(Strs.size());
-  for (auto S : Strs)
-    O.StrTable.Strings.push_back(S.str());
+void MachOReader::setSymbolInRelocationInfo(Object &O) const {
+  std::vector<const Section *> Sections;
+  for (auto &LC : O.LoadCommands)
+    for (std::unique_ptr<Section> &Sec : LC.Sections)
+      Sections.push_back(Sec.get());
+
+  for (LoadCommand &LC : O.LoadCommands)
+    for (std::unique_ptr<Section> &Sec : LC.Sections)
+      for (auto &Reloc : Sec->Relocations)
+        if (!Reloc.Scattered) {
+          const uint32_t SymbolNum =
+              Reloc.getPlainRelocationSymbolNum(MachOObj.isLittleEndian());
+          if (Reloc.Extern) {
+            Reloc.Symbol = O.SymTable.getSymbolByIndex(SymbolNum);
+          } else {
+            // FIXME: Refactor error handling in MachOReader and report an error
+            // if we encounter an invalid relocation.
+            assert(SymbolNum >= 1 && SymbolNum <= Sections.size() &&
+                   "Invalid section index.");
+            Reloc.Sec = Sections[SymbolNum - 1];
+          }
+        }
 }
 
 void MachOReader::readRebaseInfo(Object &O) const {
@@ -206,17 +247,56 @@ void MachOReader::readExportInfo(Object &O) const {
   O.Exports.Trie = MachOObj.getDyldInfoExportsTrie();
 }
 
+void MachOReader::readDataInCodeData(Object &O) const {
+  if (!O.DataInCodeCommandIndex)
+    return;
+  const MachO::linkedit_data_command &LDC =
+      O.LoadCommands[*O.DataInCodeCommandIndex]
+          .MachOLoadCommand.linkedit_data_command_data;
+
+  O.DataInCode.Data = arrayRefFromStringRef(
+      MachOObj.getData().substr(LDC.dataoff, LDC.datasize));
+}
+
+void MachOReader::readFunctionStartsData(Object &O) const {
+  if (!O.FunctionStartsCommandIndex)
+    return;
+  const MachO::linkedit_data_command &LDC =
+      O.LoadCommands[*O.FunctionStartsCommandIndex]
+          .MachOLoadCommand.linkedit_data_command_data;
+
+  O.FunctionStarts.Data = arrayRefFromStringRef(
+      MachOObj.getData().substr(LDC.dataoff, LDC.datasize));
+}
+
+void MachOReader::readIndirectSymbolTable(Object &O) const {
+  MachO::dysymtab_command DySymTab = MachOObj.getDysymtabLoadCommand();
+  constexpr uint32_t AbsOrLocalMask =
+      MachO::INDIRECT_SYMBOL_LOCAL | MachO::INDIRECT_SYMBOL_ABS;
+  for (uint32_t i = 0; i < DySymTab.nindirectsyms; ++i) {
+    uint32_t Index = MachOObj.getIndirectSymbolTableEntry(DySymTab, i);
+    if ((Index & AbsOrLocalMask) != 0)
+      O.IndirectSymTable.Symbols.emplace_back(Index, None);
+    else
+      O.IndirectSymTable.Symbols.emplace_back(
+          Index, O.SymTable.getSymbolByIndex(Index));
+  }
+}
+
 std::unique_ptr<Object> MachOReader::create() const {
-  auto Obj = llvm::make_unique<Object>();
+  auto Obj = std::make_unique<Object>();
   readHeader(*Obj);
   readLoadCommands(*Obj);
   readSymbolTable(*Obj);
-  readStringTable(*Obj);
+  setSymbolInRelocationInfo(*Obj);
   readRebaseInfo(*Obj);
   readBindInfo(*Obj);
   readWeakBindInfo(*Obj);
   readLazyBindInfo(*Obj);
   readExportInfo(*Obj);
+  readDataInCodeData(*Obj);
+  readFunctionStartsData(*Obj);
+  readIndirectSymbolTable(*Obj);
   return Obj;
 }
 

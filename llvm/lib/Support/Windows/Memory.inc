@@ -17,11 +17,9 @@
 #include "llvm/Support/WindowsError.h"
 
 // The Windows.h header must be the last one included.
-#include "WindowsSupport.h"
+#include "llvm/Support/Windows/WindowsSupport.h"
 
-namespace {
-
-DWORD getWindowsProtectionFlags(unsigned Flags) {
+static DWORD getWindowsProtectionFlags(unsigned Flags) {
   switch (Flags & llvm::sys::Memory::MF_RWE_MASK) {
   // Contrary to what you might expect, the Windows page protection flags
   // are not a bitwise combination of RWX values
@@ -50,7 +48,7 @@ DWORD getWindowsProtectionFlags(unsigned Flags) {
 // While we'd be happy to allocate single pages, the Windows allocation
 // granularity may be larger than a single page (in practice, it is 64K)
 // so mapping less than that will create an unreachable fragment of memory.
-size_t getAllocationGranularity() {
+static size_t getAllocationGranularity() {
   SYSTEM_INFO  Info;
   ::GetSystemInfo(&Info);
   if (Info.dwPageSize > Info.dwAllocationGranularity)
@@ -91,8 +89,6 @@ static size_t enableProcessLargePages() {
   return 0;
 }
 
-} // namespace
-
 namespace llvm {
 namespace sys {
 
@@ -125,7 +121,7 @@ MemoryBlock Memory::allocateMappedMemory(size_t NumBytes,
   size_t NumBlocks = (NumBytes + Granularity - 1) / Granularity;
 
   uintptr_t Start = NearBlock ? reinterpret_cast<uintptr_t>(NearBlock->base()) +
-                                NearBlock->size()
+                                NearBlock->allocatedSize()
                            : 0;
 
   // If the requested address is not aligned to the allocation granularity,
@@ -149,7 +145,7 @@ MemoryBlock Memory::allocateMappedMemory(size_t NumBytes,
 
   MemoryBlock Result;
   Result.Address = PA;
-  Result.Size = NumBytes;
+  Result.AllocatedSize = AllocSize;
   Result.Flags = (Flags & ~MF_HUGE_HINT) | (HugePages ? MF_HUGE_HINT : 0);
 
   if (Flags & MF_EXEC)
@@ -159,31 +155,31 @@ MemoryBlock Memory::allocateMappedMemory(size_t NumBytes,
 }
 
   std::error_code Memory::releaseMappedMemory(MemoryBlock &M) {
-  if (M.Address == 0 || M.Size == 0)
+  if (M.Address == 0 || M.AllocatedSize == 0)
     return std::error_code();
 
   if (!VirtualFree(M.Address, 0, MEM_RELEASE))
     return mapWindowsError(::GetLastError());
 
   M.Address = 0;
-  M.Size = 0;
+  M.AllocatedSize = 0;
 
   return std::error_code();
 }
 
   std::error_code Memory::protectMappedMemory(const MemoryBlock &M,
                                        unsigned Flags) {
-  if (M.Address == 0 || M.Size == 0)
+  if (M.Address == 0 || M.AllocatedSize == 0)
     return std::error_code();
 
   DWORD Protect = getWindowsProtectionFlags(Flags);
 
   DWORD OldFlags;
-  if (!VirtualProtect(M.Address, M.Size, Protect, &OldFlags))
+  if (!VirtualProtect(M.Address, M.AllocatedSize, Protect, &OldFlags))
     return mapWindowsError(::GetLastError());
 
   if (Flags & MF_EXEC)
-    Memory::InvalidateInstructionCache(M.Address, M.Size);
+    Memory::InvalidateInstructionCache(M.Address, M.AllocatedSize);
 
   return std::error_code();
 }

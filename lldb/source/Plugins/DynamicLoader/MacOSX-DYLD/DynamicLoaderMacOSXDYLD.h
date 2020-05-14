@@ -17,8 +17,8 @@
 // dyld SPI functions to get the same information without reading internal dyld
 // data structures.
 
-#ifndef liblldb_DynamicLoaderMacOSXDYLD_h_
-#define liblldb_DynamicLoaderMacOSXDYLD_h_
+#ifndef LLDB_SOURCE_PLUGINS_DYNAMICLOADER_MACOSX_DYLD_DYNAMICLOADERMACOSXDYLD_H
+#define LLDB_SOURCE_PLUGINS_DYNAMICLOADER_MACOSX_DYLD_DYNAMICLOADERMACOSXDYLD_H
 
 #include <mutex>
 #include <vector>
@@ -121,7 +121,7 @@ protected:
       dyldImageLoadAddress = LLDB_INVALID_ADDRESS;
     }
 
-    bool IsValid() const { return version >= 1 || version <= 6; }
+    bool IsValid() const { return version >= 1 && version <= 6; }
   };
 
   static lldb::ByteOrder GetByteOrderFromMagic(uint32_t magic);
@@ -172,4 +172,4 @@ private:
   DISALLOW_COPY_AND_ASSIGN(DynamicLoaderMacOSXDYLD);
 };
 
-#endif // liblldb_DynamicLoaderMacOSXDYLD_h_
+#endif // LLDB_SOURCE_PLUGINS_DYNAMICLOADER_MACOSX_DYLD_DYNAMICLOADERMACOSXDYLD_H

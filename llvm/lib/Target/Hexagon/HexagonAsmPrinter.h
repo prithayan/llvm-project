@@ -13,7 +13,6 @@
 #ifndef LLVM_LIB_TARGET_HEXAGON_HEXAGONASMPRINTER_H
 #define LLVM_LIB_TARGET_HEXAGON_HEXAGONASMPRINTER_H
 
-#include "Hexagon.h"
 #include "HexagonSubtarget.h"
 #include "llvm/CodeGen/AsmPrinter.h"
 #include "llvm/CodeGen/MachineFunction.h"
@@ -47,7 +46,7 @@ class TargetMachine;
     bool isBlockOnlyReachableByFallthrough(const MachineBasicBlock *MBB)
           const override;
 
-    void EmitInstruction(const MachineInstr *MI) override;
+    void emitInstruction(const MachineInstr *MI) override;
     void HexagonProcessInstruction(MCInst &Inst, const MachineInstr &MBB);
 
     void printOperand(const MachineInstr *MI, unsigned OpNo, raw_ostream &O);

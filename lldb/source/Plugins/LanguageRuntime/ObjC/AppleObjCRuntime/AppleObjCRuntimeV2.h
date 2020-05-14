@@ -6,16 +6,17 @@
 //
 //===----------------------------------------------------------------------===//
 
-#ifndef liblldb_AppleObjCRuntimeV2_h_
-#define liblldb_AppleObjCRuntimeV2_h_
+#ifndef LLDB_SOURCE_PLUGINS_LANGUAGERUNTIME_OBJC_APPLEOBJCRUNTIME_APPLEOBJCRUNTIMEV2_H
+#define LLDB_SOURCE_PLUGINS_LANGUAGERUNTIME_OBJC_APPLEOBJCRUNTIME_APPLEOBJCRUNTIMEV2_H
 
 #include <map>
 #include <memory>
 #include <mutex>
 
 #include "AppleObjCRuntime.h"
-#include "lldb/Target/ObjCLanguageRuntime.h"
 #include "lldb/lldb-private.h"
+
+#include "Plugins/LanguageRuntime/ObjC/ObjCLanguageRuntime.h"
 
 class RemoteNXMapTable;
 
@@ -35,13 +36,14 @@ public:
 
   static lldb_private::ConstString GetPluginNameStatic();
 
-  static bool classof(const ObjCLanguageRuntime *runtime) {
-    switch (runtime->GetRuntimeVersion()) {
-    case ObjCRuntimeVersions::eAppleObjC_V2:
-      return true;
-    default:
-      return false;
-    }
+  static char ID;
+
+  bool isA(const void *ClassID) const override {
+    return ClassID == &ID || AppleObjCRuntime::isA(ClassID);
+  }
+
+  static bool classof(const LanguageRuntime *runtime) {
+    return runtime->isA(&ID);
   }
 
   // These are generic runtime functions:
@@ -66,8 +68,6 @@ public:
                               const char *ivar_name) override;
 
   void UpdateISAToDescriptorMapIfNeeded() override;
-
-  ConstString GetActualTypeName(ObjCLanguageRuntime::ObjCISA isa) override;
 
   ClassDescriptorSP GetClassDescriptor(ValueObject &in_value) override;
 
@@ -103,9 +103,9 @@ public:
   static const ObjCLanguageRuntime::ObjCISA g_objc_Tagged_ISA_NSDate = 6;
 
 protected:
-  lldb::BreakpointResolverSP CreateExceptionResolver(Breakpoint *bkpt,
-                                                     bool catch_bp,
-                                                     bool throw_bp) override;
+  lldb::BreakpointResolverSP
+  CreateExceptionResolver(const lldb::BreakpointSP &bkpt,
+                          bool catch_bp, bool throw_bp) override;
 
 private:
   class HashTableSignature {
@@ -337,4 +337,4 @@ private:
 
 } // namespace lldb_private
 
-#endif // liblldb_AppleObjCRuntimeV2_h_
+#endif // LLDB_SOURCE_PLUGINS_LANGUAGERUNTIME_OBJC_APPLEOBJCRUNTIME_APPLEOBJCRUNTIMEV2_H

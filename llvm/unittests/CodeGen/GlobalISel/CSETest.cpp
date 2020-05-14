@@ -11,7 +11,8 @@
 
 namespace {
 
-TEST_F(GISelMITest, TestCSE) {
+TEST_F(AArch64GISelMITest, TestCSE) {
+  setUp();
   if (!TM)
     return;
 
@@ -21,7 +22,7 @@ TEST_F(GISelMITest, TestCSE) {
   auto MIBInput1 = B.buildInstr(TargetOpcode::G_TRUNC, {s16}, {Copies[1]});
   auto MIBAdd = B.buildInstr(TargetOpcode::G_ADD, {s16}, {MIBInput, MIBInput});
   GISelCSEInfo CSEInfo;
-  CSEInfo.setCSEConfig(make_unique<CSEConfigFull>());
+  CSEInfo.setCSEConfig(std::make_unique<CSEConfigFull>());
   CSEInfo.analyze(*MF);
   B.setCSEInfo(&CSEInfo);
   CSEMIRBuilder CSEB(B.getState());
@@ -59,21 +60,27 @@ TEST_F(GISelMITest, TestCSE) {
   // CSE.
   auto Splat0 = CSEB.buildConstant(LLT::vector(2, s32), 0);
   EXPECT_EQ(TargetOpcode::G_BUILD_VECTOR, Splat0->getOpcode());
-  EXPECT_EQ(Splat0->getOperand(1).getReg(), Splat0->getOperand(2).getReg());
-  EXPECT_EQ(&*MIBCst, MRI->getVRegDef(Splat0->getOperand(1).getReg()));
+  EXPECT_EQ(Splat0.getReg(1), Splat0.getReg(2));
+  EXPECT_EQ(&*MIBCst, MRI->getVRegDef(Splat0.getReg(1)));
 
   auto FSplat = CSEB.buildFConstant(LLT::vector(2, s32), 1.0);
   EXPECT_EQ(TargetOpcode::G_BUILD_VECTOR, FSplat->getOpcode());
-  EXPECT_EQ(FSplat->getOperand(1).getReg(), FSplat->getOperand(2).getReg());
-  EXPECT_EQ(&*MIBFP0, MRI->getVRegDef(FSplat->getOperand(1).getReg()));
+  EXPECT_EQ(FSplat.getReg(1), FSplat.getReg(2));
+  EXPECT_EQ(&*MIBFP0, MRI->getVRegDef(FSplat.getReg(1)));
 
   // Check G_UNMERGE_VALUES
   auto MIBUnmerge = CSEB.buildUnmerge({s32, s32}, Copies[0]);
   auto MIBUnmerge2 = CSEB.buildUnmerge({s32, s32}, Copies[0]);
   EXPECT_TRUE(&*MIBUnmerge == &*MIBUnmerge2);
+
+  // Check G_IMPLICIT_DEF
+  auto Undef0 = CSEB.buildUndef(s32);
+  auto Undef1 = CSEB.buildUndef(s32);
+  EXPECT_EQ(&*Undef0, &*Undef1);
 }
 
-TEST_F(GISelMITest, TestCSEConstantConfig) {
+TEST_F(AArch64GISelMITest, TestCSEConstantConfig) {
+  setUp();
   if (!TM)
     return;
 
@@ -82,7 +89,7 @@ TEST_F(GISelMITest, TestCSEConstantConfig) {
   auto MIBAdd = B.buildInstr(TargetOpcode::G_ADD, {s16}, {MIBInput, MIBInput});
   auto MIBZero = B.buildConstant(s16, 0);
   GISelCSEInfo CSEInfo;
-  CSEInfo.setCSEConfig(make_unique<CSEConfigConstantOnly>());
+  CSEInfo.setCSEConfig(std::make_unique<CSEConfigConstantOnly>());
   CSEInfo.analyze(*MF);
   B.setCSEInfo(&CSEInfo);
   CSEMIRBuilder CSEB(B.getState());
@@ -95,5 +102,10 @@ TEST_F(GISelMITest, TestCSEConstantConfig) {
   // We should CSE constant.
   auto MIBZeroTmp = CSEB.buildConstant(s16, 0);
   EXPECT_TRUE(&*MIBZero == &*MIBZeroTmp);
+
+  // Check G_IMPLICIT_DEF
+  auto Undef0 = CSEB.buildUndef(s16);
+  auto Undef1 = CSEB.buildUndef(s16);
+  EXPECT_EQ(&*Undef0, &*Undef1);
 }
 } // namespace

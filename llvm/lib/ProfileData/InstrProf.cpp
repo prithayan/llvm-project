@@ -162,6 +162,10 @@ const char *InstrProfSectNamePrefix[] = {
 
 namespace llvm {
 
+cl::opt<bool> DoInstrProfNameCompression(
+    "enable-name-compression",
+    cl::desc("Enable name/filename string compression"), cl::init(true));
+
 std::string getInstrProfSectionName(InstrProfSectKind IPSK,
                                     Triple::ObjectFormatType OF,
                                     bool AddSegmentInfo) {
@@ -286,7 +290,7 @@ StringRef getFuncNameWithoutPrefix(StringRef PGOFuncName, StringRef FileName) {
 // symbol is created to hold the name. Return the legalized symbol name.
 std::string getPGOFuncNameVarName(StringRef FuncName,
                                   GlobalValue::LinkageTypes Linkage) {
-  std::string VarName = getInstrProfNameVarPrefix();
+  std::string VarName = std::string(getInstrProfNameVarPrefix());
   VarName += FuncName;
 
   if (!GlobalValue::isLocalLinkage(Linkage))
@@ -363,16 +367,15 @@ Error InstrProfSymtab::create(Module &M, bool InLTO) {
 
 uint64_t InstrProfSymtab::getFunctionHashFromAddress(uint64_t Address) {
   finalizeSymtab();
-  auto Result =
-      std::lower_bound(AddrToMD5Map.begin(), AddrToMD5Map.end(), Address,
-                       [](const std::pair<uint64_t, uint64_t> &LHS,
-                          uint64_t RHS) { return LHS.first < RHS; });
+  auto It = partition_point(AddrToMD5Map, [=](std::pair<uint64_t, uint64_t> A) {
+    return A.first < Address;
+  });
   // Raw function pointer collected by value profiler may be from
   // external functions that are not instrumented. They won't have
   // mapping data to be used by the deserializer. Force the value to
   // be 0 in this case.
-  if (Result != AddrToMD5Map.end() && Result->first == Address)
-    return (uint64_t)Result->second;
+  if (It != AddrToMD5Map.end() && It->first == Address)
+    return (uint64_t)It->second;
   return 0;
 }
 
@@ -428,7 +431,7 @@ Error collectPGOFuncNameStrings(ArrayRef<GlobalVariable *> NameVars,
                                 std::string &Result, bool doCompression) {
   std::vector<std::string> NameStrs;
   for (auto *NameVar : NameVars) {
-    NameStrs.push_back(getPGOFuncNameVarInitializer(NameVar));
+    NameStrs.push_back(std::string(getPGOFuncNameVarInitializer(NameVar)));
   }
   return collectPGOFuncNameStrings(
       NameStrs, zlib::isAvailable() && doCompression, Result);
@@ -479,7 +482,7 @@ Error readPGOFuncNameStrings(StringRef NameStrings, InstrProfSymtab &Symtab) {
   return Error::success();
 }
 
-void InstrProfRecord::accumuateCounts(CountSumOrPercent &Sum) const {
+void InstrProfRecord::accumulateCounts(CountSumOrPercent &Sum) const {
   uint64_t FuncSum = 0;
   Sum.NumEntries += Counts.size();
   for (size_t F = 0, E = Counts.size(); F < E; ++F)
@@ -553,7 +556,7 @@ void InstrProfRecord::overlap(InstrProfRecord &Other, OverlapStats &Overlap,
                               uint64_t ValueCutoff) {
   // FuncLevel CountSum for other should already computed and nonzero.
   assert(FuncLevelOverlap.Test.CountSum >= 1.0f);
-  accumuateCounts(FuncLevelOverlap.Base);
+  accumulateCounts(FuncLevelOverlap.Base);
   bool Mismatch = (Counts.size() != Other.Counts.size());
 
   // Check if the value profiles mismatch.
@@ -1079,12 +1082,10 @@ bool isIRPGOFlagSet(const Module *M) {
   if (!IRInstrVar->hasInitializer())
     return false;
 
-  const Constant *InitVal = IRInstrVar->getInitializer();
+  auto *InitVal = dyn_cast_or_null<ConstantInt>(IRInstrVar->getInitializer());
   if (!InitVal)
     return false;
-
-  return (dyn_cast<ConstantInt>(InitVal)->getZExtValue() &
-          VARIANT_MASK_IR_PROF) != 0;
+  return (InitVal->getZExtValue() & VARIANT_MASK_IR_PROF) != 0;
 }
 
 // Check if we can safely rename this Comdat function.
@@ -1167,9 +1168,9 @@ void createProfileFileNameVar(Module &M, StringRef InstrProfileOutput) {
   }
 }
 
-Error OverlapStats::accumuateCounts(const std::string &BaseFilename,
-                                    const std::string &TestFilename,
-                                    bool IsCS) {
+Error OverlapStats::accumulateCounts(const std::string &BaseFilename,
+                                     const std::string &TestFilename,
+                                     bool IsCS) {
   auto getProfileSum = [IsCS](const std::string &Filename,
                               CountSumOrPercent &Sum) -> Error {
     auto ReaderOrErr = InstrProfReader::create(Filename);
@@ -1177,7 +1178,7 @@ Error OverlapStats::accumuateCounts(const std::string &BaseFilename,
       return E;
     }
     auto Reader = std::move(ReaderOrErr.get());
-    Reader->accumuateCounts(Sum, IsCS);
+    Reader->accumulateCounts(Sum, IsCS);
     return Error::success();
   };
   auto Ret = getProfileSum(BaseFilename, Base);

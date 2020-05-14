@@ -57,6 +57,17 @@ private:
   const std::unique_ptr<BoundNodesCallback> FindResultReviewer;
 };
 
+enum class LanguageMode {
+  Cxx11,
+  Cxx14,
+  Cxx17,
+  Cxx2a,
+  Cxx11OrLater,
+  Cxx14OrLater,
+  Cxx17OrLater,
+  Cxx2aOrLater
+};
+
 template <typename T>
 testing::AssertionResult matchesConditionally(
     const std::string &Code, const T &AMatcher, bool ExpectMatch,
@@ -116,14 +127,71 @@ testing::AssertionResult matchesConditionally(
 }
 
 template <typename T>
-testing::AssertionResult matches(const std::string &Code, const T &AMatcher) {
-  return matchesConditionally(Code, AMatcher, true, "-std=c++11");
+testing::AssertionResult
+matchesConditionally(const std::string &Code, const T &AMatcher,
+                     bool ExpectMatch, const LanguageMode &Mode) {
+  std::vector<LanguageMode> LangModes;
+  switch (Mode) {
+  case LanguageMode::Cxx11:
+  case LanguageMode::Cxx14:
+  case LanguageMode::Cxx17:
+  case LanguageMode::Cxx2a:
+    LangModes = {Mode};
+    break;
+  case LanguageMode::Cxx11OrLater:
+    LangModes = {LanguageMode::Cxx11, LanguageMode::Cxx14, LanguageMode::Cxx17,
+                 LanguageMode::Cxx2a};
+    break;
+  case LanguageMode::Cxx14OrLater:
+    LangModes = {LanguageMode::Cxx14, LanguageMode::Cxx17, LanguageMode::Cxx2a};
+    break;
+  case LanguageMode::Cxx17OrLater:
+    LangModes = {LanguageMode::Cxx17, LanguageMode::Cxx2a};
+    break;
+  case LanguageMode::Cxx2aOrLater:
+    LangModes = {LanguageMode::Cxx2a};
+  }
+
+  for (auto Mode : LangModes) {
+    std::string LangModeArg;
+    switch (Mode) {
+    case LanguageMode::Cxx11:
+      LangModeArg = "-std=c++11";
+      break;
+    case LanguageMode::Cxx14:
+      LangModeArg = "-std=c++14";
+      break;
+    case LanguageMode::Cxx17:
+      LangModeArg = "-std=c++17";
+      break;
+    case LanguageMode::Cxx2a:
+      LangModeArg = "-std=c++2a";
+      break;
+    default:
+      llvm_unreachable("Invalid language mode");
+    }
+
+    auto Result =
+        matchesConditionally(Code, AMatcher, ExpectMatch, LangModeArg);
+    if (!Result)
+      return Result;
+  }
+
+  return testing::AssertionSuccess();
 }
 
 template <typename T>
-testing::AssertionResult notMatches(const std::string &Code,
-                                    const T &AMatcher) {
-  return matchesConditionally(Code, AMatcher, false, "-std=c++11");
+testing::AssertionResult
+matches(const std::string &Code, const T &AMatcher,
+        const LanguageMode &Mode = LanguageMode::Cxx11) {
+  return matchesConditionally(Code, AMatcher, true, Mode);
+}
+
+template <typename T>
+testing::AssertionResult
+notMatches(const std::string &Code, const T &AMatcher,
+           const LanguageMode &Mode = LanguageMode::Cxx11) {
+  return matchesConditionally(Code, AMatcher, false, Mode);
 }
 
 template <typename T>
@@ -200,8 +268,8 @@ testing::AssertionResult matchesConditionallyWithCuda(
   // unknown-unknown triple is good for a large speedup, because it lets us
   // avoid constructing a full system triple.
   std::vector<std::string> Args = {
-      "-xcuda",  "-fno-ms-extensions",      "--cuda-host-only", "-nocudainc",
-      "-target", "x86_64-unknown-unknown", CompileArg};
+      "-xcuda",  "-fno-ms-extensions",     "--cuda-host-only",     "-nocudainc",
+      "-target", "x86_64-unknown-unknown", std::string(CompileArg)};
   if (!runToolOnCodeWithArgs(Factory->create(),
                              CudaHeader + Code, Args)) {
     return testing::AssertionFailure() << "Parsing error in \"" << Code << "\"";
@@ -317,20 +385,20 @@ public:
   // Create an object that checks that a node of type \c T was bound to \c Id.
   // Does not check for a certain number of matches.
   explicit VerifyIdIsBoundTo(llvm::StringRef Id)
-    : Id(Id), ExpectedCount(-1), Count(0) {}
+      : Id(std::string(Id)), ExpectedCount(-1), Count(0) {}
 
   // Create an object that checks that a node of type \c T was bound to \c Id.
   // Checks that there were exactly \c ExpectedCount matches.
   VerifyIdIsBoundTo(llvm::StringRef Id, int ExpectedCount)
-    : Id(Id), ExpectedCount(ExpectedCount), Count(0) {}
+      : Id(std::string(Id)), ExpectedCount(ExpectedCount), Count(0) {}
 
   // Create an object that checks that a node of type \c T was bound to \c Id.
   // Checks that there was exactly one match with the name \c ExpectedName.
   // Note that \c T must be a NamedDecl for this to work.
   VerifyIdIsBoundTo(llvm::StringRef Id, llvm::StringRef ExpectedName,
                     int ExpectedCount = 1)
-    : Id(Id), ExpectedCount(ExpectedCount), Count(0),
-      ExpectedName(ExpectedName) {}
+      : Id(std::string(Id)), ExpectedCount(ExpectedCount), Count(0),
+        ExpectedName(std::string(ExpectedName)) {}
 
   void onEndOfTranslationUnit() override {
     if (ExpectedCount != -1) {

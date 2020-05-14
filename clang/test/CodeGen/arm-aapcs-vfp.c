@@ -114,7 +114,7 @@ void test_neon(struct neon_struct arg) {
   neon_callee(arg);
 }
 
-// CHECK-LABEL: define arm_aapcs_vfpcc void @f33(%struct.s33* byval align 4 %s)
+// CHECK-LABEL: define arm_aapcs_vfpcc void @f33(%struct.s33* byval(%struct.s33) align 4 %s)
 struct s33 { char buf[32*32]; };
 void f33(struct s33 s) { }
 
@@ -125,7 +125,7 @@ void test_vfp_stack_gpr_split_1(double a, double b, double c, double d, double e
 // CHECK: define arm_aapcs_vfpcc void @test_vfp_stack_gpr_split_2(double %a, double %b, double %c, double %d, double %e, double %f, double %g, double %h, double %i, i32 %j, [2 x i64] %k.coerce)
 void test_vfp_stack_gpr_split_2(double a, double b, double c, double d, double e, double f, double g, double h, double i, int j, struct_long_long_int k) {}
 
-// CHECK: define arm_aapcs_vfpcc void @test_vfp_stack_gpr_split_3(%struct.struct_long_long_int* noalias sret %agg.result, double %a, double %b, double %c, double %d, double %e, double %f, double %g, double %h, double %i, [2 x i64] %k.coerce)
+// CHECK: define arm_aapcs_vfpcc void @test_vfp_stack_gpr_split_3(%struct.struct_long_long_int* noalias sret align 8 %agg.result, double %a, double %b, double %c, double %d, double %e, double %f, double %g, double %h, double %i, [2 x i64] %k.coerce)
 struct_long_long_int test_vfp_stack_gpr_split_3(double a, double b, double c, double d, double e, double f, double g, double h, double i, struct_long_long_int k) {}
 
 typedef struct { int a; int b:4; int c; } struct_int_bitfield_int;
@@ -140,10 +140,10 @@ void test_vfp_stack_gpr_split_4(double a, double b, double c, double d, double e
 // This very large struct (passed byval) uses up the GPRs, so no padding is needed
 typedef struct { int x[17]; } struct_seventeen_ints;
 typedef struct { int x[4]; } struct_four_ints;
-// CHECK: define arm_aapcs_vfpcc void @test_vfp_stack_gpr_split_5(%struct.struct_seventeen_ints* byval align 4 %a, double %b, double %c, double %d, double %e, double %f, double %g, double %h, double %i, double %j, [4 x i32] %k.coerce)
+// CHECK: define arm_aapcs_vfpcc void @test_vfp_stack_gpr_split_5(%struct.struct_seventeen_ints* byval(%struct.struct_seventeen_ints) align 4 %a, double %b, double %c, double %d, double %e, double %f, double %g, double %h, double %i, double %j, [4 x i32] %k.coerce)
 void test_vfp_stack_gpr_split_5(struct_seventeen_ints a, double b, double c, double d, double e, double f, double g, double h, double i, double j, struct_four_ints k) {}
 
 // Here, parameter k would need padding to prevent it from being split, but it
 // is passed ByVal (due to being > 64 bytes), so the backend handles this instead.
 void test_vfp_stack_gpr_split_6(double a, double b, double c, double d, double e, double f, double g, double h, double i, int j, struct_seventeen_ints k) {}
-// CHECK: define arm_aapcs_vfpcc void @test_vfp_stack_gpr_split_6(double %a, double %b, double %c, double %d, double %e, double %f, double %g, double %h, double %i, i32 %j, %struct.struct_seventeen_ints* byval align 4 %k)
+// CHECK: define arm_aapcs_vfpcc void @test_vfp_stack_gpr_split_6(double %a, double %b, double %c, double %d, double %e, double %f, double %g, double %h, double %i, i32 %j, %struct.struct_seventeen_ints* byval(%struct.struct_seventeen_ints) align 4 %k)

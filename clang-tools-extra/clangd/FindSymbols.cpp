@@ -8,16 +8,17 @@
 #include "FindSymbols.h"
 
 #include "AST.h"
-#include "ClangdUnit.h"
 #include "FuzzyMatch.h"
-#include "Logger.h"
+#include "ParsedAST.h"
 #include "Quality.h"
 #include "SourceCode.h"
 #include "index/Index.h"
+#include "support/Logger.h"
 #include "clang/AST/DeclTemplate.h"
 #include "clang/Index/IndexDataConsumer.h"
 #include "clang/Index/IndexSymbol.h"
 #include "clang/Index/IndexingAction.h"
+#include "llvm/ADT/StringRef.h"
 #include "llvm/Support/FormatVariadic.h"
 #include "llvm/Support/Path.h"
 #include "llvm/Support/ScopedPrinter.h"
@@ -39,6 +40,33 @@ struct ScoredSymbolGreater {
 
 } // namespace
 
+llvm::Expected<Location> indexToLSPLocation(const SymbolLocation &Loc,
+                                            llvm::StringRef TUPath) {
+  auto Path = URI::resolve(Loc.FileURI, TUPath);
+  if (!Path) {
+    return llvm::make_error<llvm::StringError>(
+        llvm::formatv("Could not resolve path for file '{0}': {1}", Loc.FileURI,
+                      llvm::toString(Path.takeError())),
+        llvm::inconvertibleErrorCode());
+  }
+  Location L;
+  L.uri = URIForFile::canonicalize(*Path, TUPath);
+  Position Start, End;
+  Start.line = Loc.Start.line();
+  Start.character = Loc.Start.column();
+  End.line = Loc.End.line();
+  End.character = Loc.End.column();
+  L.range = {Start, End};
+  return L;
+}
+
+llvm::Expected<Location> symbolToLocation(const Symbol &Sym,
+                                          llvm::StringRef TUPath) {
+  // Prefer the definition over e.g. a function declaration in a header
+  return indexToLSPLocation(
+      Sym.Definition ? Sym.Definition : Sym.CanonicalDeclaration, TUPath);
+}
+
 llvm::Expected<std::vector<SymbolInformation>>
 getWorkspaceSymbols(llvm::StringRef Query, int Limit,
                     const SymbolIndex *const Index, llvm::StringRef HintPath) {
@@ -49,14 +77,14 @@ getWorkspaceSymbols(llvm::StringRef Query, int Limit,
   auto Names = splitQualifiedName(Query);
 
   FuzzyFindRequest Req;
-  Req.Query = Names.second;
+  Req.Query = std::string(Names.second);
 
   // FuzzyFind doesn't want leading :: qualifier
   bool IsGlobalQuery = Names.first.consume_front("::");
   // Restrict results to the scope in the query string if present (global or
   // not).
   if (IsGlobalQuery || !Names.first.empty())
-    Req.Scopes = {Names.first};
+    Req.Scopes = {std::string(Names.first)};
   else
     Req.AnyScope = true;
   if (Limit)
@@ -65,37 +93,18 @@ getWorkspaceSymbols(llvm::StringRef Query, int Limit,
       Req.Limit ? *Req.Limit : std::numeric_limits<size_t>::max());
   FuzzyMatcher Filter(Req.Query);
   Index->fuzzyFind(Req, [HintPath, &Top, &Filter](const Symbol &Sym) {
-    // Prefer the definition over e.g. a function declaration in a header
-    auto &CD = Sym.Definition ? Sym.Definition : Sym.CanonicalDeclaration;
-    auto Uri = URI::parse(CD.FileURI);
-    if (!Uri) {
-      log("Workspace symbol: Could not parse URI '{0}' for symbol '{1}'.",
-          CD.FileURI, Sym.Name);
+    auto Loc = symbolToLocation(Sym, HintPath);
+    if (!Loc) {
+      log("Workspace symbols: {0}", Loc.takeError());
       return;
     }
-    auto Path = URI::resolve(*Uri, HintPath);
-    if (!Path) {
-      log("Workspace symbol: Could not resolve path for URI '{0}' for symbol "
-          "'{1}'.",
-          Uri->toString(), Sym.Name);
-      return;
-    }
-    Location L;
-    // Use HintPath as TUPath since there is no TU associated with this
-    // request.
-    L.uri = URIForFile::canonicalize(*Path, HintPath);
-    Position Start, End;
-    Start.line = CD.Start.line();
-    Start.character = CD.Start.column();
-    End.line = CD.End.line();
-    End.character = CD.End.column();
-    L.range = {Start, End};
+
     SymbolKind SK = indexSymbolKindToSymbolKind(Sym.SymInfo.Kind);
-    std::string Scope = Sym.Scope;
+    std::string Scope = std::string(Sym.Scope);
     llvm::StringRef ScopeRef = Scope;
     ScopeRef.consume_back("::");
     SymbolInformation Info = {(Sym.Name + Sym.TemplateSpecializationArgs).str(),
-                              SK, L, ScopeRef};
+                              SK, *Loc, std::string(ScopeRef)};
 
     SymbolQualitySignals Quality;
     Quality.merge(Sym);
@@ -126,7 +135,7 @@ namespace {
 llvm::Optional<DocumentSymbol> declToSym(ASTContext &Ctx, const NamedDecl &ND) {
   auto &SM = Ctx.getSourceManager();
 
-  SourceLocation NameLoc = findNameLoc(&ND);
+  SourceLocation NameLoc = nameLocation(ND, SM);
   // getFileLoc is a good choice for us, but we also need to make sure
   // sourceLocToPosition won't switch files, so we call getSpellingLoc on top of
   // that to make sure it does not switch files.
@@ -164,14 +173,14 @@ llvm::Optional<DocumentSymbol> declToSym(ASTContext &Ctx, const NamedDecl &ND) {
   return SI;
 }
 
-/// A helper class to build an outline for the parse AST. It traverse the AST
+/// A helper class to build an outline for the parse AST. It traverses the AST
 /// directly instead of using RecursiveASTVisitor (RAV) for three main reasons:
-///    - there is no way to keep RAV from traversing subtrees we're not
+///    - there is no way to keep RAV from traversing subtrees we are not
 ///      interested in. E.g. not traversing function locals or implicit template
 ///      instantiations.
-///    - it's easier to combine results of recursive passes, e.g.
+///    - it's easier to combine results of recursive passes,
 ///    - visiting decls is actually simple, so we don't hit the complicated
-///      cases that RAV mostly helps with (types and expressions, etc.)
+///      cases that RAV mostly helps with (types, expressions, etc.)
 class DocumentOutline {
 public:
   DocumentOutline(ParsedAST &AST) : AST(AST) {}
@@ -188,8 +197,11 @@ private:
   enum class VisitKind { No, OnlyDecl, DeclAndChildren };
 
   void traverseDecl(Decl *D, std::vector<DocumentSymbol> &Results) {
-    if (auto *Templ = llvm::dyn_cast<TemplateDecl>(D))
-      D = Templ->getTemplatedDecl();
+    if (auto *Templ = llvm::dyn_cast<TemplateDecl>(D)) {
+      // TemplatedDecl might be null, e.g. concepts.
+      if (auto *TD = Templ->getTemplatedDecl())
+        D = TD;
+    }
     auto *ND = llvm::dyn_cast<NamedDecl>(D);
     if (!ND)
       return;

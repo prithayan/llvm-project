@@ -1,9 +1,10 @@
-add_llvm_library(LLVMAnalysis
+add_llvm_component_library(LLVMAnalysis
   AliasAnalysis.cpp
   AliasAnalysisEvaluator.cpp
   AliasAnalysisSummary.cpp
   AliasSetTracker.cpp
   Analysis.cpp
+  AssumeBundleQueries.cpp
   AssumptionCache.cpp
   BasicAliasAnalysis.cpp
   BlockFrequencyInfo.cpp
@@ -22,9 +23,11 @@ add_llvm_library(LLVMAnalysis
   CostModel.cpp
   CodeMetrics.cpp
   ConstantFolding.cpp
+  DDG.cpp
   Delinearization.cpp
   DemandedBits.cpp
   DependenceAnalysis.cpp
+  DependenceGraphBuilder.cpp
   DivergenceAnalysis.cpp
   DomPrinter.cpp
   DomTreeUpdater.cpp
@@ -32,16 +35,17 @@ add_llvm_library(LLVMAnalysis
   EHPersonalities.cpp
   GlobalsModRef.cpp
   GuardUtils.cpp
+  HeatUtils.cpp
   IVDescriptors.cpp
   IVUsers.cpp
   IndirectCallPromotionAnalysis.cpp
   InlineCost.cpp
+  InlineAdvisor.cpp
   InstCount.cpp
   InstructionPrecedenceTracking.cpp
   InstructionSimplify.cpp
   Interval.cpp
   IntervalPartition.cpp
-  IteratedDominanceFrontier.cpp
   LazyBranchProbabilityInfo.cpp
   LazyBlockFrequencyInfo.cpp
   LazyCallGraph.cpp
@@ -51,6 +55,8 @@ add_llvm_library(LLVMAnalysis
   Loads.cpp
   LoopAccessAnalysis.cpp
   LoopAnalysisManager.cpp
+  LoopCacheAnalysis.cpp
+  LoopNestAnalysis.cpp
   LoopUnrollAnalyzer.cpp
   LoopInfo.cpp
   LoopPass.cpp
@@ -68,7 +74,6 @@ add_llvm_library(LLVMAnalysis
   ObjCARCAnalysisUtils.cpp
   ObjCARCInstKind.cpp
   OptimizationRemarkEmitter.cpp
-  OrderedBasicBlock.cpp
   OrderedInstructions.cpp
   PHITransAddr.cpp
   PhiValues.cpp
@@ -95,6 +100,7 @@ add_llvm_library(LLVMAnalysis
   ValueLatticeUtils.cpp
   ValueTracking.cpp
   VectorUtils.cpp
+  VFABIDemangling.cpp
 
   ADDITIONAL_HEADER_DIRS
   ${LLVM_MAIN_INCLUDE_DIR}/llvm/Analysis

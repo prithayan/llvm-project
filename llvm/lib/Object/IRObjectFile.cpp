@@ -47,7 +47,7 @@ Error IRObjectFile::printSymbolName(raw_ostream &OS, DataRefImpl Symb) const {
   return Error::success();
 }
 
-uint32_t IRObjectFile::getSymbolFlags(DataRefImpl Symb) const {
+Expected<uint32_t> IRObjectFile::getSymbolFlags(DataRefImpl Symb) const {
   return SymTab.getSymbolFlags(getSym(Symb));
 }
 
@@ -74,12 +74,12 @@ Expected<MemoryBufferRef>
 IRObjectFile::findBitcodeInObject(const ObjectFile &Obj) {
   for (const SectionRef &Sec : Obj.sections()) {
     if (Sec.isBitcode()) {
-      StringRef SecContents;
-      if (std::error_code EC = Sec.getContents(SecContents))
-        return errorCodeToError(EC);
-      if (SecContents.size() <= 1)
+      Expected<StringRef> Contents = Sec.getContents();
+      if (!Contents)
+        return Contents.takeError();
+      if (Contents->size() <= 1)
         return errorCodeToError(object_error::bitcode_section_not_found);
-      return MemoryBufferRef(SecContents, Obj.getFileName());
+      return MemoryBufferRef(*Contents, Obj.getFileName());
     }
   }
 
@@ -94,6 +94,7 @@ IRObjectFile::findBitcodeInMemBuffer(MemoryBufferRef Object) {
     return Object;
   case file_magic::elf_relocatable:
   case file_magic::macho_object:
+  case file_magic::wasm_object:
   case file_magic::coff_object: {
     Expected<std::unique_ptr<ObjectFile>> ObjFile =
         ObjectFile::createObjectFile(Object, Type);

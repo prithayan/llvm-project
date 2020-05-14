@@ -23,15 +23,11 @@ namespace performance {
 MoveConstructorInitCheck::MoveConstructorInitCheck(StringRef Name,
                                                    ClangTidyContext *Context)
     : ClangTidyCheck(Name, Context),
-      IncludeStyle(utils::IncludeSorter::parseIncludeStyle(
-          Options.getLocalOrGlobal("IncludeStyle", "llvm"))) {}
+      IncludeStyle(Options.getLocalOrGlobal("IncludeStyle",
+                                            utils::IncludeSorter::getMapping(),
+                                            utils::IncludeSorter::IS_LLVM)) {}
 
 void MoveConstructorInitCheck::registerMatchers(MatchFinder *Finder) {
-  // Only register the matchers for C++11; the functionality currently does not
-  // provide any benefit to other languages, despite being benign.
-  if (!getLangOpts().CPlusPlus11)
-    return;
-
   Finder->addMatcher(
       cxxConstructorDecl(
           unless(isImplicit()), isMoveConstructor(),
@@ -93,14 +89,14 @@ void MoveConstructorInitCheck::check(const MatchFinder::MatchResult &Result) {
 
 void MoveConstructorInitCheck::registerPPCallbacks(
     const SourceManager &SM, Preprocessor *PP, Preprocessor *ModuleExpanderPP) {
-  Inserter = llvm::make_unique<utils::IncludeInserter>(SM, getLangOpts(),
+  Inserter = std::make_unique<utils::IncludeInserter>(SM, getLangOpts(),
                                                        IncludeStyle);
   PP->addPPCallbacks(Inserter->CreatePPCallbacks());
 }
 
 void MoveConstructorInitCheck::storeOptions(ClangTidyOptions::OptionMap &Opts) {
-  Options.store(Opts, "IncludeStyle",
-                utils::IncludeSorter::toString(IncludeStyle));
+  Options.store(Opts, "IncludeStyle", IncludeStyle,
+                utils::IncludeSorter::getMapping());
 }
 
 } // namespace performance

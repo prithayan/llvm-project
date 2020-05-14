@@ -91,7 +91,7 @@ llvm::ErrorOr<std::vector<std::string>> GetWhiteListedSymbolPatterns() {
   llvm::StringRef Content = File.get()->getBuffer();
   Content.split(Lines, '\n', /*MaxSplit=*/-1, /*KeepEmpty=*/false);
   for (auto Line : Lines)
-    Patterns.push_back(Line.trim());
+    Patterns.push_back(std::string(Line.trim()));
   return Patterns;
 }
 
@@ -147,8 +147,8 @@ int main(int argc, const char **argv) {
       for (auto I = ChangedFiles.begin(), E = ChangedFiles.end(); I != E; ++I) {
         OS << "  {\n";
         OS << "    \"FilePath\": \"" << *I << "\",\n";
-        const auto *Entry = FileMgr.getFile(*I);
-        auto ID = Sources.getOrCreateFileID(Entry, SrcMgr::C_User);
+        const auto Entry = FileMgr.getFile(*I);
+        auto ID = Sources.getOrCreateFileID(*Entry, SrcMgr::C_User);
         std::string Content;
         llvm::raw_string_ostream ContentStream(Content);
         Rewrite.getEditBuffer(ID).write(ContentStream);
@@ -165,9 +165,9 @@ int main(int argc, const char **argv) {
   }
 
   for (const auto &File : ChangedFiles) {
-    const auto *Entry = FileMgr.getFile(File);
+    const auto Entry = FileMgr.getFile(File);
 
-    auto ID = Sources.getOrCreateFileID(Entry, SrcMgr::C_User);
+    auto ID = Sources.getOrCreateFileID(*Entry, SrcMgr::C_User);
     outs() << "============== " << File << " ==============\n";
     Rewrite.getEditBuffer(ID).write(llvm::outs());
     outs() << "\n============================================\n";

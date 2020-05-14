@@ -38,58 +38,58 @@ using namespace llvm;
 
 AArch64RegisterBankInfo::AArch64RegisterBankInfo(const TargetRegisterInfo &TRI)
     : AArch64GenRegisterBankInfo() {
-  static bool AlreadyInit = false;
-  // We have only one set of register banks, whatever the subtarget
-  // is. Therefore, the initialization of the RegBanks table should be
-  // done only once. Indeed the table of all register banks
-  // (AArch64::RegBanks) is unique in the compiler. At some point, it
-  // will get tablegen'ed and the whole constructor becomes empty.
-  if (AlreadyInit)
-    return;
-  AlreadyInit = true;
+  static llvm::once_flag InitializeRegisterBankFlag;
 
-  const RegisterBank &RBGPR = getRegBank(AArch64::GPRRegBankID);
-  (void)RBGPR;
-  assert(&AArch64::GPRRegBank == &RBGPR &&
-         "The order in RegBanks is messed up");
+  static auto InitializeRegisterBankOnce = [&]() {
+    // We have only one set of register banks, whatever the subtarget
+    // is. Therefore, the initialization of the RegBanks table should be
+    // done only once. Indeed the table of all register banks
+    // (AArch64::RegBanks) is unique in the compiler. At some point, it
+    // will get tablegen'ed and the whole constructor becomes empty.
 
-  const RegisterBank &RBFPR = getRegBank(AArch64::FPRRegBankID);
-  (void)RBFPR;
-  assert(&AArch64::FPRRegBank == &RBFPR &&
-         "The order in RegBanks is messed up");
+    const RegisterBank &RBGPR = getRegBank(AArch64::GPRRegBankID);
+    (void)RBGPR;
+    assert(&AArch64::GPRRegBank == &RBGPR &&
+           "The order in RegBanks is messed up");
 
-  const RegisterBank &RBCCR = getRegBank(AArch64::CCRegBankID);
-  (void)RBCCR;
-  assert(&AArch64::CCRegBank == &RBCCR && "The order in RegBanks is messed up");
+    const RegisterBank &RBFPR = getRegBank(AArch64::FPRRegBankID);
+    (void)RBFPR;
+    assert(&AArch64::FPRRegBank == &RBFPR &&
+           "The order in RegBanks is messed up");
 
-  // The GPR register bank is fully defined by all the registers in
-  // GR64all + its subclasses.
-  assert(RBGPR.covers(*TRI.getRegClass(AArch64::GPR32RegClassID)) &&
-         "Subclass not added?");
-  assert(RBGPR.getSize() == 64 && "GPRs should hold up to 64-bit");
+    const RegisterBank &RBCCR = getRegBank(AArch64::CCRegBankID);
+    (void)RBCCR;
+    assert(&AArch64::CCRegBank == &RBCCR &&
+           "The order in RegBanks is messed up");
 
-  // The FPR register bank is fully defined by all the registers in
-  // GR64all + its subclasses.
-  assert(RBFPR.covers(*TRI.getRegClass(AArch64::QQRegClassID)) &&
-         "Subclass not added?");
-  assert(RBFPR.covers(*TRI.getRegClass(AArch64::FPR64RegClassID)) &&
-         "Subclass not added?");
-  assert(RBFPR.getSize() == 512 &&
-         "FPRs should hold up to 512-bit via QQQQ sequence");
+    // The GPR register bank is fully defined by all the registers in
+    // GR64all + its subclasses.
+    assert(RBGPR.covers(*TRI.getRegClass(AArch64::GPR32RegClassID)) &&
+           "Subclass not added?");
+    assert(RBGPR.getSize() == 64 && "GPRs should hold up to 64-bit");
 
-  assert(RBCCR.covers(*TRI.getRegClass(AArch64::CCRRegClassID)) &&
-         "Class not added?");
-  assert(RBCCR.getSize() == 32 && "CCR should hold up to 32-bit");
+    // The FPR register bank is fully defined by all the registers in
+    // GR64all + its subclasses.
+    assert(RBFPR.covers(*TRI.getRegClass(AArch64::QQRegClassID)) &&
+           "Subclass not added?");
+    assert(RBFPR.covers(*TRI.getRegClass(AArch64::FPR64RegClassID)) &&
+           "Subclass not added?");
+    assert(RBFPR.getSize() == 512 &&
+           "FPRs should hold up to 512-bit via QQQQ sequence");
 
-  // Check that the TableGen'ed like file is in sync we our expectations.
-  // First, the Idx.
-  assert(checkPartialMappingIdx(PMI_FirstGPR, PMI_LastGPR,
-                                {PMI_GPR32, PMI_GPR64}) &&
-         "PartialMappingIdx's are incorrectly ordered");
-  assert(checkPartialMappingIdx(PMI_FirstFPR, PMI_LastFPR,
-                                {PMI_FPR16, PMI_FPR32, PMI_FPR64, PMI_FPR128,
-                                 PMI_FPR256, PMI_FPR512}) &&
-         "PartialMappingIdx's are incorrectly ordered");
+    assert(RBCCR.covers(*TRI.getRegClass(AArch64::CCRRegClassID)) &&
+           "Class not added?");
+    assert(RBCCR.getSize() == 32 && "CCR should hold up to 32-bit");
+
+    // Check that the TableGen'ed like file is in sync we our expectations.
+    // First, the Idx.
+    assert(checkPartialMappingIdx(PMI_FirstGPR, PMI_LastGPR,
+                                  {PMI_GPR32, PMI_GPR64}) &&
+           "PartialMappingIdx's are incorrectly ordered");
+    assert(checkPartialMappingIdx(PMI_FirstFPR, PMI_LastFPR,
+                                  {PMI_FPR16, PMI_FPR32, PMI_FPR64, PMI_FPR128,
+                                   PMI_FPR256, PMI_FPR512}) &&
+           "PartialMappingIdx's are incorrectly ordered");
 // Now, the content.
 // Check partial mapping.
 #define CHECK_PARTIALMAP(Idx, ValStartIdx, ValLength, RB)                      \
@@ -99,14 +99,14 @@ AArch64RegisterBankInfo::AArch64RegisterBankInfo(const TargetRegisterInfo &TRI)
         #Idx " is incorrectly initialized");                                   \
   } while (false)
 
-  CHECK_PARTIALMAP(PMI_GPR32, 0, 32, RBGPR);
-  CHECK_PARTIALMAP(PMI_GPR64, 0, 64, RBGPR);
-  CHECK_PARTIALMAP(PMI_FPR16, 0, 16, RBFPR);
-  CHECK_PARTIALMAP(PMI_FPR32, 0, 32, RBFPR);
-  CHECK_PARTIALMAP(PMI_FPR64, 0, 64, RBFPR);
-  CHECK_PARTIALMAP(PMI_FPR128, 0, 128, RBFPR);
-  CHECK_PARTIALMAP(PMI_FPR256, 0, 256, RBFPR);
-  CHECK_PARTIALMAP(PMI_FPR512, 0, 512, RBFPR);
+    CHECK_PARTIALMAP(PMI_GPR32, 0, 32, RBGPR);
+    CHECK_PARTIALMAP(PMI_GPR64, 0, 64, RBGPR);
+    CHECK_PARTIALMAP(PMI_FPR16, 0, 16, RBFPR);
+    CHECK_PARTIALMAP(PMI_FPR32, 0, 32, RBFPR);
+    CHECK_PARTIALMAP(PMI_FPR64, 0, 64, RBFPR);
+    CHECK_PARTIALMAP(PMI_FPR128, 0, 128, RBFPR);
+    CHECK_PARTIALMAP(PMI_FPR256, 0, 256, RBFPR);
+    CHECK_PARTIALMAP(PMI_FPR512, 0, 512, RBFPR);
 
 // Check value mapping.
 #define CHECK_VALUEMAP_IMPL(RBName, Size, Offset)                              \
@@ -119,14 +119,14 @@ AArch64RegisterBankInfo::AArch64RegisterBankInfo(const TargetRegisterInfo &TRI)
 
 #define CHECK_VALUEMAP(RBName, Size) CHECK_VALUEMAP_IMPL(RBName, Size, 0)
 
-  CHECK_VALUEMAP(GPR, 32);
-  CHECK_VALUEMAP(GPR, 64);
-  CHECK_VALUEMAP(FPR, 16);
-  CHECK_VALUEMAP(FPR, 32);
-  CHECK_VALUEMAP(FPR, 64);
-  CHECK_VALUEMAP(FPR, 128);
-  CHECK_VALUEMAP(FPR, 256);
-  CHECK_VALUEMAP(FPR, 512);
+    CHECK_VALUEMAP(GPR, 32);
+    CHECK_VALUEMAP(GPR, 64);
+    CHECK_VALUEMAP(FPR, 16);
+    CHECK_VALUEMAP(FPR, 32);
+    CHECK_VALUEMAP(FPR, 64);
+    CHECK_VALUEMAP(FPR, 128);
+    CHECK_VALUEMAP(FPR, 256);
+    CHECK_VALUEMAP(FPR, 512);
 
 // Check the value mapping for 3-operands instructions where all the operands
 // map to the same value mapping.
@@ -137,13 +137,13 @@ AArch64RegisterBankInfo::AArch64RegisterBankInfo(const TargetRegisterInfo &TRI)
     CHECK_VALUEMAP_IMPL(RBName, Size, 2);                                      \
   } while (false)
 
-  CHECK_VALUEMAP_3OPS(GPR, 32);
-  CHECK_VALUEMAP_3OPS(GPR, 64);
-  CHECK_VALUEMAP_3OPS(FPR, 32);
-  CHECK_VALUEMAP_3OPS(FPR, 64);
-  CHECK_VALUEMAP_3OPS(FPR, 128);
-  CHECK_VALUEMAP_3OPS(FPR, 256);
-  CHECK_VALUEMAP_3OPS(FPR, 512);
+    CHECK_VALUEMAP_3OPS(GPR, 32);
+    CHECK_VALUEMAP_3OPS(GPR, 64);
+    CHECK_VALUEMAP_3OPS(FPR, 32);
+    CHECK_VALUEMAP_3OPS(FPR, 64);
+    CHECK_VALUEMAP_3OPS(FPR, 128);
+    CHECK_VALUEMAP_3OPS(FPR, 256);
+    CHECK_VALUEMAP_3OPS(FPR, 512);
 
 #define CHECK_VALUEMAP_CROSSREGCPY(RBNameDst, RBNameSrc, Size)                 \
   do {                                                                         \
@@ -165,14 +165,14 @@ AArch64RegisterBankInfo::AArch64RegisterBankInfo(const TargetRegisterInfo &TRI)
                                                                                \
   } while (false)
 
-  CHECK_VALUEMAP_CROSSREGCPY(GPR, GPR, 32);
-  CHECK_VALUEMAP_CROSSREGCPY(GPR, FPR, 32);
-  CHECK_VALUEMAP_CROSSREGCPY(GPR, GPR, 64);
-  CHECK_VALUEMAP_CROSSREGCPY(GPR, FPR, 64);
-  CHECK_VALUEMAP_CROSSREGCPY(FPR, FPR, 32);
-  CHECK_VALUEMAP_CROSSREGCPY(FPR, GPR, 32);
-  CHECK_VALUEMAP_CROSSREGCPY(FPR, FPR, 64);
-  CHECK_VALUEMAP_CROSSREGCPY(FPR, GPR, 64);
+    CHECK_VALUEMAP_CROSSREGCPY(GPR, GPR, 32);
+    CHECK_VALUEMAP_CROSSREGCPY(GPR, FPR, 32);
+    CHECK_VALUEMAP_CROSSREGCPY(GPR, GPR, 64);
+    CHECK_VALUEMAP_CROSSREGCPY(GPR, FPR, 64);
+    CHECK_VALUEMAP_CROSSREGCPY(FPR, FPR, 32);
+    CHECK_VALUEMAP_CROSSREGCPY(FPR, GPR, 32);
+    CHECK_VALUEMAP_CROSSREGCPY(FPR, FPR, 64);
+    CHECK_VALUEMAP_CROSSREGCPY(FPR, GPR, 64);
 
 #define CHECK_VALUEMAP_FPEXT(DstSize, SrcSize)                                 \
   do {                                                                         \
@@ -193,12 +193,15 @@ AArch64RegisterBankInfo::AArch64RegisterBankInfo(const TargetRegisterInfo &TRI)
                                                                                \
   } while (false)
 
-  CHECK_VALUEMAP_FPEXT(32, 16);
-  CHECK_VALUEMAP_FPEXT(64, 16);
-  CHECK_VALUEMAP_FPEXT(64, 32);
-  CHECK_VALUEMAP_FPEXT(128, 64);
+    CHECK_VALUEMAP_FPEXT(32, 16);
+    CHECK_VALUEMAP_FPEXT(64, 16);
+    CHECK_VALUEMAP_FPEXT(64, 32);
+    CHECK_VALUEMAP_FPEXT(128, 64);
 
-  assert(verify(TRI) && "Invalid register bank information");
+    assert(verify(TRI) && "Invalid register bank information");
+  };
+
+  llvm::call_once(InitializeRegisterBankFlag, InitializeRegisterBankOnce);
 }
 
 unsigned AArch64RegisterBankInfo::copyCost(const RegisterBank &A,
@@ -222,13 +225,17 @@ unsigned AArch64RegisterBankInfo::copyCost(const RegisterBank &A,
   return RegisterBankInfo::copyCost(A, B, Size);
 }
 
-const RegisterBank &AArch64RegisterBankInfo::getRegBankFromRegClass(
-    const TargetRegisterClass &RC) const {
+const RegisterBank &
+AArch64RegisterBankInfo::getRegBankFromRegClass(const TargetRegisterClass &RC,
+                                                LLT) const {
   switch (RC.getID()) {
   case AArch64::FPR8RegClassID:
   case AArch64::FPR16RegClassID:
+  case AArch64::FPR16_loRegClassID:
+  case AArch64::FPR32_with_hsub_in_FPR16_loRegClassID:
   case AArch64::FPR32RegClassID:
   case AArch64::FPR64RegClassID:
+  case AArch64::FPR64_loRegClassID:
   case AArch64::FPR128RegClassID:
   case AArch64::FPR128_loRegClassID:
   case AArch64::DDRegClassID:
@@ -457,6 +464,54 @@ AArch64RegisterBankInfo::getSameKindOfOperandsMapping(
                                getValueMapping(RBIdx, Size), NumOperands);
 }
 
+bool AArch64RegisterBankInfo::hasFPConstraints(
+    const MachineInstr &MI, const MachineRegisterInfo &MRI,
+    const TargetRegisterInfo &TRI) const {
+  unsigned Op = MI.getOpcode();
+
+  // Do we have an explicit floating point instruction?
+  if (isPreISelGenericFloatingPointOpcode(Op))
+    return true;
+
+  // No. Check if we have a copy-like instruction. If we do, then we could
+  // still be fed by floating point instructions.
+  if (Op != TargetOpcode::COPY && !MI.isPHI())
+    return false;
+
+  // MI is copy-like. Return true if it outputs an FPR.
+  return getRegBank(MI.getOperand(0).getReg(), MRI, TRI) ==
+         &AArch64::FPRRegBank;
+}
+
+bool AArch64RegisterBankInfo::onlyUsesFP(const MachineInstr &MI,
+                                         const MachineRegisterInfo &MRI,
+                                         const TargetRegisterInfo &TRI) const {
+  switch (MI.getOpcode()) {
+  case TargetOpcode::G_FPTOSI:
+  case TargetOpcode::G_FPTOUI:
+  case TargetOpcode::G_FCMP:
+    return true;
+  default:
+    break;
+  }
+  return hasFPConstraints(MI, MRI, TRI);
+}
+
+bool AArch64RegisterBankInfo::onlyDefinesFP(
+    const MachineInstr &MI, const MachineRegisterInfo &MRI,
+    const TargetRegisterInfo &TRI) const {
+  switch (MI.getOpcode()) {
+  case TargetOpcode::G_SITOFP:
+  case TargetOpcode::G_UITOFP:
+  case TargetOpcode::G_EXTRACT_VECTOR_ELT:
+  case TargetOpcode::G_INSERT_VECTOR_ELT:
+    return true;
+  default:
+    break;
+  }
+  return hasFPConstraints(MI, MRI, TRI);
+}
+
 const RegisterBankInfo::InstructionMapping &
 AArch64RegisterBankInfo::getInstrMapping(const MachineInstr &MI) const {
   const unsigned Opc = MI.getOpcode();
@@ -476,30 +531,12 @@ AArch64RegisterBankInfo::getInstrMapping(const MachineInstr &MI) const {
   const TargetSubtargetInfo &STI = MF.getSubtarget();
   const TargetRegisterInfo &TRI = *STI.getRegisterInfo();
 
-  // Helper lambda that returns true if MI has floating point constraints.
-  auto HasFPConstraints = [&TRI, &MRI, this](MachineInstr &MI) {
-    unsigned Op = MI.getOpcode();
-
-    // Do we have an explicit floating point instruction?
-    if (isPreISelGenericFloatingPointOpcode(Op))
-      return true;
-
-    // No. Check if we have a copy-like instruction. If we do, then we could
-    // still be fed by floating point instructions.
-    if (Op != TargetOpcode::COPY && !MI.isPHI())
-      return false;
-
-    // MI is copy-like. Return true if it's using an FPR.
-    return getRegBank(MI.getOperand(0).getReg(), MRI, TRI) ==
-           &AArch64::FPRRegBank;
-  };
-
   switch (Opc) {
     // G_{F|S|U}REM are not listed because they are not legal.
     // Arithmetic ops.
   case TargetOpcode::G_ADD:
   case TargetOpcode::G_SUB:
-  case TargetOpcode::G_GEP:
+  case TargetOpcode::G_PTR_ADD:
   case TargetOpcode::G_MUL:
   case TargetOpcode::G_SDIV:
   case TargetOpcode::G_UDIV:
@@ -507,10 +544,6 @@ AArch64RegisterBankInfo::getInstrMapping(const MachineInstr &MI) const {
   case TargetOpcode::G_AND:
   case TargetOpcode::G_OR:
   case TargetOpcode::G_XOR:
-    // Shifts.
-  case TargetOpcode::G_SHL:
-  case TargetOpcode::G_LSHR:
-  case TargetOpcode::G_ASHR:
     // Floating point ops.
   case TargetOpcode::G_FADD:
   case TargetOpcode::G_FSUB:
@@ -525,13 +558,24 @@ AArch64RegisterBankInfo::getInstrMapping(const MachineInstr &MI) const {
         getFPExtMapping(DstTy.getSizeInBits(), SrcTy.getSizeInBits()),
         /*NumOperands*/ 2);
   }
+    // Shifts.
+  case TargetOpcode::G_SHL:
+  case TargetOpcode::G_LSHR:
+  case TargetOpcode::G_ASHR: {
+    LLT ShiftAmtTy = MRI.getType(MI.getOperand(2).getReg());
+    LLT SrcTy = MRI.getType(MI.getOperand(1).getReg());
+    if (ShiftAmtTy.getSizeInBits() == 64 && SrcTy.getSizeInBits() == 32)
+      return getInstructionMapping(DefaultMappingID, 1,
+                                   &ValMappings[Shift64Imm], 3);
+    return getSameKindOfOperandsMapping(MI);
+  }
   case TargetOpcode::COPY: {
-    unsigned DstReg = MI.getOperand(0).getReg();
-    unsigned SrcReg = MI.getOperand(1).getReg();
+    Register DstReg = MI.getOperand(0).getReg();
+    Register SrcReg = MI.getOperand(1).getReg();
     // Check if one of the register is not a generic register.
-    if ((TargetRegisterInfo::isPhysicalRegister(DstReg) ||
+    if ((Register::isPhysicalRegister(DstReg) ||
          !MRI.getType(DstReg).isValid()) ||
-        (TargetRegisterInfo::isPhysicalRegister(SrcReg) ||
+        (Register::isPhysicalRegister(SrcReg) ||
          !MRI.getType(SrcReg).isValid())) {
       const RegisterBank *DstRB = getRegBank(DstReg, MRI, TRI);
       const RegisterBank *SrcRB = getRegBank(SrcReg, MRI, TRI);
@@ -598,6 +642,12 @@ AArch64RegisterBankInfo::getInstrMapping(const MachineInstr &MI) const {
   // Some of the floating-point instructions have mixed GPR and FPR operands:
   // fine-tune the computed mapping.
   switch (Opc) {
+  case TargetOpcode::G_TRUNC: {
+    LLT SrcTy = MRI.getType(MI.getOperand(1).getReg());
+    if (!SrcTy.isVector() && SrcTy.getSizeInBits() == 128)
+      OpRegBankIdx = {PMI_FirstFPR, PMI_FirstFPR};
+    break;
+  }
   case TargetOpcode::G_SITOFP:
   case TargetOpcode::G_UITOFP:
     if (MRI.getType(MI.getOperand(0).getReg()).isVector())
@@ -636,20 +686,12 @@ AArch64RegisterBankInfo::getInstrMapping(const MachineInstr &MI) const {
       // In that case, we want the default mapping to be on FPR
       // instead of blind map every scalar to GPR.
       for (const MachineInstr &UseMI :
-           MRI.use_instructions(MI.getOperand(0).getReg())) {
+           MRI.use_nodbg_instructions(MI.getOperand(0).getReg())) {
         // If we have at least one direct use in a FP instruction,
         // assume this was a floating point load in the IR.
         // If it was not, we would have had a bitcast before
         // reaching that instruction.
-        unsigned UseOpc = UseMI.getOpcode();
-        if (isPreISelGenericFloatingPointOpcode(UseOpc) ||
-            // Check if we feed a copy-like instruction with
-            // floating point constraints. In that case, we are still
-            // feeding fp instructions, but indirectly
-            // (e.g., through ABI copies).
-            ((UseOpc == TargetOpcode::COPY || UseMI.isPHI()) &&
-             getRegBank(UseMI.getOperand(0).getReg(), MRI, TRI) ==
-                 &AArch64::FPRRegBank)) {
+        if (onlyUsesFP(UseMI, MRI, TRI)) {
           OpRegBankIdx[0] = PMI_FirstFPR;
           break;
         }
@@ -658,19 +700,11 @@ AArch64RegisterBankInfo::getInstrMapping(const MachineInstr &MI) const {
   case TargetOpcode::G_STORE:
     // Check if that store is fed by fp instructions.
     if (OpRegBankIdx[0] == PMI_FirstGPR) {
-      unsigned VReg = MI.getOperand(0).getReg();
+      Register VReg = MI.getOperand(0).getReg();
       if (!VReg)
         break;
       MachineInstr *DefMI = MRI.getVRegDef(VReg);
-      unsigned DefOpc = DefMI->getOpcode();
-      if (isPreISelGenericFloatingPointOpcode(DefOpc) ||
-          // Check if we come from a copy-like instruction with
-          // floating point constraints. In that case, we are still
-          // fed by fp instructions, but indirectly
-          // (e.g., through ABI copies).
-          ((DefOpc == TargetOpcode::COPY || DefMI->isPHI()) &&
-           getRegBank(DefMI->getOperand(0).getReg(), MRI, TRI) ==
-               &AArch64::FPRRegBank))
+      if (onlyDefinesFP(*DefMI, MRI, TRI))
         OpRegBankIdx[0] = PMI_FirstFPR;
       break;
     }
@@ -679,15 +713,56 @@ AArch64RegisterBankInfo::getInstrMapping(const MachineInstr &MI) const {
     // If the destination is FPR, preserve that.
     if (OpRegBankIdx[0] != PMI_FirstGPR)
       break;
+
+    // If we're taking in vectors, we have no choice but to put everything on
+    // FPRs, except for the condition. The condition must always be on a GPR.
     LLT SrcTy = MRI.getType(MI.getOperand(2).getReg());
-    if (SrcTy.isVector() ||
-        any_of(MRI.use_instructions(MI.getOperand(0).getReg()),
-               [&](MachineInstr &MI) { return HasFPConstraints(MI); })) {
-      // Set the register bank of every operand to FPR.
-      for (unsigned Idx = 0, NumOperands = MI.getNumOperands();
-           Idx < NumOperands; ++Idx)
-        OpRegBankIdx[Idx] = PMI_FirstFPR;
+    if (SrcTy.isVector()) {
+      OpRegBankIdx = {PMI_FirstFPR, PMI_FirstGPR, PMI_FirstFPR, PMI_FirstFPR};
+      break;
     }
+
+    // Try to minimize the number of copies. If we have more floating point
+    // constrained values than not, then we'll put everything on FPR. Otherwise,
+    // everything has to be on GPR.
+    unsigned NumFP = 0;
+
+    // Check if the uses of the result always produce floating point values.
+    //
+    // For example:
+    //
+    // %z = G_SELECT %cond %x %y
+    // fpr = G_FOO %z ...
+    if (any_of(MRI.use_nodbg_instructions(MI.getOperand(0).getReg()),
+               [&](MachineInstr &MI) { return onlyUsesFP(MI, MRI, TRI); }))
+      ++NumFP;
+
+    // Check if the defs of the source values always produce floating point
+    // values.
+    //
+    // For example:
+    //
+    // %x = G_SOMETHING_ALWAYS_FLOAT %a ...
+    // %z = G_SELECT %cond %x %y
+    //
+    // Also check whether or not the sources have already been decided to be
+    // FPR. Keep track of this.
+    //
+    // This doesn't check the condition, since it's just whatever is in NZCV.
+    // This isn't passed explicitly in a register to fcsel/csel.
+    for (unsigned Idx = 2; Idx < 4; ++Idx) {
+      Register VReg = MI.getOperand(Idx).getReg();
+      MachineInstr *DefMI = MRI.getVRegDef(VReg);
+      if (getRegBank(VReg, MRI, TRI) == &AArch64::FPRRegBank ||
+          onlyDefinesFP(*DefMI, MRI, TRI))
+        ++NumFP;
+    }
+
+    // If we have more FP constraints than not, then move everything over to
+    // FPR.
+    if (NumFP >= 2)
+      OpRegBankIdx = {PMI_FirstFPR, PMI_FirstGPR, PMI_FirstFPR, PMI_FirstFPR};
+
     break;
   }
   case TargetOpcode::G_UNMERGE_VALUES: {
@@ -699,9 +774,9 @@ AArch64RegisterBankInfo::getInstrMapping(const MachineInstr &MI) const {
     LLT SrcTy = MRI.getType(MI.getOperand(MI.getNumOperands()-1).getReg());
     // UNMERGE into scalars from a vector should always use FPR.
     // Likewise if any of the uses are FP instructions.
-    if (SrcTy.isVector() ||
-        any_of(MRI.use_instructions(MI.getOperand(0).getReg()),
-               [&](MachineInstr &MI) { return HasFPConstraints(MI); })) {
+    if (SrcTy.isVector() || SrcTy == LLT::scalar(128) ||
+        any_of(MRI.use_nodbg_instructions(MI.getOperand(0).getReg()),
+               [&](MachineInstr &MI) { return onlyUsesFP(MI, MRI, TRI); })) {
       // Set the register bank of every operand to FPR.
       for (unsigned Idx = 0, NumOperands = MI.getNumOperands();
            Idx < NumOperands; ++Idx)
@@ -730,12 +805,21 @@ AArch64RegisterBankInfo::getInstrMapping(const MachineInstr &MI) const {
     // Index needs to be a GPR.
     OpRegBankIdx[3] = PMI_FirstGPR;
     break;
+  case TargetOpcode::G_EXTRACT: {
+    // For s128 sources we have to use fpr.
+    LLT SrcTy = MRI.getType(MI.getOperand(1).getReg());
+    if (SrcTy.getSizeInBits() == 128) {
+      OpRegBankIdx[0] = PMI_FirstFPR;
+      OpRegBankIdx[1] = PMI_FirstFPR;
+    }
+    break;
+  }
   case TargetOpcode::G_BUILD_VECTOR:
     // If the first source operand belongs to a FPR register bank, then make
     // sure that we preserve that.
     if (OpRegBankIdx[1] != PMI_FirstGPR)
       break;
-    unsigned VReg = MI.getOperand(1).getReg();
+    Register VReg = MI.getOperand(1).getReg();
     if (!VReg)
       break;
 

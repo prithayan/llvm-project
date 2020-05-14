@@ -103,6 +103,7 @@ private:
   bool Started = true;
   bool Stopped = false;
   bool AddingMachinePasses = false;
+  bool DebugifyIsSafe = true;
 
   /// Set the StartAfter, StartBefore and StopAfter passes to allow running only
   /// a portion of the normal code-gen pass sequence.
@@ -280,7 +281,7 @@ public:
   ///
   /// This can also be used to plug a new MachineSchedStrategy into an instance
   /// of the standard ScheduleDAGMI:
-  ///   return new ScheduleDAGMI(C, make_unique<MyStrategy>(C), /*RemoveKillFlags=*/false)
+  ///   return new ScheduleDAGMI(C, std::make_unique<MyStrategy>(C), /*RemoveKillFlags=*/false)
   ///
   /// Return NULL to select the default (generic) machine scheduler.
   virtual ScheduleDAGInstrs *
@@ -305,6 +306,21 @@ public:
   /// Add a pass to perform basic verification of the machine function if
   /// verification is enabled.
   void addVerifyPass(const std::string &Banner);
+
+  /// Add a pass to add synthesized debug info to the MIR.
+  void addDebugifyPass();
+
+  /// Add a pass to remove debug info from the MIR.
+  void addStripDebugPass();
+
+  /// Add standard passes before a pass that's about to be added. For example,
+  /// the DebugifyMachineModulePass if it is enabled.
+  void addMachinePrePasses(bool AllowDebugify = true);
+
+  /// Add standard passes after a pass that has just been added. For example,
+  /// the MachineVerifier if it is enabled.
+  void addMachinePostPasses(const std::string &Banner, bool AllowPrint = true,
+                            bool AllowVerify = true, bool AllowStrip = true);
 
   /// Check whether or not GlobalISel should abort on error.
   /// When this is disabled, GlobalISel will fall back on SDISel instead of
@@ -385,6 +401,10 @@ protected:
   virtual bool addPreRewrite() {
     return false;
   }
+
+  /// Add passes to be run immediately after virtual registers are rewritten
+  /// to physical registers.
+  virtual void addPostRewrite() { }
 
   /// This method may be implemented by targets that want to run passes after
   /// register allocation pass pipeline but before prolog-epilog insertion.

@@ -20,7 +20,20 @@ if (CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
   if(APPLE)
     include(CompilerRTDarwinUtils)
   endif()
+  if(CMAKE_HOST_APPLE AND APPLE)
+    include(UseLibtool)
+  endif()
   include(AddCompilerRT)
+endif()
+
+if (COMPILER_RT_STANDALONE_BUILD)
+  # When compiler-rt is being built standalone, possibly as a cross-compilation
+  # target, the target may or may not want position independent code. This
+  # option provides an avenue through which the flag may be controlled when an
+  # LLVM configuration is not being utilized.
+  option(COMPILER_RT_BUILTINS_ENABLE_PIC
+    "Turns on or off -fPIC for the builtin library source"
+    ON)
 endif()
 
 include(builtin-config-ix)
@@ -94,6 +107,7 @@ set(GENERIC_SOURCES
   floatunsisf.c
   floatuntidf.c
   floatuntisf.c
+  fp_mode.c
   int_util.c
   lshrdi3.c
   lshrti3.c
@@ -238,6 +252,13 @@ set(x86_ARCH_SOURCES
 )
 
 if (NOT MSVC)
+  set(x86_ARCH_SOURCES
+    ${x86_ARCH_SOURCES}
+    i386/fp_mode.c
+  )
+endif ()
+
+if (NOT MSVC)
   set(x86_64_SOURCES
     ${GENERIC_TF_SOURCES}
     x86_64/floatdidf.c
@@ -303,6 +324,7 @@ set(i386_SOURCES ${i386_SOURCES} ${x86_ARCH_SOURCES})
 set(i686_SOURCES ${i686_SOURCES} ${x86_ARCH_SOURCES})
 
 set(arm_SOURCES
+  arm/fp_mode.c
   arm/bswapdi2.S
   arm/bswapsi2.S
   arm/clzdi2.S
@@ -428,25 +450,7 @@ if(MINGW)
     arm/aeabi_uidivmod.S
     arm/aeabi_uldivmod.S
     arm/chkstk.S
-    divmoddi4.c
-    divmodsi4.c
-    divdi3.c
-    divsi3.c
-    fixdfdi.c
-    fixsfdi.c
-    fixunsdfdi.c
-    fixunssfdi.c
-    floatdidf.c
-    floatdisf.c
-    floatundidf.c
-    floatundisf.c
     mingw_fixfloat.c
-    moddi3.c
-    udivmoddi4.c
-    udivmodsi4.c
-    udivsi3.c
-    umoddi3.c
-    emutls.c
   )
   filter_builtin_sources(arm_SOURCES EXCLUDE arm_SOURCES "${arm_SOURCES};${GENERIC_SOURCES}")
 elseif(NOT WIN32)
@@ -466,6 +470,7 @@ endif()
 set(aarch64_SOURCES
   ${GENERIC_TF_SOURCES}
   ${GENERIC_SOURCES}
+  aarch64/fp_mode.c
 )
 
 if (MINGW)
@@ -480,6 +485,7 @@ set(armv7_SOURCES ${arm_SOURCES})
 set(armv7s_SOURCES ${arm_SOURCES})
 set(armv7k_SOURCES ${arm_SOURCES})
 set(arm64_SOURCES ${aarch64_SOURCES})
+set(arm64e_SOURCES ${aarch64_SOURCES})
 
 # macho_embedded archs
 set(armv6m_SOURCES ${thumb1_SOURCES})
@@ -487,7 +493,6 @@ set(armv7m_SOURCES ${arm_SOURCES})
 set(armv7em_SOURCES ${arm_SOURCES})
 
 # hexagon arch
-set(hexagon_SOURCES ${GENERIC_SOURCES} ${GENERIC_TF_SOURCES})
 set(hexagon_SOURCES
   hexagon/common_entry_exit_abi1.S
   hexagon/common_entry_exit_abi2.S
@@ -519,6 +524,8 @@ set(hexagon_SOURCES
   hexagon/udivsi3.S
   hexagon/umoddi3.S
   hexagon/umodsi3.S
+  ${GENERIC_SOURCES}
+  ${GENERIC_TF_SOURCES}
 )
 
 
@@ -531,6 +538,7 @@ set(mips64el_SOURCES ${GENERIC_TF_SOURCES}
 
 set(powerpc64_SOURCES
   ppc/divtc3.c
+  ppc/fixtfti.c
   ppc/fixtfdi.c
   ppc/fixunstfti.c
   ppc/fixunstfdi.c
@@ -552,6 +560,9 @@ set(riscv32_SOURCES
   ${riscv_SOURCES}
 )
 set(riscv64_SOURCES ${riscv_SOURCES})
+
+set(sparc_SOURCES ${GENERIC_SOURCES} ${GENERIC_TF_SOURCES})
+set(sparcv9_SOURCES ${GENERIC_SOURCES} ${GENERIC_TF_SOURCES})
 
 set(wasm32_SOURCES
   ${GENERIC_TF_SOURCES}
@@ -577,7 +588,9 @@ else ()
   # These flags would normally be added to CMAKE_C_FLAGS by the llvm
   # cmake step. Add them manually if this is a standalone build.
   if(COMPILER_RT_STANDALONE_BUILD)
-    append_list_if(COMPILER_RT_HAS_FPIC_FLAG -fPIC BUILTIN_CFLAGS)
+    if(COMPILER_RT_BUILTINS_ENABLE_PIC)
+      append_list_if(COMPILER_RT_HAS_FPIC_FLAG -fPIC BUILTIN_CFLAGS)
+    endif()
     append_list_if(COMPILER_RT_HAS_FNO_BUILTIN_FLAG -fno-builtin BUILTIN_CFLAGS)
     if(NOT ANDROID)
       append_list_if(COMPILER_RT_HAS_VISIBILITY_HIDDEN_FLAG -fvisibility=hidden BUILTIN_CFLAGS)
@@ -595,15 +608,6 @@ else ()
 
   foreach (arch ${BUILTIN_SUPPORTED_ARCH})
     if (CAN_TARGET_${arch})
-      # NOTE: some architectures (e.g. i386) have multiple names.  Ensure that
-      # we catch them all.
-      set(_arch ${arch})
-      if("${arch}" STREQUAL "armv6m")
-        set(_arch "arm|armv6m")
-      elseif("${arch}" MATCHES "^(armhf|armv7|armv7s|armv7k|armv7m|armv7em)$")
-        set(_arch "arm")
-      endif()
-
       # For ARM archs, exclude any VFP builtins if VFP is not supported
       if (${arch} MATCHES "^(arm|armhf|armv7|armv7s|armv7k|armv7m|armv7em)$")
         string(REPLACE ";" " " _TARGET_${arch}_CFLAGS "${TARGET_${arch}_CFLAGS}")
@@ -617,10 +621,19 @@ else ()
       # architecture specific manner.  This prevents multiple definitions of the
       # same symbols, making the symbol selection non-deterministic.
       foreach (_file ${${arch}_SOURCES})
-        if (${_file} MATCHES ${_arch}/*)
+        get_filename_component(_file_dir "${_file}" DIRECTORY)
+        if (NOT "${_file_dir}" STREQUAL "")
+          # Architecture specific file. We follow the convention that a source
+          # file that exists in a sub-directory (e.g. `ppc/divtc3.c`) is
+          # architecture specific and that if a generic implementation exists
+          # it will be a top-level source file with the same name modulo the
+          # file extension (e.g. `divtc3.c`).
           get_filename_component(_name ${_file} NAME)
           string(REPLACE ".S" ".c" _cname "${_name}")
-          list(REMOVE_ITEM ${arch}_SOURCES ${_cname})
+          if (EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/${_cname}")
+            message(STATUS "For ${arch} builtins preferring ${_file} to ${_cname}")
+            list(REMOVE_ITEM ${arch}_SOURCES ${_cname})
+          endif()
         endif ()
       endforeach ()
 

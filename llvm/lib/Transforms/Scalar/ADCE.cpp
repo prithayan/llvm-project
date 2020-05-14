@@ -19,6 +19,7 @@
 #include "llvm/ADT/GraphTraits.h"
 #include "llvm/ADT/MapVector.h"
 #include "llvm/ADT/PostOrderIterator.h"
+#include "llvm/ADT/SetVector.h"
 #include "llvm/ADT/SmallPtrSet.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/Statistic.h"
@@ -41,6 +42,7 @@
 #include "llvm/IR/PassManager.h"
 #include "llvm/IR/Use.h"
 #include "llvm/IR/Value.h"
+#include "llvm/InitializePasses.h"
 #include "llvm/Pass.h"
 #include "llvm/ProfileData/InstrProf.h"
 #include "llvm/Support/Casting.h"
@@ -135,7 +137,7 @@ class AggressiveDeadCodeElimination {
   SmallPtrSet<const Metadata *, 32> AliveScopes;
 
   /// Set of blocks with not known to have live terminators.
-  SmallPtrSet<BasicBlock *, 16> BlocksWithDeadTerminators;
+  SmallSetVector<BasicBlock *, 16> BlocksWithDeadTerminators;
 
   /// The set of blocks which we have determined whose control
   /// dependence sources must be live and which have not had
@@ -180,7 +182,7 @@ class AggressiveDeadCodeElimination {
 
   /// Identify connected sections of the control flow graph which have
   /// dead terminators and rewrite the control flow graph to remove them.
-  void updateDeadRegions();
+  bool updateDeadRegions();
 
   /// Set the BlockInfo::PostOrder field based on a post-order
   /// numbering of the reverse control flow graph.
@@ -389,7 +391,7 @@ void AggressiveDeadCodeElimination::markLive(Instruction *I) {
   // Mark the containing block live
   auto &BBInfo = *Info.Block;
   if (BBInfo.Terminator == I) {
-    BlocksWithDeadTerminators.erase(BBInfo.BB);
+    BlocksWithDeadTerminators.remove(BBInfo.BB);
     // For live terminators, mark destination blocks
     // live to preserve this control flow edges.
     if (!BBInfo.UnconditionalBranch)
@@ -478,10 +480,14 @@ void AggressiveDeadCodeElimination::markLiveBranchesFromControlDependences() {
   // which currently have dead terminators that are control
   // dependence sources of a block which is in NewLiveBlocks.
 
+  const SmallPtrSet<BasicBlock *, 16> BWDT{
+      BlocksWithDeadTerminators.begin(),
+      BlocksWithDeadTerminators.end()
+  };
   SmallVector<BasicBlock *, 32> IDFBlocks;
   ReverseIDFCalculator IDFs(PDT);
   IDFs.setDefiningBlocks(NewLiveBlocks);
-  IDFs.setLiveInBlocks(BlocksWithDeadTerminators);
+  IDFs.setLiveInBlocks(BWDT);
   IDFs.calculate(IDFBlocks);
   NewLiveBlocks.clear();
 
@@ -499,7 +505,7 @@ void AggressiveDeadCodeElimination::markLiveBranchesFromControlDependences() {
 //===----------------------------------------------------------------------===//
 bool AggressiveDeadCodeElimination::removeDeadInstructions() {
   // Updates control and dataflow around dead blocks
-  updateDeadRegions();
+  bool RegionsUpdated = updateDeadRegions();
 
   LLVM_DEBUG({
     for (Instruction &I : instructions(F)) {
@@ -550,11 +556,11 @@ bool AggressiveDeadCodeElimination::removeDeadInstructions() {
     I->eraseFromParent();
   }
 
-  return !Worklist.empty();
+  return !Worklist.empty() || RegionsUpdated;
 }
 
 // A dead region is the set of dead blocks with a common live post-dominator.
-void AggressiveDeadCodeElimination::updateDeadRegions() {
+bool AggressiveDeadCodeElimination::updateDeadRegions() {
   LLVM_DEBUG({
     dbgs() << "final dead terminator blocks: " << '\n';
     for (auto *BB : BlocksWithDeadTerminators)
@@ -564,6 +570,7 @@ void AggressiveDeadCodeElimination::updateDeadRegions() {
 
   // Don't compute the post ordering unless we needed it.
   bool HavePostOrder = false;
+  bool Changed = false;
 
   for (auto *BB : BlocksWithDeadTerminators) {
     auto &Info = BlockInfo[BB];
@@ -618,7 +625,10 @@ void AggressiveDeadCodeElimination::updateDeadRegions() {
         .applyUpdates(DeletedEdges);
 
     NumBranchesRemoved += 1;
+    Changed = true;
   }
+
+  return Changed;
 }
 
 // reverse top-sort order
@@ -679,10 +689,14 @@ PreservedAnalyses ADCEPass::run(Function &F, FunctionAnalysisManager &FAM) {
     return PreservedAnalyses::all();
 
   PreservedAnalyses PA;
-  PA.preserveSet<CFGAnalyses>();
+  // TODO: We could track if we have actually done CFG changes.
+  if (!RemoveControlFlowFlag)
+    PA.preserveSet<CFGAnalyses>();
+  else {
+    PA.preserve<DominatorTreeAnalysis>();
+    PA.preserve<PostDominatorTreeAnalysis>();
+  }
   PA.preserve<GlobalsAA>();
-  PA.preserve<DominatorTreeAnalysis>();
-  PA.preserve<PostDominatorTreeAnalysis>();
   return PA;
 }
 

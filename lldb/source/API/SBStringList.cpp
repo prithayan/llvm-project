@@ -1,4 +1,4 @@
-//===-- SBStringList.cpp ----------------------------------------*- C++ -*-===//
+//===-- SBStringList.cpp --------------------------------------------------===//
 //
 // Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
 // See https://llvm.org/LICENSE.txt for license information.
@@ -21,7 +21,7 @@ SBStringList::SBStringList() : m_opaque_up() {
 SBStringList::SBStringList(const lldb_private::StringList *lldb_strings_ptr)
     : m_opaque_up() {
   if (lldb_strings_ptr)
-    m_opaque_up = llvm::make_unique<StringList>(*lldb_strings_ptr);
+    m_opaque_up = std::make_unique<StringList>(*lldb_strings_ptr);
 }
 
 SBStringList::SBStringList(const SBStringList &rhs) : m_opaque_up() {
@@ -39,7 +39,7 @@ const SBStringList &SBStringList::operator=(const SBStringList &rhs) {
   return LLDB_RECORD_RESULT(*this);
 }
 
-SBStringList::~SBStringList() {}
+SBStringList::~SBStringList() = default;
 
 const lldb_private::StringList *SBStringList::operator->() const {
   return m_opaque_up.get();
@@ -56,13 +56,13 @@ bool SBStringList::IsValid() const {
 SBStringList::operator bool() const {
   LLDB_RECORD_METHOD_CONST_NO_ARGS(bool, SBStringList, operator bool);
 
-  return (m_opaque_up != NULL);
+  return (m_opaque_up != nullptr);
 }
 
 void SBStringList::AppendString(const char *str) {
   LLDB_RECORD_METHOD(void, SBStringList, AppendString, (const char *), str);
 
-  if (str != NULL) {
+  if (str != nullptr) {
     if (IsValid())
       m_opaque_up->AppendString(str);
     else
@@ -74,7 +74,7 @@ void SBStringList::AppendList(const char **strv, int strc) {
   LLDB_RECORD_METHOD(void, SBStringList, AppendList, (const char **, int), strv,
                      strc);
 
-  if ((strv != NULL) && (strc > 0)) {
+  if ((strv != nullptr) && (strc > 0)) {
     if (IsValid())
       m_opaque_up->AppendList(strv, strc);
     else
@@ -115,7 +115,7 @@ const char *SBStringList::GetStringAtIndex(size_t idx) {
   if (IsValid()) {
     return m_opaque_up->GetStringAtIndex(idx);
   }
-  return NULL;
+  return nullptr;
 }
 
 const char *SBStringList::GetStringAtIndex(size_t idx) const {
@@ -125,7 +125,7 @@ const char *SBStringList::GetStringAtIndex(size_t idx) const {
   if (IsValid()) {
     return m_opaque_up->GetStringAtIndex(idx);
   }
-  return NULL;
+  return nullptr;
 }
 
 void SBStringList::Clear() {

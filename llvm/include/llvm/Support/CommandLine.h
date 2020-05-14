@@ -20,6 +20,8 @@
 #define LLVM_SUPPORT_COMMANDLINE_H
 
 #include "llvm/ADT/ArrayRef.h"
+#include "llvm/ADT/None.h"
+#include "llvm/ADT/Optional.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SmallPtrSet.h"
 #include "llvm/ADT/SmallVector.h"
@@ -29,6 +31,7 @@
 #include "llvm/ADT/iterator_range.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/ManagedStatic.h"
+#include "llvm/Support/VirtualFileSystem.h"
 #include "llvm/Support/raw_ostream.h"
 #include <cassert>
 #include <climits>
@@ -265,27 +268,27 @@ class Option {
   // Out of line virtual function to provide home for the class.
   virtual void anchor();
 
-  int NumOccurrences = 0; // The number of times specified
+  uint16_t NumOccurrences; // The number of times specified
   // Occurrences, HiddenFlag, and Formatting are all enum types but to avoid
   // problems with signed enums in bitfields.
-  unsigned Occurrences : 3; // enum NumOccurrencesFlag
+  uint16_t Occurrences : 3; // enum NumOccurrencesFlag
   // not using the enum type for 'Value' because zero is an implementation
   // detail representing the non-value
-  unsigned Value : 2;
-  unsigned HiddenFlag : 2; // enum OptionHidden
-  unsigned Formatting : 2; // enum FormattingFlags
-  unsigned Misc : 5;
-  unsigned Position = 0;       // Position of last occurrence of the option
-  unsigned AdditionalVals = 0; // Greater than 0 for multi-valued option.
+  uint16_t Value : 2;
+  uint16_t HiddenFlag : 2; // enum OptionHidden
+  uint16_t Formatting : 2; // enum FormattingFlags
+  uint16_t Misc : 5;
+  uint16_t FullyInitialized : 1; // Has addArgument been called?
+  uint16_t Position;             // Position of last occurrence of the option
+  uint16_t AdditionalVals;       // Greater than 0 for multi-valued option.
 
 public:
   StringRef ArgStr;   // The argument string itself (ex: "help", "o")
   StringRef HelpStr;  // The descriptive text message for -help
   StringRef ValueStr; // String describing what the value of this option is
-  SmallVector<OptionCategory *, 2>
+  SmallVector<OptionCategory *, 1>
       Categories;                    // The Categories this option belongs to
-  SmallPtrSet<SubCommand *, 4> Subs; // The subcommands this option belongs to.
-  bool FullyInitialized = false; // Has addArgument been called?
+  SmallPtrSet<SubCommand *, 1> Subs; // The subcommands this option belongs to.
 
   inline enum NumOccurrencesFlag getNumOccurrencesFlag() const {
     return (enum NumOccurrencesFlag)Occurrences;
@@ -341,8 +344,9 @@ public:
 protected:
   explicit Option(enum NumOccurrencesFlag OccurrencesFlag,
                   enum OptionHidden Hidden)
-      : Occurrences(OccurrencesFlag), Value(0), HiddenFlag(Hidden),
-        Formatting(NormalFormatting), Misc(0) {
+      : NumOccurrences(0), Occurrences(OccurrencesFlag), Value(0),
+        HiddenFlag(Hidden), Formatting(NormalFormatting), Misc(0),
+        FullyInitialized(false), Position(0), AdditionalVals(0) {
     Categories.push_back(&GeneralCategory);
   }
 
@@ -466,6 +470,42 @@ struct sub {
 
   template <class Opt> void apply(Opt &O) const { O.addSubCommand(Sub); }
 };
+
+// Specify a callback function to be called when an option is seen.
+// Can be used to set other options automatically.
+template <typename R, typename Ty> struct cb {
+  std::function<R(Ty)> CB;
+
+  cb(std::function<R(Ty)> CB) : CB(CB) {}
+
+  template <typename Opt> void apply(Opt &O) const { O.setCallback(CB); }
+};
+
+namespace detail {
+template <typename F>
+struct callback_traits : public callback_traits<decltype(&F::operator())> {};
+
+template <typename R, typename C, typename... Args>
+struct callback_traits<R (C::*)(Args...) const> {
+  using result_type = R;
+  using arg_type = std::tuple_element_t<0, std::tuple<Args...>>;
+  static_assert(sizeof...(Args) == 1, "callback function must have one and only one parameter");
+  static_assert(std::is_same<result_type, void>::value,
+                "callback return type must be void");
+  static_assert(std::is_lvalue_reference<arg_type>::value &&
+                    std::is_const<std::remove_reference_t<arg_type>>::value,
+                "callback arg_type must be a const lvalue reference");
+};
+} // namespace detail
+
+template <typename F>
+cb<typename detail::callback_traits<F>::result_type,
+   typename detail::callback_traits<F>::arg_type>
+callback(F CB) {
+  using result_type = typename detail::callback_traits<F>::result_type;
+  using arg_type = typename detail::callback_traits<F>::arg_type;
+  return cb<result_type, arg_type>(CB);
+}
 
 //===----------------------------------------------------------------------===//
 // OptionValue class
@@ -951,6 +991,50 @@ public:
 extern template class basic_parser<int>;
 
 //--------------------------------------------------
+// parser<long>
+//
+template <> class parser<long> final : public basic_parser<long> {
+public:
+  parser(Option &O) : basic_parser(O) {}
+
+  // parse - Return true on error.
+  bool parse(Option &O, StringRef ArgName, StringRef Arg, long &Val);
+
+  // getValueName - Overload in subclass to provide a better default value.
+  StringRef getValueName() const override { return "long"; }
+
+  void printOptionDiff(const Option &O, long V, OptVal Default,
+                       size_t GlobalWidth) const;
+
+  // An out-of-line virtual method to provide a 'home' for this class.
+  void anchor() override;
+};
+
+extern template class basic_parser<long>;
+
+//--------------------------------------------------
+// parser<long long>
+//
+template <> class parser<long long> : public basic_parser<long long> {
+public:
+  parser(Option &O) : basic_parser(O) {}
+
+  // parse - Return true on error.
+  bool parse(Option &O, StringRef ArgName, StringRef Arg, long long &Val);
+
+  // getValueName - Overload in subclass to provide a better default value.
+  StringRef getValueName() const override { return "long"; }
+
+  void printOptionDiff(const Option &O, long long V, OptVal Default,
+                       size_t GlobalWidth) const;
+
+  // An out-of-line virtual method to provide a 'home' for this class.
+  void anchor() override;
+};
+
+extern template class basic_parser<long long>;
+
+//--------------------------------------------------
 // parser<unsigned>
 //
 template <> class parser<unsigned> : public basic_parser<unsigned> {
@@ -1340,6 +1424,7 @@ class opt : public Option,
       return true; // Parse error!
     this->setValue(Val);
     this->setPosition(pos);
+    Callback(Val);
     return false;
   }
 
@@ -1367,16 +1452,16 @@ class opt : public Option,
     }
   }
 
-  template <class T, class = typename std::enable_if<
-            std::is_assignable<T&, T>::value>::type>
+  template <class T,
+            class = std::enable_if_t<std::is_assignable<T &, T>::value>>
   void setDefaultImpl() {
     const OptionValue<DataType> &V = this->getDefault();
     if (V.hasValue())
       this->setValue(V.getValue());
   }
 
-  template <class T, class = typename std::enable_if<
-            !std::is_assignable<T&, T>::value>::type>
+  template <class T,
+            class = std::enable_if_t<!std::is_assignable<T &, T>::value>>
   void setDefaultImpl(...) {}
 
   void setDefault() override { setDefaultImpl<DataType>(); }
@@ -1398,6 +1483,7 @@ public:
 
   template <class T> DataType &operator=(const T &Val) {
     this->setValue(Val);
+    Callback(Val);
     return this->getValue();
   }
 
@@ -1407,6 +1493,14 @@ public:
     apply(this, Ms...);
     done();
   }
+
+  void setCallback(
+      std::function<void(const typename ParserClass::parser_data_type &)> CB) {
+    Callback = CB;
+  }
+
+  std::function<void(const typename ParserClass::parser_data_type &)> Callback =
+      [](const typename ParserClass::parser_data_type &) {};
 };
 
 extern template class opt<unsigned>;
@@ -1512,8 +1606,8 @@ public:
   reference front() { return Storage.front(); }
   const_reference front() const { return Storage.front(); }
 
-  operator std::vector<DataType>&() { return Storage; }
-  operator ArrayRef<DataType>() { return Storage; }
+  operator std::vector<DataType> &() { return Storage; }
+  operator ArrayRef<DataType>() const { return Storage; }
   std::vector<DataType> *operator&() { return &Storage; }
   const std::vector<DataType> *operator&() const { return &Storage; }
 
@@ -1546,6 +1640,7 @@ class list : public Option, public list_storage<DataType, StorageClass> {
     list_storage<DataType, StorageClass>::addValue(Val);
     setPosition(pos);
     Positions.push_back(pos);
+    Callback(Val);
     return false;
   }
 
@@ -1592,6 +1687,14 @@ public:
     apply(this, Ms...);
     done();
   }
+
+  void setCallback(
+      std::function<void(const typename ParserClass::parser_data_type &)> CB) {
+    Callback = CB;
+  }
+
+  std::function<void(const typename ParserClass::parser_data_type &)> Callback =
+      [](const typename ParserClass::parser_data_type &) {};
 };
 
 // multi_val - Modifier to set the number of additional values.
@@ -1692,6 +1795,7 @@ class bits : public Option, public bits_storage<DataType, Storage> {
     this->addValue(Val);
     setPosition(pos);
     Positions.push_back(pos);
+    Callback(Val);
     return false;
   }
 
@@ -1733,6 +1837,14 @@ public:
     apply(this, Ms...);
     done();
   }
+
+  void setCallback(
+      std::function<void(const typename ParserClass::parser_data_type &)> CB) {
+    Callback = CB;
+  }
+
+  std::function<void(const typename ParserClass::parser_data_type &)> Callback =
+      [](const typename ParserClass::parser_data_type &) {};
 };
 
 //===----------------------------------------------------------------------===//
@@ -1830,7 +1942,7 @@ void PrintHelpMessage(bool Hidden = false, bool Categorized = false);
 //
 
 /// Use this to get a StringMap to all registered named options
-/// (e.g. -help). Note \p Map Should be an empty StringMap.
+/// (e.g. -help).
 ///
 /// \return A reference to the StringMap used by the cl APIs to parse options.
 ///
@@ -1915,6 +2027,13 @@ void TokenizeWindowsCommandLine(StringRef Source, StringSaver &Saver,
                                 SmallVectorImpl<const char *> &NewArgv,
                                 bool MarkEOLs = false);
 
+/// Tokenizes a Windows command line while attempting to avoid copies. If no
+/// quoting or escaping was used, this produces substrings of the original
+/// string. If a token requires unquoting, it will be allocated with the
+/// StringSaver.
+void TokenizeWindowsCommandLineNoCopy(StringRef Source, StringSaver &Saver,
+                                      SmallVectorImpl<StringRef> &NewArgv);
+
 /// String tokenization function type.  Should be compatible with either
 /// Windows or Unix command line tokenizers.
 using TokenizerCallback = void (*)(StringRef Source, StringSaver &Saver,
@@ -1963,10 +2082,16 @@ bool readConfigFile(StringRef CfgFileName, StringSaver &Saver,
 /// with nullptrs in the Argv vector.
 /// \param [in] RelativeNames true if names of nested response files must be
 /// resolved relative to including file.
+/// \param [in] FS File system used for all file access when running the tool.
+/// \param [in] CurrentDir Path used to resolve relative rsp files. If set to
+/// None, process' cwd is used instead.
 /// \return true if all @files were expanded successfully or there were none.
-bool ExpandResponseFiles(StringSaver &Saver, TokenizerCallback Tokenizer,
-                         SmallVectorImpl<const char *> &Argv,
-                         bool MarkEOLs = false, bool RelativeNames = false);
+bool ExpandResponseFiles(
+    StringSaver &Saver, TokenizerCallback Tokenizer,
+    SmallVectorImpl<const char *> &Argv, bool MarkEOLs = false,
+    bool RelativeNames = false,
+    llvm::vfs::FileSystem &FS = *llvm::vfs::getRealFileSystem(),
+    llvm::Optional<llvm::StringRef> CurrentDir = llvm::None);
 
 /// Mark all options not part of this category as cl::ReallyHidden.
 ///
@@ -1998,6 +2123,9 @@ void ResetAllOptionOccurrences();
 /// all options, categories, and subcommands and returns the parser to a state
 /// where no options are supported.
 void ResetCommandLineParser();
+
+/// Parses `Arg` into the option handler `Handler`.
+bool ProvidePositionalOption(Option *Handler, StringRef Arg, int i);
 
 } // end namespace cl
 

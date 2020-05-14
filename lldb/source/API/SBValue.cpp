@@ -1,4 +1,4 @@
-//===-- SBValue.cpp ---------------------------------------------*- C++ -*-===//
+//===-- SBValue.cpp -------------------------------------------------------===//
 //
 // Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
 // See https://llvm.org/LICENSE.txt for license information.
@@ -53,11 +53,11 @@ using namespace lldb_private;
 
 class ValueImpl {
 public:
-  ValueImpl() {}
+  ValueImpl() = default;
 
   ValueImpl(lldb::ValueObjectSP in_valobj_sp,
             lldb::DynamicValueType use_dynamic, bool use_synthetic,
-            const char *name = NULL)
+            const char *name = nullptr)
       : m_valobj_sp(), m_use_dynamic(use_dynamic),
         m_use_synthetic(use_synthetic), m_name(name) {
     if (in_valobj_sp) {
@@ -84,7 +84,7 @@ public:
   }
 
   bool IsValid() {
-    if (m_valobj_sp.get() == NULL)
+    if (m_valobj_sp.get() == nullptr)
       return false;
     else {
       // FIXME: This check is necessary but not sufficient.  We for sure don't
@@ -137,7 +137,7 @@ public:
     }
 
     if (m_use_synthetic) {
-      ValueObjectSP synthetic_sp = value_sp->GetSyntheticValue(m_use_synthetic);
+      ValueObjectSP synthetic_sp = value_sp->GetSyntheticValue();
       if (synthetic_sp)
         value_sp = synthetic_sp;
     }
@@ -201,7 +201,7 @@ private:
 
 class ValueLocker {
 public:
-  ValueLocker() {}
+  ValueLocker() = default;
 
   ValueObjectSP GetLockedSP(ValueImpl &in_value) {
     return in_value.GetSP(m_stop_locker, m_lock, m_lock_error);
@@ -239,7 +239,7 @@ SBValue &SBValue::operator=(const SBValue &rhs) {
   return LLDB_RECORD_RESULT(*this);
 }
 
-SBValue::~SBValue() {}
+SBValue::~SBValue() = default;
 
 bool SBValue::IsValid() {
   LLDB_RECORD_METHOD_NO_ARGS(bool, SBValue, IsValid);
@@ -251,8 +251,8 @@ SBValue::operator bool() const {
   // If this function ever changes to anything that does more than just check
   // if the opaque shared pointer is non NULL, then we need to update all "if
   // (m_opaque_sp)" code in this file.
-  return m_opaque_sp.get() != NULL && m_opaque_sp->IsValid() &&
-         m_opaque_sp->GetRootSP().get() != NULL;
+  return m_opaque_sp.get() != nullptr && m_opaque_sp->IsValid() &&
+         m_opaque_sp->GetRootSP().get() != nullptr;
 }
 
 void SBValue::Clear() {
@@ -290,7 +290,7 @@ user_id_t SBValue::GetID() {
 const char *SBValue::GetName() {
   LLDB_RECORD_METHOD_NO_ARGS(const char *, SBValue, GetName);
 
-  const char *name = NULL;
+  const char *name = nullptr;
   ValueLocker locker;
   lldb::ValueObjectSP value_sp(GetSP(locker));
   if (value_sp)
@@ -302,7 +302,7 @@ const char *SBValue::GetName() {
 const char *SBValue::GetTypeName() {
   LLDB_RECORD_METHOD_NO_ARGS(const char *, SBValue, GetTypeName);
 
-  const char *name = NULL;
+  const char *name = nullptr;
   ValueLocker locker;
   lldb::ValueObjectSP value_sp(GetSP(locker));
   if (value_sp) {
@@ -315,7 +315,7 @@ const char *SBValue::GetTypeName() {
 const char *SBValue::GetDisplayTypeName() {
   LLDB_RECORD_METHOD_NO_ARGS(const char *, SBValue, GetDisplayTypeName);
 
-  const char *name = NULL;
+  const char *name = nullptr;
   ValueLocker locker;
   lldb::ValueObjectSP value_sp(GetSP(locker));
   if (value_sp) {
@@ -356,7 +356,7 @@ bool SBValue::IsInScope() {
 const char *SBValue::GetValue() {
   LLDB_RECORD_METHOD_NO_ARGS(const char *, SBValue, GetValue);
 
-  const char *cstr = NULL;
+  const char *cstr = nullptr;
   ValueLocker locker;
   lldb::ValueObjectSP value_sp(GetSP(locker));
   if (value_sp) {
@@ -381,30 +381,11 @@ ValueType SBValue::GetValueType() {
 const char *SBValue::GetObjectDescription() {
   LLDB_RECORD_METHOD_NO_ARGS(const char *, SBValue, GetObjectDescription);
 
-  const char *cstr = NULL;
+  const char *cstr = nullptr;
   ValueLocker locker;
   lldb::ValueObjectSP value_sp(GetSP(locker));
   if (value_sp) {
     cstr = value_sp->GetObjectDescription();
-  }
-
-  return cstr;
-}
-
-const char *SBValue::GetTypeValidatorResult() {
-  LLDB_RECORD_METHOD_NO_ARGS(const char *, SBValue, GetTypeValidatorResult);
-
-  const char *cstr = NULL;
-  ValueLocker locker;
-  lldb::ValueObjectSP value_sp(GetSP(locker));
-  if (value_sp) {
-    const auto &validation(value_sp->GetValidationStatus());
-    if (TypeValidatorResult::Failure == validation.first) {
-      if (validation.second.empty())
-        cstr = "unknown error";
-      else
-        cstr = validation.second.c_str();
-    }
   }
 
   return cstr;
@@ -442,7 +423,7 @@ bool SBValue::GetValueDidChange() {
 const char *SBValue::GetSummary() {
   LLDB_RECORD_METHOD_NO_ARGS(const char *, SBValue, GetSummary);
 
-  const char *cstr = NULL;
+  const char *cstr = nullptr;
   ValueLocker locker;
   lldb::ValueObjectSP value_sp(GetSP(locker));
   if (value_sp) {
@@ -472,7 +453,7 @@ const char *SBValue::GetSummary(lldb::SBStream &stream,
 const char *SBValue::GetLocation() {
   LLDB_RECORD_METHOD_NO_ARGS(const char *, SBValue, GetLocation);
 
-  const char *cstr = NULL;
+  const char *cstr = nullptr;
   ValueLocker locker;
   lldb::ValueObjectSP value_sp(GetSP(locker));
   if (value_sp) {
@@ -1042,7 +1023,7 @@ void *SBValue::GetOpaqueType() {
   lldb::ValueObjectSP value_sp(GetSP(locker));
   if (value_sp)
     return value_sp->GetCompilerType().GetOpaqueQualType();
-  return NULL;
+  return nullptr;
 }
 
 lldb::SBTarget SBValue::GetTarget() {
@@ -1173,7 +1154,7 @@ bool SBValue::GetExpressionPath(SBStream &description) {
   ValueLocker locker;
   lldb::ValueObjectSP value_sp(GetSP(locker));
   if (value_sp) {
-    value_sp->GetExpressionPath(description.ref(), false);
+    value_sp->GetExpressionPath(description.ref());
     return true;
   }
   return false;
@@ -1187,7 +1168,7 @@ bool SBValue::GetExpressionPath(SBStream &description,
   ValueLocker locker;
   lldb::ValueObjectSP value_sp(GetSP(locker));
   if (value_sp) {
-    value_sp->GetExpressionPath(description.ref(), qualify_cxx_base_classes);
+    value_sp->GetExpressionPath(description.ref());
     return true;
   }
   return false;
@@ -1512,7 +1493,7 @@ lldb::SBWatchpoint SBValue::Watch(bool resolve_location, bool read, bool write,
           StreamString ss;
           // True to show fullpath for declaration file.
           decl.DumpStopContext(&ss, true);
-          watchpoint_sp->SetDeclInfo(ss.GetString());
+          watchpoint_sp->SetDeclInfo(std::string(ss.GetString()));
         }
       }
     }
@@ -1585,7 +1566,6 @@ void RegisterMethods<SBValue>(Registry &R) {
   LLDB_REGISTER_METHOD(const char *, SBValue, GetValue, ());
   LLDB_REGISTER_METHOD(lldb::ValueType, SBValue, GetValueType, ());
   LLDB_REGISTER_METHOD(const char *, SBValue, GetObjectDescription, ());
-  LLDB_REGISTER_METHOD(const char *, SBValue, GetTypeValidatorResult, ());
   LLDB_REGISTER_METHOD(lldb::SBType, SBValue, GetType, ());
   LLDB_REGISTER_METHOD(bool, SBValue, GetValueDidChange, ());
   LLDB_REGISTER_METHOD(const char *, SBValue, GetSummary, ());

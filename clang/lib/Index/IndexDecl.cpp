@@ -7,8 +7,9 @@
 //===----------------------------------------------------------------------===//
 
 #include "IndexingContext.h"
-#include "clang/Index/IndexDataConsumer.h"
+#include "clang/AST/Attr.h"
 #include "clang/AST/DeclVisitor.h"
+#include "clang/Index/IndexDataConsumer.h"
 
 using namespace clang;
 using namespace index;
@@ -42,15 +43,6 @@ public:
     return true;
   }
 
-  /// Returns true if the given method has been defined explicitly by the
-  /// user.
-  static bool hasUserDefined(const ObjCMethodDecl *D,
-                             const ObjCImplDecl *Container) {
-    const ObjCMethodDecl *MD = Container->getMethod(D->getSelector(),
-                                                    D->isInstanceMethod());
-    return MD && !MD->isImplicit() && MD->isThisDeclarationADefinition();
-  }
-
   void handleTemplateArgumentLoc(const TemplateArgumentLoc &TALoc,
                                  const NamedDecl *Parent,
                                  const DeclContext *DC) {
@@ -78,6 +70,17 @@ public:
     }
   }
 
+  /// Returns true if the given method has been defined explicitly by the
+  /// user.
+  static bool hasUserDefined(const ObjCMethodDecl *D,
+                             const ObjCImplDecl *Container) {
+    const ObjCMethodDecl *MD = Container->getMethod(D->getSelector(),
+                                                    D->isInstanceMethod());
+    return MD && !MD->isImplicit() && MD->isThisDeclarationADefinition() &&
+           !MD->isSynthesizedAccessorStub();
+  }
+
+
   void handleDeclarator(const DeclaratorDecl *D,
                         const NamedDecl *Parent = nullptr,
                         bool isIBType = false) {
@@ -87,6 +90,12 @@ public:
                                  Parent->getLexicalDeclContext(),
                                  /*isBase=*/false, isIBType);
     IndexCtx.indexNestedNameSpecifierLoc(D->getQualifierLoc(), Parent);
+    auto IndexDefaultParmeterArgument = [&](const ParmVarDecl *Parm,
+                                            const NamedDecl *Parent) {
+      if (Parm->hasDefaultArg() && !Parm->hasUninstantiatedDefaultArg() &&
+          !Parm->hasUnparsedDefaultArg())
+        IndexCtx.indexBody(Parm->getDefaultArg(), Parent);
+    };
     if (IndexCtx.shouldIndexFunctionLocalSymbols()) {
       if (const ParmVarDecl *Parm = dyn_cast<ParmVarDecl>(D)) {
         auto *DC = Parm->getDeclContext();
@@ -103,7 +112,8 @@ public:
       } else if (const FunctionDecl *FD = dyn_cast<FunctionDecl>(D)) {
         if (IndexCtx.shouldIndexParametersInDeclarations() ||
             FD->isThisDeclarationADefinition()) {
-          for (auto PI : FD->parameters()) {
+          for (const auto *PI : FD->parameters()) {
+            IndexDefaultParmeterArgument(PI, D);
             IndexCtx.handleDecl(PI);
           }
         }
@@ -113,9 +123,7 @@ public:
       if (const auto *FD = dyn_cast<FunctionDecl>(D)) {
         if (FD->isThisDeclarationADefinition()) {
           for (const auto *PV : FD->parameters()) {
-            if (PV->hasDefaultArg() && !PV->hasUninstantiatedDefaultArg() &&
-                !PV->hasUnparsedDefaultArg())
-              IndexCtx.indexBody(PV->getDefaultArg(), D);
+            IndexDefaultParmeterArgument(PV, D);
           }
         }
       }
@@ -416,7 +424,7 @@ public:
     if (D->isThisDeclarationADefinition()) {
       TRY_DECL(D, IndexCtx.handleDecl(D));
       TRY_TO(handleReferencedProtocols(D->getReferencedProtocols(), D,
-                                       /*superLoc=*/SourceLocation()));
+                                       /*SuperLoc=*/SourceLocation()));
       TRY_TO(IndexCtx.indexDeclContext(D));
     } else {
       return IndexCtx.handleReference(D, D->getLocation(), nullptr,
@@ -466,7 +474,7 @@ public:
       CategoryLoc = D->getLocation();
     TRY_TO(IndexCtx.handleDecl(D, CategoryLoc));
     TRY_TO(handleReferencedProtocols(D->getReferencedProtocols(), D,
-                                     /*superLoc=*/SourceLocation()));
+                                     /*SuperLoc=*/SourceLocation()));
     TRY_TO(IndexCtx.indexDeclContext(D));
     return true;
   }
@@ -534,13 +542,11 @@ public:
     SymbolRoleSet AccessorMethodRoles =
       SymbolRoleSet(SymbolRole::Dynamic) | SymbolRoleSet(SymbolRole::Implicit);
     if (ObjCMethodDecl *MD = PD->getGetterMethodDecl()) {
-      if (MD->isPropertyAccessor() &&
-          !hasUserDefined(MD, Container))
+      if (MD->isPropertyAccessor() && !hasUserDefined(MD, Container))
         IndexCtx.handleDecl(MD, Loc, AccessorMethodRoles, {}, Container);
     }
     if (ObjCMethodDecl *MD = PD->getSetterMethodDecl()) {
-      if (MD->isPropertyAccessor() &&
-          !hasUserDefined(MD, Container))
+      if (MD->isPropertyAccessor() && !hasUserDefined(MD, Container))
         IndexCtx.handleDecl(MD, Loc, AccessorMethodRoles, {}, Container);
     }
     if (ObjCIvarDecl *IvarD = D->getPropertyIvarDecl()) {
@@ -652,10 +658,10 @@ public:
   }
 
   static bool shouldIndexTemplateParameterDefaultValue(const NamedDecl *D) {
-    if (!D)
-      return false;
     // We want to index the template parameters only once when indexing the
     // canonical declaration.
+    if (!D)
+      return false;
     if (const auto *FD = dyn_cast<FunctionDecl>(D))
       return FD->getCanonicalDecl() == FD;
     else if (const auto *TD = dyn_cast<TagDecl>(D))

@@ -9,7 +9,7 @@
 // UNSUPPORTED: c++98, c++03
 
 // Can't test the system lib because this test enables debug mode
-// UNSUPPORTED: with_system_cxx_lib
+// UNSUPPORTED: with_system_cxx_lib=macosx
 
 // <list>
 
@@ -21,6 +21,7 @@
 #include <list>
 #include <cstdlib>
 #include <cassert>
+#include "test_macros.h"
 #include "MoveOnly.h"
 #include "test_allocator.h"
 #include "min_allocator.h"

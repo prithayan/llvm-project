@@ -77,8 +77,8 @@ static bool foldImmediates(MachineInstr &MI, const SIInstrInfo *TII,
   // Try to fold Src0
   MachineOperand &Src0 = MI.getOperand(Src0Idx);
   if (Src0.isReg()) {
-    unsigned Reg = Src0.getReg();
-    if (TargetRegisterInfo::isVirtualRegister(Reg) && MRI.hasOneUse(Reg)) {
+    Register Reg = Src0.getReg();
+    if (Register::isVirtualRegister(Reg) && MRI.hasOneUse(Reg)) {
       MachineInstr *Def = MRI.getUniqueVRegDef(Reg);
       if (Def && Def->isMoveImmediate()) {
         MachineOperand &MovSrc = Def->getOperand(1);
@@ -94,6 +94,10 @@ static bool foldImmediates(MachineInstr &MI, const SIInstrInfo *TII,
         } else if (MovSrc.isFI()) {
           Src0.setSubReg(0);
           Src0.ChangeToFrameIndex(MovSrc.getIndex());
+          ConstantFolded = true;
+        } else if (MovSrc.isGlobal()) {
+          Src0.ChangeToGA(MovSrc.getGlobal(), MovSrc.getOffset(),
+                          MovSrc.getTargetFlags());
           ConstantFolded = true;
         }
 
@@ -319,61 +323,61 @@ static bool shrinkScalarLogicOp(const GCNSubtarget &ST,
   MachineOperand *SrcReg = Src0;
   MachineOperand *SrcImm = Src1;
 
-  if (SrcImm->isImm() &&
-      !AMDGPU::isInlinableLiteral32(SrcImm->getImm(), ST.hasInv2PiInlineImm())) {
-    uint32_t Imm = static_cast<uint32_t>(SrcImm->getImm());
-    uint32_t NewImm = 0;
+  if (!SrcImm->isImm() ||
+      AMDGPU::isInlinableLiteral32(SrcImm->getImm(), ST.hasInv2PiInlineImm()))
+    return false;
 
-    if (Opc == AMDGPU::S_AND_B32) {
-      if (isPowerOf2_32(~Imm)) {
-        NewImm = countTrailingOnes(Imm);
-        Opc = AMDGPU::S_BITSET0_B32;
-      } else if (AMDGPU::isInlinableLiteral32(~Imm, ST.hasInv2PiInlineImm())) {
-        NewImm = ~Imm;
-        Opc = AMDGPU::S_ANDN2_B32;
-      }
-    } else if (Opc == AMDGPU::S_OR_B32) {
-      if (isPowerOf2_32(Imm)) {
-        NewImm = countTrailingZeros(Imm);
-        Opc = AMDGPU::S_BITSET1_B32;
-      } else if (AMDGPU::isInlinableLiteral32(~Imm, ST.hasInv2PiInlineImm())) {
-        NewImm = ~Imm;
-        Opc = AMDGPU::S_ORN2_B32;
-      }
-    } else if (Opc == AMDGPU::S_XOR_B32) {
-      if (AMDGPU::isInlinableLiteral32(~Imm, ST.hasInv2PiInlineImm())) {
-        NewImm = ~Imm;
-        Opc = AMDGPU::S_XNOR_B32;
-      }
-    } else {
-      llvm_unreachable("unexpected opcode");
+  uint32_t Imm = static_cast<uint32_t>(SrcImm->getImm());
+  uint32_t NewImm = 0;
+
+  if (Opc == AMDGPU::S_AND_B32) {
+    if (isPowerOf2_32(~Imm)) {
+      NewImm = countTrailingOnes(Imm);
+      Opc = AMDGPU::S_BITSET0_B32;
+    } else if (AMDGPU::isInlinableLiteral32(~Imm, ST.hasInv2PiInlineImm())) {
+      NewImm = ~Imm;
+      Opc = AMDGPU::S_ANDN2_B32;
+    }
+  } else if (Opc == AMDGPU::S_OR_B32) {
+    if (isPowerOf2_32(Imm)) {
+      NewImm = countTrailingZeros(Imm);
+      Opc = AMDGPU::S_BITSET1_B32;
+    } else if (AMDGPU::isInlinableLiteral32(~Imm, ST.hasInv2PiInlineImm())) {
+      NewImm = ~Imm;
+      Opc = AMDGPU::S_ORN2_B32;
+    }
+  } else if (Opc == AMDGPU::S_XOR_B32) {
+    if (AMDGPU::isInlinableLiteral32(~Imm, ST.hasInv2PiInlineImm())) {
+      NewImm = ~Imm;
+      Opc = AMDGPU::S_XNOR_B32;
+    }
+  } else {
+    llvm_unreachable("unexpected opcode");
+  }
+
+  if ((Opc == AMDGPU::S_ANDN2_B32 || Opc == AMDGPU::S_ORN2_B32) &&
+      SrcImm == Src0) {
+    if (!TII->commuteInstruction(MI, false, 1, 2))
+      NewImm = 0;
+  }
+
+  if (NewImm != 0) {
+    if (Register::isVirtualRegister(Dest->getReg()) && SrcReg->isReg()) {
+      MRI.setRegAllocationHint(Dest->getReg(), 0, SrcReg->getReg());
+      MRI.setRegAllocationHint(SrcReg->getReg(), 0, Dest->getReg());
+      return true;
     }
 
-    if ((Opc == AMDGPU::S_ANDN2_B32 || Opc == AMDGPU::S_ORN2_B32) &&
-        SrcImm == Src0) {
-      if (!TII->commuteInstruction(MI, false, 1, 2))
-        NewImm = 0;
-    }
-
-    if (NewImm != 0) {
-      if (TargetRegisterInfo::isVirtualRegister(Dest->getReg()) &&
-        SrcReg->isReg()) {
-        MRI.setRegAllocationHint(Dest->getReg(), 0, SrcReg->getReg());
-        MRI.setRegAllocationHint(SrcReg->getReg(), 0, Dest->getReg());
-        return true;
-      }
-
-      if (SrcReg->isReg() && SrcReg->getReg() == Dest->getReg()) {
-        MI.setDesc(TII->get(Opc));
-        if (Opc == AMDGPU::S_BITSET0_B32 ||
-            Opc == AMDGPU::S_BITSET1_B32) {
-          Src0->ChangeToImmediate(NewImm);
-          // Remove the immediate and add the tied input.
-          MI.getOperand(2).ChangeToRegister(Dest->getReg(), false);
-          MI.tieOperands(0, 2);
-        } else {
-          SrcImm->setImm(NewImm);
-        }
+    if (SrcReg->isReg() && SrcReg->getReg() == Dest->getReg()) {
+      MI.setDesc(TII->get(Opc));
+      if (Opc == AMDGPU::S_BITSET0_B32 ||
+          Opc == AMDGPU::S_BITSET1_B32) {
+        Src0->ChangeToImmediate(NewImm);
+        // Remove the immediate and add the tied input.
+        MI.getOperand(2).ChangeToRegister(Dest->getReg(), false);
+        MI.tieOperands(0, 2);
+      } else {
+        SrcImm->setImm(NewImm);
       }
     }
   }
@@ -390,12 +394,11 @@ static bool instAccessReg(iterator_range<MachineInstr::const_mop_iterator> &&R,
     if (!MO.isReg())
       continue;
 
-    if (TargetRegisterInfo::isPhysicalRegister(Reg) &&
-        TargetRegisterInfo::isPhysicalRegister(MO.getReg())) {
+    if (Register::isPhysicalRegister(Reg) &&
+        Register::isPhysicalRegister(MO.getReg())) {
       if (TRI.regsOverlap(Reg, MO.getReg()))
         return true;
-    } else if (MO.getReg() == Reg &&
-               TargetRegisterInfo::isVirtualRegister(Reg)) {
+    } else if (MO.getReg() == Reg && Register::isVirtualRegister(Reg)) {
       LaneBitmask Overlap = TRI.getSubRegIndexLaneMask(SubReg) &
                             TRI.getSubRegIndexLaneMask(MO.getSubReg());
       if (Overlap.any())
@@ -421,11 +424,10 @@ static TargetInstrInfo::RegSubRegPair
 getSubRegForIndex(unsigned Reg, unsigned Sub, unsigned I,
                   const SIRegisterInfo &TRI, const MachineRegisterInfo &MRI) {
   if (TRI.getRegSizeInBits(Reg, MRI) != 32) {
-    if (TargetRegisterInfo::isPhysicalRegister(Reg)) {
+    if (Register::isPhysicalRegister(Reg)) {
       Reg = TRI.getSubReg(Reg, TRI.getSubRegFromChannel(I));
     } else {
-      LaneBitmask LM = TRI.getSubRegIndexLaneMask(Sub);
-      Sub = TRI.getSubRegFromChannel(I + countTrailingZeros(LM.getAsInteger()));
+      Sub = TRI.getSubRegFromChannel(I + TRI.getChannelFromSubReg(Sub));
     }
   }
   return TargetInstrInfo::RegSubRegPair(Reg, Sub);
@@ -455,13 +457,13 @@ static MachineInstr* matchSwap(MachineInstr &MovT, MachineRegisterInfo &MRI,
   assert(MovT.getOpcode() == AMDGPU::V_MOV_B32_e32 ||
          MovT.getOpcode() == AMDGPU::COPY);
 
-  unsigned T = MovT.getOperand(0).getReg();
+  Register T = MovT.getOperand(0).getReg();
   unsigned Tsub = MovT.getOperand(0).getSubReg();
   MachineOperand &Xop = MovT.getOperand(1);
 
   if (!Xop.isReg())
     return nullptr;
-  unsigned X = Xop.getReg();
+  Register X = Xop.getReg();
   unsigned Xsub = Xop.getSubReg();
 
   unsigned Size = TII->getOpSize(MovT, 0) / 4;
@@ -470,26 +472,30 @@ static MachineInstr* matchSwap(MachineInstr &MovT, MachineRegisterInfo &MRI,
   if (!TRI.isVGPR(MRI, X))
     return nullptr;
 
-  for (MachineOperand &YTop : MRI.use_nodbg_operands(T)) {
-    if (YTop.getSubReg() != Tsub)
+  const unsigned SearchLimit = 16;
+  unsigned Count = 0;
+  for (auto Iter = std::next(MovT.getIterator()),
+            E = MovT.getParent()->instr_end();
+       Iter != E && Count < SearchLimit; ++Iter, ++Count) {
+
+    MachineInstr *MovY = &*Iter;
+    if ((MovY->getOpcode() != AMDGPU::V_MOV_B32_e32 &&
+         MovY->getOpcode() != AMDGPU::COPY) ||
+        !MovY->getOperand(1).isReg()        ||
+        MovY->getOperand(1).getReg() != T   ||
+        MovY->getOperand(1).getSubReg() != Tsub)
       continue;
 
-    MachineInstr &MovY = *YTop.getParent();
-    if ((MovY.getOpcode() != AMDGPU::V_MOV_B32_e32 &&
-         MovY.getOpcode() != AMDGPU::COPY) ||
-        MovY.getOperand(1).getSubReg() != Tsub)
-      continue;
+    Register Y = MovY->getOperand(0).getReg();
+    unsigned Ysub = MovY->getOperand(0).getSubReg();
 
-    unsigned Y = MovY.getOperand(0).getReg();
-    unsigned Ysub = MovY.getOperand(0).getSubReg();
-
-    if (!TRI.isVGPR(MRI, Y) || MovT.getParent() != MovY.getParent())
+    if (!TRI.isVGPR(MRI, Y))
       continue;
 
     MachineInstr *MovX = nullptr;
-    auto I = std::next(MovT.getIterator()), E = MovT.getParent()->instr_end();
-    for (auto IY = MovY.getIterator(); I != E && I != IY; ++I) {
-      if (instReadsReg(&*I, X, Xsub, TRI) ||
+    for (auto IY = MovY->getIterator(), I = std::next(MovT.getIterator());
+         I != IY; ++I) {
+      if (instReadsReg(&*I, X, Xsub, TRI)    ||
           instModifiesReg(&*I, Y, Ysub, TRI) ||
           instModifiesReg(&*I, T, Tsub, TRI) ||
           (MovX && instModifiesReg(&*I, X, Xsub, TRI))) {
@@ -514,7 +520,7 @@ static MachineInstr* matchSwap(MachineInstr &MovT, MachineRegisterInfo &MRI,
       MovX = &*I;
     }
 
-    if (!MovX || I == E)
+    if (!MovX)
       continue;
 
     LLVM_DEBUG(dbgs() << "Matched v_swap_b32:\n" << MovT << *MovX << MovY);
@@ -531,7 +537,7 @@ static MachineInstr* matchSwap(MachineInstr &MovT, MachineRegisterInfo &MRI,
         .addReg(X1.Reg, 0, X1.SubReg).getInstr();
     }
     MovX->eraseFromParent();
-    MovY.eraseFromParent();
+    MovY->eraseFromParent();
     MachineInstr *Next = &*std::next(MovT.getIterator());
     if (MRI.use_nodbg_empty(T))
       MovT.eraseFromParent();
@@ -551,6 +557,7 @@ bool SIShrinkInstructions::runOnMachineFunction(MachineFunction &MF) {
   MachineRegisterInfo &MRI = MF.getRegInfo();
   const GCNSubtarget &ST = MF.getSubtarget<GCNSubtarget>();
   const SIInstrInfo *TII = ST.getInstrInfo();
+  unsigned VCCReg = ST.isWave32() ? AMDGPU::VCC_LO : AMDGPU::VCC;
 
   std::vector<unsigned> I1Defs;
 
@@ -574,7 +581,7 @@ bool SIShrinkInstructions::runOnMachineFunction(MachineFunction &MF) {
         // XXX - not exactly a check for post-regalloc run.
         MachineOperand &Src = MI.getOperand(1);
         if (Src.isImm() &&
-            TargetRegisterInfo::isPhysicalRegister(MI.getOperand(0).getReg())) {
+            Register::isPhysicalRegister(MI.getOperand(0).getReg())) {
           int32_t ReverseImm;
           if (isReverseInlineImm(TII, Src, ReverseImm)) {
             MI.setDesc(TII->get(AMDGPU::V_BFREV_B32_e32));
@@ -600,8 +607,10 @@ bool SIShrinkInstructions::runOnMachineFunction(MachineFunction &MF) {
       //  =>
       // s_nop (N + M)
       if (MI.getOpcode() == AMDGPU::S_NOP &&
+          MI.getNumOperands() == 1 && // Don't merge with implicit operands
           Next != MBB.end() &&
-          (*Next).getOpcode() == AMDGPU::S_NOP) {
+          (*Next).getOpcode() == AMDGPU::S_NOP &&
+          (*Next).getNumOperands() == 1) {
 
         MachineInstr &NextMI = *Next;
         // The instruction encodes the amount to wait with an offset of 1,
@@ -638,8 +647,7 @@ bool SIShrinkInstructions::runOnMachineFunction(MachineFunction &MF) {
         // FIXME: This could work better if hints worked with subregisters. If
         // we have a vector add of a constant, we usually don't get the correct
         // allocation due to the subregister usage.
-        if (TargetRegisterInfo::isVirtualRegister(Dest->getReg()) &&
-            Src0->isReg()) {
+        if (Register::isVirtualRegister(Dest->getReg()) && Src0->isReg()) {
           MRI.setRegAllocationHint(Dest->getReg(), 0, Src0->getReg());
           MRI.setRegAllocationHint(Src0->getReg(), 0, Dest->getReg());
           continue;
@@ -667,8 +675,7 @@ bool SIShrinkInstructions::runOnMachineFunction(MachineFunction &MF) {
         const MachineOperand &Dst = MI.getOperand(0);
         MachineOperand &Src = MI.getOperand(1);
 
-        if (Src.isImm() &&
-            TargetRegisterInfo::isPhysicalRegister(Dst.getReg())) {
+        if (Src.isImm() && Register::isPhysicalRegister(Dst.getReg())) {
           int32_t ReverseImm;
           if (isKImmOperand(TII, Src))
             MI.setDesc(TII->get(AMDGPU::S_MOVK_I32));
@@ -716,8 +723,8 @@ bool SIShrinkInstructions::runOnMachineFunction(MachineFunction &MF) {
       int Op32 = AMDGPU::getVOPe32(MI.getOpcode());
 
       if (TII->isVOPC(Op32)) {
-        unsigned DstReg = MI.getOperand(0).getReg();
-        if (TargetRegisterInfo::isVirtualRegister(DstReg)) {
+        Register DstReg = MI.getOperand(0).getReg();
+        if (Register::isVirtualRegister(DstReg)) {
           // VOPC instructions can only write to the VCC register. We can't
           // force them to use VCC here, because this is only one register and
           // cannot deal with sequences which would require multiple copies of
@@ -726,10 +733,10 @@ bool SIShrinkInstructions::runOnMachineFunction(MachineFunction &MF) {
           // So, instead of forcing the instruction to write to VCC, we provide
           // a hint to the register allocator to use VCC and then we will run
           // this pass again after RA and shrink it if it outputs to VCC.
-          MRI.setRegAllocationHint(MI.getOperand(0).getReg(), 0, AMDGPU::VCC);
+          MRI.setRegAllocationHint(MI.getOperand(0).getReg(), 0, VCCReg);
           continue;
         }
-        if (DstReg != AMDGPU::VCC)
+        if (DstReg != VCCReg)
           continue;
       }
 
@@ -740,12 +747,12 @@ bool SIShrinkInstructions::runOnMachineFunction(MachineFunction &MF) {
             TII->getNamedOperand(MI, AMDGPU::OpName::src2);
         if (!Src2->isReg())
           continue;
-        unsigned SReg = Src2->getReg();
-        if (TargetRegisterInfo::isVirtualRegister(SReg)) {
-          MRI.setRegAllocationHint(SReg, 0, AMDGPU::VCC);
+        Register SReg = Src2->getReg();
+        if (Register::isVirtualRegister(SReg)) {
+          MRI.setRegAllocationHint(SReg, 0, VCCReg);
           continue;
         }
-        if (SReg != AMDGPU::VCC)
+        if (SReg != VCCReg)
           continue;
       }
 
@@ -758,20 +765,24 @@ bool SIShrinkInstructions::runOnMachineFunction(MachineFunction &MF) {
                                                         AMDGPU::OpName::src2);
 
       if (SDst) {
-        if (SDst->getReg() != AMDGPU::VCC) {
-          if (TargetRegisterInfo::isVirtualRegister(SDst->getReg()))
-            MRI.setRegAllocationHint(SDst->getReg(), 0, AMDGPU::VCC);
-          continue;
+        bool Next = false;
+
+        if (SDst->getReg() != VCCReg) {
+          if (Register::isVirtualRegister(SDst->getReg()))
+            MRI.setRegAllocationHint(SDst->getReg(), 0, VCCReg);
+          Next = true;
         }
 
         // All of the instructions with carry outs also have an SGPR input in
         // src2.
-        if (Src2 && Src2->getReg() != AMDGPU::VCC) {
-          if (TargetRegisterInfo::isVirtualRegister(Src2->getReg()))
-            MRI.setRegAllocationHint(Src2->getReg(), 0, AMDGPU::VCC);
-
-          continue;
+        if (Src2 && Src2->getReg() != VCCReg) {
+          if (Register::isVirtualRegister(Src2->getReg()))
+            MRI.setRegAllocationHint(Src2->getReg(), 0, VCCReg);
+          Next = true;
         }
+
+        if (Next)
+          continue;
       }
 
       // We can shrink this instruction

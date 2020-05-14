@@ -14,12 +14,14 @@
 #define LLVM_CLANG_AST_STMT_H
 
 #include "clang/AST/DeclGroup.h"
+#include "clang/AST/DependenceFlags.h"
 #include "clang/AST/StmtIterator.h"
 #include "clang/Basic/CapturedStmt.h"
 #include "clang/Basic/IdentifierTable.h"
 #include "clang/Basic/LLVM.h"
 #include "clang/Basic/SourceLocation.h"
 #include "llvm/ADT/ArrayRef.h"
+#include "llvm/ADT/BitmaskEnum.h"
 #include "llvm/ADT/PointerIntPair.h"
 #include "llvm/ADT/StringRef.h"
 #include "llvm/ADT/iterator.h"
@@ -46,6 +48,7 @@ class Attr;
 class CapturedDecl;
 class Decl;
 class Expr;
+class AddrLabelExpr;
 class LabelDecl;
 class ODRHash;
 class PrinterHelper;
@@ -97,14 +100,8 @@ protected:
 
     /// The statement class.
     unsigned sClass : 8;
-
-    /// This bit is set only for the Stmts that are the structured-block of
-    /// OpenMP executable directives. Directives that have a structured block
-    /// are called "non-standalone" directives.
-    /// I.e. those returned by OMPExecutableDirective::getStructuredBlock().
-    unsigned IsOMPStructuredBlock : 1;
   };
-  enum { NumStmtBits = 9 };
+  enum { NumStmtBits = 8 };
 
   class NullStmtBitfields {
     friend class ASTStmtReader;
@@ -314,12 +311,39 @@ protected:
 
     unsigned ValueKind : 2;
     unsigned ObjectKind : 3;
-    unsigned TypeDependent : 1;
-    unsigned ValueDependent : 1;
-    unsigned InstantiationDependent : 1;
-    unsigned ContainsUnexpandedParameterPack : 1;
+    unsigned /*ExprDependence*/ Dependent : llvm::BitWidth<ExprDependence>;
   };
-  enum { NumExprBits = NumStmtBits + 9 };
+  enum { NumExprBits = NumStmtBits + 5 + llvm::BitWidth<ExprDependence> };
+
+  class ConstantExprBitfields {
+    friend class ASTStmtReader;
+    friend class ASTStmtWriter;
+    friend class ConstantExpr;
+
+    unsigned : NumExprBits;
+
+    /// The kind of result that is trail-allocated.
+    unsigned ResultKind : 2;
+
+    /// Kind of Result as defined by APValue::Kind
+    unsigned APValueKind : 4;
+
+    /// When ResultKind == RSK_Int64. whether the trail-allocated integer is
+    /// signed.
+    unsigned IsUnsigned : 1;
+
+    /// When ResultKind == RSK_Int64. the BitWidth of the trail-allocated
+    /// integer. 7 bits because it is the minimal number of bit to represent a
+    /// value from 0 to 64 (the size of the trail-allocated number).
+    unsigned BitWidth : 7;
+
+    /// When ResultKind == RSK_APValue. Wether the ASTContext will cleanup the
+    /// destructor on the trail-allocated APValue.
+    unsigned HasCleanup : 1;
+
+    /// Whether this ConstantExpr was created for immediate invocation.
+    unsigned IsImmediateInvocation : 1;
+  };
 
   class PredefinedExprBitfields {
     friend class ASTStmtReader;
@@ -350,19 +374,12 @@ protected:
     unsigned HasFoundDecl : 1;
     unsigned HadMultipleCandidates : 1;
     unsigned RefersToEnclosingVariableOrCapture : 1;
+    unsigned NonOdrUseReason : 2;
 
     /// The location of the declaration name itself.
     SourceLocation Loc;
   };
 
-  enum APFloatSemantics {
-    IEEEhalf,
-    IEEEsingle,
-    IEEEdouble,
-    x87DoubleExtended,
-    IEEEquad,
-    PPCDoubleDouble
-  };
 
   class FloatingLiteralBitfields {
     friend class FloatingLiteral;
@@ -410,6 +427,11 @@ protected:
 
     unsigned Opc : 5;
     unsigned CanOverflow : 1;
+    //
+    /// This is only meaningful for operations on floating point
+    /// types when additional values need to be in trailing storage.
+    /// It is 0 otherwise.
+    unsigned HasFPFeatures : 1;
 
     SourceLocation Loc;
   };
@@ -452,6 +474,7 @@ protected:
   enum { NumCallExprBits = 32 };
 
   class MemberExprBitfields {
+    friend class ASTStmtReader;
     friend class MemberExpr;
 
     unsigned : NumExprBits;
@@ -475,6 +498,11 @@ protected:
     /// True if this member expression refers to a method that
     /// was resolved from an overloaded set having size greater than 1.
     unsigned HadMultipleCandidates : 1;
+
+    /// Value of type NonOdrUseReason indicating why this MemberExpr does
+    /// not constitute an odr-use of the named declaration. Meaningful only
+    /// when naming a static member.
+    unsigned NonOdrUseReason : 2;
 
     /// This is the location of the -> or . in the expression.
     SourceLocation OperatorLoc;
@@ -502,8 +530,9 @@ protected:
     unsigned Opc : 6;
 
     /// This is only meaningful for operations on floating point
-    /// types and 0 otherwise.
-    unsigned FPFeatures : 3;
+    /// types when additional values need to be in trailing storage.
+    /// It is 0 otherwise.
+    unsigned HasFPFeatures : 1;
 
     SourceLocation OpLoc;
   };
@@ -550,6 +579,29 @@ protected:
     unsigned ResultIndex : 32 - 8 - NumExprBits;
   };
 
+  class SourceLocExprBitfields {
+    friend class ASTStmtReader;
+    friend class SourceLocExpr;
+
+    unsigned : NumExprBits;
+
+    /// The kind of source location builtin represented by the SourceLocExpr.
+    /// Ex. __builtin_LINE, __builtin_FUNCTION, ect.
+    unsigned Kind : 2;
+  };
+
+  class StmtExprBitfields {
+    friend class ASTStmtReader;
+    friend class StmtExpr;
+
+    unsigned : NumExprBits;
+
+    /// The number of levels of template parameters enclosing this statement
+    /// expression. Used to determine if a statement expression remains
+    /// dependent after instantiation.
+    unsigned TemplateDepth;
+  };
+
   //===--- C++ Expression bitfields classes ---===//
 
   class CXXOperatorCallExprBitfields {
@@ -563,7 +615,16 @@ protected:
     unsigned OperatorKind : 6;
 
     // Only meaningful for floating point types.
-    unsigned FPFeatures : 3;
+    unsigned FPFeatures : 14;
+  };
+
+  class CXXRewrittenBinaryOperatorBitfields {
+    friend class ASTStmtReader;
+    friend class CXXRewrittenBinaryOperator;
+
+    unsigned : NumCallExprBits;
+
+    unsigned IsReversed : 1;
   };
 
   class CXXBoolLiteralExprBitfields {
@@ -863,6 +924,17 @@ protected:
     SourceLocation NameLoc;
   };
 
+  class RequiresExprBitfields {
+    friend class ASTStmtReader;
+    friend class ASTStmtWriter;
+    friend class RequiresExpr;
+
+    unsigned : NumExprBits;
+
+    unsigned IsSatisfied : 1;
+    SourceLocation RequiresKWLoc;
+  };
+
   //===--- C++ Coroutines TS bitfields classes ---===//
 
   class CoawaitExprBitfields {
@@ -919,6 +991,7 @@ protected:
 
     // Expressions
     ExprBitfields ExprBits;
+    ConstantExprBitfields ConstantExprBits;
     PredefinedExprBitfields PredefinedExprBits;
     DeclRefExprBitfields DeclRefExprBits;
     FloatingLiteralBitfields FloatingLiteralBits;
@@ -935,9 +1008,14 @@ protected:
     ParenListExprBitfields ParenListExprBits;
     GenericSelectionExprBitfields GenericSelectionExprBits;
     PseudoObjectExprBitfields PseudoObjectExprBits;
+    SourceLocExprBitfields SourceLocExprBits;
+
+    // GNU Extensions.
+    StmtExprBitfields StmtExprBits;
 
     // C++ Expressions
     CXXOperatorCallExprBitfields CXXOperatorCallExprBits;
+    CXXRewrittenBinaryOperatorBitfields CXXRewrittenBinaryOperatorBits;
     CXXBoolLiteralExprBitfields CXXBoolLiteralExprBits;
     CXXNullPtrLiteralExprBitfields CXXNullPtrLiteralExprBits;
     CXXThisExprBitfields CXXThisExprBits;
@@ -958,6 +1036,7 @@ protected:
     UnresolvedMemberExprBitfields UnresolvedMemberExprBits;
     CXXNoexceptExprBitfields CXXNoexceptExprBits;
     SubstNonTypeTemplateParmExprBitfields SubstNonTypeTemplateParmExprBits;
+    RequiresExprBitfields RequiresExprBits;
 
     // C++ Coroutines TS expressions
     CoawaitExprBitfields CoawaitBits;
@@ -1028,13 +1107,18 @@ protected:
   explicit Stmt(StmtClass SC, EmptyShell) : Stmt(SC) {}
 
 public:
+  Stmt() = delete;
+  Stmt(const Stmt &) = delete;
+  Stmt(Stmt &&) = delete;
+  Stmt &operator=(const Stmt &) = delete;
+  Stmt &operator=(Stmt &&) = delete;
+
   Stmt(StmtClass SC) {
     static_assert(sizeof(*this) <= 8,
                   "changing bitfields changed sizeof(Stmt)");
     static_assert(sizeof(*this) % alignof(void *) == 0,
                   "Insufficient alignment!");
     StmtBits.sClass = SC;
-    StmtBits.IsOMPStructuredBlock = false;
     if (StatisticsEnabled) Stmt::addStmtClass(SC);
   }
 
@@ -1042,17 +1126,7 @@ public:
     return static_cast<StmtClass>(StmtBits.sClass);
   }
 
-  Stmt(const Stmt &) = delete;
-  Stmt(Stmt &&) = delete;
-  Stmt &operator=(const Stmt &) = delete;
-  Stmt &operator=(Stmt &&) = delete;
-
   const char *getStmtClassName() const;
-
-  bool isOMPStructuredBlock() const { return StmtBits.IsOMPStructuredBlock; }
-  void setIsOMPStructuredBlock(bool IsOMPStructuredBlock) {
-    StmtBits.IsOMPStructuredBlock = IsOMPStructuredBlock;
-  }
 
   /// SourceLocation tokens are not useful in isolation - they are low level
   /// value objects created/interpreted by SourceManager. We assume AST
@@ -1086,6 +1160,10 @@ public:
                    const PrintingPolicy &Policy, unsigned Indentation = 0,
                    StringRef NewlineSymbol = "\n",
                    const ASTContext *Context = nullptr) const;
+
+  /// Pretty-prints in JSON format.
+  void printJson(raw_ostream &Out, PrinterHelper *Helper,
+                 const PrintingPolicy &Policy, bool AddQuotes) const;
 
   /// viewAST - Visualize an AST rooted at this Stmt* using GraphViz.  Only
   ///   works on systems with GraphViz (Mac OS X) or dot+gv installed.
@@ -1304,11 +1382,6 @@ public:
     return !body_empty() ? body_begin()[size() - 1] : nullptr;
   }
 
-  void setLastStmt(Stmt *S) {
-    assert(!body_empty() && "setLastStmt");
-    body_begin()[size() - 1] = S;
-  }
-
   using const_body_iterator = Stmt *const *;
   using body_const_range = llvm::iterator_range<const_body_iterator>;
 
@@ -1349,6 +1422,26 @@ public:
 
   const_reverse_body_iterator body_rend() const {
     return const_reverse_body_iterator(body_begin());
+  }
+
+  // Get the Stmt that StmtExpr would consider to be the result of this
+  // compound statement. This is used by StmtExpr to properly emulate the GCC
+  // compound expression extension, which ignores trailing NullStmts when
+  // getting the result of the expression.
+  // i.e. ({ 5;;; })
+  //           ^^ ignored
+  // If we don't find something that isn't a NullStmt, just return the last
+  // Stmt.
+  Stmt *getStmtExprResult() {
+    for (auto *B : llvm::reverse(body())) {
+      if (!isa<NullStmt>(B))
+        return B;
+    }
+    return body_back();
+  }
+
+  const Stmt *getStmtExprResult() const {
+    return const_cast<CompoundStmt *>(this)->getStmtExprResult();
   }
 
   SourceLocation getBeginLoc() const { return CompoundStmtBits.LBraceLoc; }
@@ -1924,6 +2017,10 @@ public:
 
   bool isConstexpr() const { return IfStmtBits.IsConstexpr; }
   void setConstexpr(bool C) { IfStmtBits.IsConstexpr = C; }
+
+  /// If this is an 'if constexpr', determine which substatement will be taken.
+  /// Otherwise, or if the condition is value-dependent, returns None.
+  Optional<const Stmt*> getNondiscardedCase(const ASTContext &Ctx) const;
 
   bool isObjCAvailabilityCheck() const;
 
@@ -2799,13 +2896,15 @@ class GCCAsmStmt : public AsmStmt {
   StringLiteral **Constraints = nullptr;
   StringLiteral **Clobbers = nullptr;
   IdentifierInfo **Names = nullptr;
+  unsigned NumLabels = 0;
 
 public:
   GCCAsmStmt(const ASTContext &C, SourceLocation asmloc, bool issimple,
              bool isvolatile, unsigned numoutputs, unsigned numinputs,
              IdentifierInfo **names, StringLiteral **constraints, Expr **exprs,
              StringLiteral *asmstr, unsigned numclobbers,
-             StringLiteral **clobbers, SourceLocation rparenloc);
+             StringLiteral **clobbers, unsigned numlabels,
+             SourceLocation rparenloc);
 
   /// Build an empty inline-assembly statement.
   explicit GCCAsmStmt(EmptyShell Empty) : AsmStmt(GCCAsmStmtClass, Empty) {}
@@ -2930,6 +3029,51 @@ public:
     return const_cast<GCCAsmStmt*>(this)->getInputExpr(i);
   }
 
+  //===--- Labels ---===//
+
+  bool isAsmGoto() const {
+    return NumLabels > 0;
+  }
+
+  unsigned getNumLabels() const {
+    return NumLabels;
+  }
+
+  IdentifierInfo *getLabelIdentifier(unsigned i) const {
+    return Names[i + NumOutputs + NumInputs];
+  }
+
+  AddrLabelExpr *getLabelExpr(unsigned i) const;
+  StringRef getLabelName(unsigned i) const;
+  using labels_iterator = CastIterator<AddrLabelExpr>;
+  using const_labels_iterator = ConstCastIterator<AddrLabelExpr>;
+  using labels_range = llvm::iterator_range<labels_iterator>;
+  using labels_const_range = llvm::iterator_range<const_labels_iterator>;
+
+  labels_iterator begin_labels() {
+    return &Exprs[0] + NumOutputs + NumInputs;
+  }
+
+  labels_iterator end_labels() {
+    return &Exprs[0] + NumOutputs + NumInputs + NumLabels;
+  }
+
+  labels_range labels() {
+    return labels_range(begin_labels(), end_labels());
+  }
+
+  const_labels_iterator begin_labels() const {
+    return &Exprs[0] + NumOutputs + NumInputs;
+  }
+
+  const_labels_iterator end_labels() const {
+    return &Exprs[0] + NumOutputs + NumInputs + NumLabels;
+  }
+
+  labels_const_range labels() const {
+    return labels_const_range(begin_labels(), end_labels());
+  }
+
 private:
   void setOutputsAndInputsAndClobbers(const ASTContext &C,
                                       IdentifierInfo **Names,
@@ -2937,6 +3081,7 @@ private:
                                       Stmt **Exprs,
                                       unsigned NumOutputs,
                                       unsigned NumInputs,
+                                      unsigned NumLabels,
                                       StringLiteral **Clobbers,
                                       unsigned NumClobbers);
 

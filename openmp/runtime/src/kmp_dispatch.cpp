@@ -133,13 +133,10 @@ void __kmp_dispatch_init_algorithm(ident_t *loc, int gtid,
   active = !team->t.t_serialized;
 
 #if USE_ITT_BUILD
-  int itt_need_metadata_reporting = __itt_metadata_add_ptr &&
-                                    __kmp_forkjoin_frames_mode == 3 &&
-                                    KMP_MASTER_GTID(gtid) &&
-#if OMP_40_ENABLED
-                                    th->th.th_teams_microtask == NULL &&
-#endif
-                                    team->t.t_active_level == 1;
+  int itt_need_metadata_reporting =
+      __itt_metadata_add_ptr && __kmp_forkjoin_frames_mode == 3 &&
+      KMP_MASTER_GTID(gtid) && th->th.th_teams_microtask == NULL &&
+      team->t.t_active_level == 1;
 #endif
 
 #if KMP_USE_HIER_SCHED
@@ -244,7 +241,6 @@ void __kmp_dispatch_init_algorithm(ident_t *loc, int gtid,
       schedule = kmp_sch_guided_iterative_chunked;
       KMP_WARNING(DispatchManyThreads);
     }
-#if OMP_45_ENABLED
     if (schedule == kmp_sch_runtime_simd) {
       // compiler provides simd_width in the chunk parameter
       schedule = team->t.t_sched.r_sched_type;
@@ -278,7 +274,6 @@ void __kmp_dispatch_init_algorithm(ident_t *loc, int gtid,
       }
 #endif
     }
-#endif // OMP_45_ENABLED
     pr->u.p.parm1 = chunk;
   }
   KMP_ASSERT2((kmp_sch_lower < schedule && schedule < kmp_sch_upper),
@@ -384,14 +379,15 @@ void __kmp_dispatch_init_algorithm(ident_t *loc, int gtid,
       }
       break;
     } else {
-      KD_TRACE(100, ("__kmp_dispatch_init_algorithm: T#%d falling-through to "
-                     "kmp_sch_static_balanced\n",
-                     gtid));
-      schedule = kmp_sch_static_balanced;
-      /* too few iterations: fall-through to kmp_sch_static_balanced */
+      /* too few chunks: switching to kmp_sch_dynamic_chunked */
+      schedule = kmp_sch_dynamic_chunked;
+      KD_TRACE(100, ("__kmp_dispatch_init_algorithm: T#%d switching to "
+                     "kmp_sch_dynamic_chunked\n",
+                      gtid));
+      if (pr->u.p.parm1 <= 0)
+        pr->u.p.parm1 = KMP_DEFAULT_CHUNK;
+      break;
     } // if
-    /* FALL-THROUGH to static balanced */
-    KMP_FALLTHROUGH();
   } // case
 #endif
   case kmp_sch_static_balanced: {
@@ -461,7 +457,6 @@ void __kmp_dispatch_init_algorithm(ident_t *loc, int gtid,
     }
     break;
   } // case
-#if OMP_45_ENABLED
   case kmp_sch_static_balanced_chunked: {
     // similar to balanced, but chunk adjusted to multiple of simd width
     T nth = nproc;
@@ -476,7 +471,6 @@ void __kmp_dispatch_init_algorithm(ident_t *loc, int gtid,
     break;
   } // case
   case kmp_sch_guided_simd:
-#endif // OMP_45_ENABLED
   case kmp_sch_guided_iterative_chunked: {
     KD_TRACE(
         100,
@@ -783,9 +777,7 @@ __kmp_dispatch_init(ident_t *loc, int gtid, enum sched_type schedule, T lb,
   if (!TCR_4(__kmp_init_parallel))
     __kmp_parallel_initialize();
 
-#if OMP_50_ENABLED
   __kmp_resume_if_soft_paused();
-#endif
 
 #if INCLUDE_SSC_MARKS
   SSC_MARK_DISPATCH_INIT();
@@ -851,13 +843,10 @@ __kmp_dispatch_init(ident_t *loc, int gtid, enum sched_type schedule, T lb,
 
 #if USE_ITT_BUILD
   kmp_uint64 cur_chunk = chunk;
-  int itt_need_metadata_reporting = __itt_metadata_add_ptr &&
-                                    __kmp_forkjoin_frames_mode == 3 &&
-                                    KMP_MASTER_GTID(gtid) &&
-#if OMP_40_ENABLED
-                                    th->th.th_teams_microtask == NULL &&
-#endif
-                                    team->t.t_active_level == 1;
+  int itt_need_metadata_reporting =
+      __itt_metadata_add_ptr && __kmp_forkjoin_frames_mode == 3 &&
+      KMP_MASTER_GTID(gtid) && th->th.th_teams_microtask == NULL &&
+      team->t.t_active_level == 1;
 #endif
   if (!active) {
     pr = reinterpret_cast<dispatch_private_info_template<T> *>(
@@ -933,9 +922,7 @@ __kmp_dispatch_init(ident_t *loc, int gtid, enum sched_type schedule, T lb,
         break;
       case kmp_sch_guided_iterative_chunked:
       case kmp_sch_guided_analytical_chunked:
-#if OMP_45_ENABLED
       case kmp_sch_guided_simd:
-#endif
         schedtype = 2;
         break;
       default:
@@ -1263,7 +1250,7 @@ int __kmp_dispatch_next_algorithm(int gtid,
             pr->u.p.parm4 = (victimIdx + 1) % nproc; // next victim
             continue; // not enough chunks to steal
           }
-          // stealing succeded, reduce victim's ub by 1/4 of undone chunks or
+          // stealing succeeded, reduce victim's ub by 1/4 of undone chunks or
           // by 1
           if (remaining > 3) {
             // steal 1/4 of remaining
@@ -1370,7 +1357,7 @@ int __kmp_dispatch_next_algorithm(int gtid,
                     (volatile kmp_int64 *)&victim->u.p.count,
                     *VOLATILE_CAST(kmp_int64 *) & vold.b,
                     *VOLATILE_CAST(kmp_int64 *) & vnew.b)) {
-              // stealing succedded
+              // stealing succeeded
               KMP_COUNT_DEVELOPER_VALUE(FOR_static_steal_stolen,
                                         vold.p.ub - vnew.p.ub);
               status = 1;
@@ -1385,7 +1372,7 @@ int __kmp_dispatch_next_algorithm(int gtid,
 #endif
               break;
             } // if (check CAS result)
-            KMP_CPU_PAUSE(); // CAS failed, repeate attempt
+            KMP_CPU_PAUSE(); // CAS failed, repeatedly attempt
           } // while (try to steal from particular victim)
         } // while (search for victim)
       } // if (try to find victim and steal)
@@ -1545,8 +1532,8 @@ int __kmp_dispatch_next_algorithm(int gtid,
       }
       if ((T)remaining <
           pr->u.p.parm2) { // compare with K*nproc*(chunk+1), K=2 by default
-        // use dynamic-style shcedule
-        // atomically inrement iterations, get old value
+        // use dynamic-style schedule
+        // atomically increment iterations, get old value
         init = test_then_add<ST>(RCAST(volatile ST *, &sh->u.s.iteration),
                                  (ST)chunkspec);
         remaining = trip - init;
@@ -1594,7 +1581,6 @@ int __kmp_dispatch_next_algorithm(int gtid,
   } // case
   break;
 
-#if OMP_45_ENABLED
   case kmp_sch_guided_simd: {
     // same as iterative but curr-chunk adjusted to be multiple of given
     // chunk
@@ -1615,8 +1601,8 @@ int __kmp_dispatch_next_algorithm(int gtid,
       KMP_DEBUG_ASSERT(init % chunk == 0);
       // compare with K*nproc*(chunk+1), K=2 by default
       if ((T)remaining < pr->u.p.parm2) {
-        // use dynamic-style shcedule
-        // atomically inrement iterations, get old value
+        // use dynamic-style schedule
+        // atomically increment iterations, get old value
         init = test_then_add<ST>(RCAST(volatile ST *, &sh->u.s.iteration),
                                  (ST)chunk);
         remaining = trip - init;
@@ -1667,7 +1653,6 @@ int __kmp_dispatch_next_algorithm(int gtid,
     } // if
   } // case
   break;
-#endif // OMP_45_ENABLED
 
   case kmp_sch_guided_analytical_chunked: {
     T chunkspec = pr->u.p.parm1;
@@ -1907,8 +1892,8 @@ static int __kmp_dispatch_next(ident_t *loc, int gtid, kmp_int32 *p_last,
   typedef typename traits_t<T>::unsigned_t UT;
   typedef typename traits_t<T>::signed_t ST;
   // This is potentially slightly misleading, schedule(runtime) will appear here
-  // even if the actual runtme schedule is static. (Which points out a
-  // disadavantage of schedule(runtime): even when static scheduling is used it
+  // even if the actual runtime schedule is static. (Which points out a
+  // disadvantage of schedule(runtime): even when static scheduling is used it
   // costs more than a compile time choice to use static scheduling would.)
   KMP_TIME_PARTITIONED_BLOCK(OMP_loop_dynamic_scheduling);
 
@@ -1924,7 +1909,7 @@ static int __kmp_dispatch_next(ident_t *loc, int gtid, kmp_int32 *p_last,
        gtid, p_lb, p_ub, p_st, p_last));
 
   if (team->t.t_serialized) {
-    /* NOTE: serialize this dispatch becase we are not at the active level */
+    /* NOTE: serialize this dispatch because we are not at the active level */
     pr = reinterpret_cast<dispatch_private_info_template<T> *>(
         th->th.th_dispatch->th_disp_buffer); /* top of the stack */
     KMP_DEBUG_ASSERT(pr);
@@ -2203,10 +2188,8 @@ static void __kmp_dist_get_bounds(ident_t *loc, kmp_int32 gtid,
   }
   th = __kmp_threads[gtid];
   team = th->th.th_team;
-#if OMP_40_ENABLED
   KMP_DEBUG_ASSERT(th->th.th_teams_microtask); // we are in the teams construct
   nteams = th->th.th_teams_size.nteams;
-#endif
   team_id = team->t.t_master_tid;
   KMP_DEBUG_ASSERT(nteams == (kmp_uint32)team->t.t_parent->t.t_nproc);
 

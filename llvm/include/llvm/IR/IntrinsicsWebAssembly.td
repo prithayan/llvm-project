@@ -24,6 +24,17 @@ def int_wasm_memory_grow : Intrinsic<[llvm_anyint_ty],
                                      []>;
 
 //===----------------------------------------------------------------------===//
+// Trapping float-to-int conversions
+//===----------------------------------------------------------------------===//
+
+def int_wasm_trunc_signed : Intrinsic<[llvm_anyint_ty],
+                                      [llvm_anyfloat_ty],
+                                      [IntrNoMem]>;
+def int_wasm_trunc_unsigned : Intrinsic<[llvm_anyint_ty],
+                                        [llvm_anyfloat_ty],
+                                        [IntrNoMem]>;
+
+//===----------------------------------------------------------------------===//
 // Saturating float-to-int conversions
 //===----------------------------------------------------------------------===//
 
@@ -89,11 +100,26 @@ def int_wasm_atomic_notify:
 // SIMD intrinsics
 //===----------------------------------------------------------------------===//
 
+def int_wasm_swizzle :
+  Intrinsic<[llvm_v16i8_ty],
+            [llvm_v16i8_ty, llvm_v16i8_ty],
+            [IntrNoMem, IntrSpeculatable]>;
+def int_wasm_shuffle :
+  Intrinsic<[llvm_v16i8_ty],
+            [llvm_v16i8_ty, llvm_v16i8_ty, llvm_i32_ty, llvm_i32_ty,
+             llvm_i32_ty, llvm_i32_ty, llvm_i32_ty, llvm_i32_ty, llvm_i32_ty,
+             llvm_i32_ty, llvm_i32_ty, llvm_i32_ty, llvm_i32_ty, llvm_i32_ty,
+             llvm_i32_ty, llvm_i32_ty, llvm_i32_ty, llvm_i32_ty],
+            [IntrNoMem, IntrSpeculatable]>;
 def int_wasm_sub_saturate_signed :
   Intrinsic<[llvm_anyvector_ty],
             [LLVMMatchType<0>, LLVMMatchType<0>],
             [IntrNoMem, IntrSpeculatable]>;
 def int_wasm_sub_saturate_unsigned :
+  Intrinsic<[llvm_anyvector_ty],
+            [LLVMMatchType<0>, LLVMMatchType<0>],
+            [IntrNoMem, IntrSpeculatable]>;
+def int_wasm_avgr_unsigned :
   Intrinsic<[llvm_anyvector_ty],
             [LLVMMatchType<0>, LLVMMatchType<0>],
             [IntrNoMem, IntrSpeculatable]>;
@@ -109,6 +135,57 @@ def int_wasm_alltrue :
   Intrinsic<[llvm_i32_ty],
             [llvm_anyvector_ty],
             [IntrNoMem, IntrSpeculatable]>;
+def int_wasm_bitmask :
+  Intrinsic<[llvm_i32_ty],
+            [llvm_anyvector_ty],
+            [IntrNoMem, IntrSpeculatable]>;
+def int_wasm_qfma :
+  Intrinsic<[llvm_anyvector_ty],
+            [LLVMMatchType<0>, LLVMMatchType<0>, LLVMMatchType<0>],
+            [IntrNoMem, IntrSpeculatable]>;
+def int_wasm_qfms :
+  Intrinsic<[llvm_anyvector_ty],
+            [LLVMMatchType<0>, LLVMMatchType<0>, LLVMMatchType<0>],
+            [IntrNoMem, IntrSpeculatable]>;
+def int_wasm_dot :
+  Intrinsic<[llvm_v4i32_ty],
+            [llvm_v8i16_ty, llvm_v8i16_ty],
+            [IntrNoMem, IntrSpeculatable]>;
+def int_wasm_narrow_signed :
+  Intrinsic<[llvm_anyvector_ty],
+            [llvm_anyvector_ty, LLVMMatchType<1>],
+            [IntrNoMem, IntrSpeculatable]>;
+def int_wasm_narrow_unsigned :
+  Intrinsic<[llvm_anyvector_ty],
+            [llvm_anyvector_ty, LLVMMatchType<1>],
+            [IntrNoMem, IntrSpeculatable]>;
+def int_wasm_widen_low_signed :
+  Intrinsic<[llvm_anyvector_ty],
+            [llvm_anyvector_ty],
+            [IntrNoMem, IntrSpeculatable]>;
+def int_wasm_widen_high_signed :
+  Intrinsic<[llvm_anyvector_ty],
+            [llvm_anyvector_ty],
+            [IntrNoMem, IntrSpeculatable]>;
+def int_wasm_widen_low_unsigned :
+  Intrinsic<[llvm_anyvector_ty],
+            [llvm_anyvector_ty],
+            [IntrNoMem, IntrSpeculatable]>;
+def int_wasm_widen_high_unsigned :
+  Intrinsic<[llvm_anyvector_ty],
+            [llvm_anyvector_ty],
+            [IntrNoMem, IntrSpeculatable]>;
+
+// TODO: Replace these intrinsics with normal ISel patterns once the
+// pmin/pmax instructions are merged to the spec proposal.
+def int_wasm_pmin :
+  Intrinsic<[llvm_anyvector_ty],
+            [LLVMMatchType<0>, LLVMMatchType<0>],
+            [IntrNoMem, IntrSpeculatable]>;
+def int_wasm_pmax :
+  Intrinsic<[llvm_anyvector_ty],
+            [LLVMMatchType<0>, LLVMMatchType<0>],
+            [IntrNoMem, IntrSpeculatable]>;
 
 //===----------------------------------------------------------------------===//
 // Bulk memory intrinsics
@@ -123,5 +200,24 @@ def int_wasm_data_drop :
   Intrinsic<[],
             [llvm_i32_ty],
             [IntrNoDuplicate, IntrHasSideEffects, ImmArg<0>]>;
+
+//===----------------------------------------------------------------------===//
+// Thread-local storage intrinsics
+//===----------------------------------------------------------------------===//
+
+def int_wasm_tls_size :
+  Intrinsic<[llvm_anyint_ty],
+            [],
+            [IntrNoMem, IntrSpeculatable]>;
+
+def int_wasm_tls_align :
+  Intrinsic<[llvm_anyint_ty],
+            [],
+            [IntrNoMem, IntrSpeculatable]>;
+
+def int_wasm_tls_base :
+  Intrinsic<[llvm_ptr_ty],
+            [],
+            [IntrReadMem]>;
 
 } // TargetPrefix = "wasm"

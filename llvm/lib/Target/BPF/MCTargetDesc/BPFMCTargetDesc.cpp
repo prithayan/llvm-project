@@ -11,7 +11,6 @@
 //===----------------------------------------------------------------------===//
 
 #include "MCTargetDesc/BPFMCTargetDesc.h"
-#include "BPF.h"
 #include "MCTargetDesc/BPFInstPrinter.h"
 #include "MCTargetDesc/BPFMCAsmInfo.h"
 #include "TargetInfo/BPFTargetInfo.h"
@@ -98,7 +97,7 @@ static MCInstrAnalysis *createBPFInstrAnalysis(const MCInstrInfo *Info) {
   return new BPFMCInstrAnalysis(Info);
 }
 
-extern "C" void LLVMInitializeBPFTargetMC() {
+extern "C" LLVM_EXTERNAL_VISIBILITY void LLVMInitializeBPFTargetMC() {
   for (Target *T :
        {&getTheBPFleTarget(), &getTheBPFbeTarget(), &getTheBPFTarget()}) {
     // Register the MC asm info.

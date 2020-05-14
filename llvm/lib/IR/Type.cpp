@@ -26,6 +26,7 @@
 #include "llvm/Support/Casting.h"
 #include "llvm/Support/MathExtras.h"
 #include "llvm/Support/raw_ostream.h"
+#include "llvm/Support/TypeSize.h"
 #include <cassert>
 #include <utility>
 
@@ -67,20 +68,17 @@ bool Type::canLosslesslyBitCastTo(Type *Ty) const {
     return false;
 
   // Vector -> Vector conversions are always lossless if the two vector types
-  // have the same size, otherwise not.  Also, 64-bit vector types can be
-  // converted to x86mmx.
-  if (auto *thisPTy = dyn_cast<VectorType>(this)) {
-    if (auto *thatPTy = dyn_cast<VectorType>(Ty))
-      return thisPTy->getBitWidth() == thatPTy->getBitWidth();
-    if (Ty->getTypeID() == Type::X86_MMXTyID &&
-        thisPTy->getBitWidth() == 64)
-      return true;
-  }
+  // have the same size, otherwise not.
+  if (isa<VectorType>(this) && isa<VectorType>(Ty))
+    return getPrimitiveSizeInBits() == Ty->getPrimitiveSizeInBits();
 
-  if (this->getTypeID() == Type::X86_MMXTyID)
-    if (auto *thatPTy = dyn_cast<VectorType>(Ty))
-      if (thatPTy->getBitWidth() == 64)
-        return true;
+  //  64-bit fixed width vector types can be losslessly converted to x86mmx.
+  if (((isa<FixedVectorType>(this)) && Ty->isX86_MMXTy()) &&
+      getPrimitiveSizeInBits().getFixedSize() == 64)
+    return true;
+  if ((isX86_MMXTy() && isa<FixedVectorType>(Ty)) &&
+      Ty->getPrimitiveSizeInBits().getFixedSize() == 64)
+    return true;
 
   // At this point we have only various mismatches of the first class types
   // remaining and ptr->ptr. Just select the lossless conversions. Everything
@@ -111,23 +109,32 @@ bool Type::isEmptyTy() const {
   return false;
 }
 
-unsigned Type::getPrimitiveSizeInBits() const {
+TypeSize Type::getPrimitiveSizeInBits() const {
   switch (getTypeID()) {
-  case Type::HalfTyID: return 16;
-  case Type::FloatTyID: return 32;
-  case Type::DoubleTyID: return 64;
-  case Type::X86_FP80TyID: return 80;
-  case Type::FP128TyID: return 128;
-  case Type::PPC_FP128TyID: return 128;
-  case Type::X86_MMXTyID: return 64;
-  case Type::IntegerTyID: return cast<IntegerType>(this)->getBitWidth();
-  case Type::VectorTyID:  return cast<VectorType>(this)->getBitWidth();
-  default: return 0;
+  case Type::HalfTyID: return TypeSize::Fixed(16);
+  case Type::FloatTyID: return TypeSize::Fixed(32);
+  case Type::DoubleTyID: return TypeSize::Fixed(64);
+  case Type::X86_FP80TyID: return TypeSize::Fixed(80);
+  case Type::FP128TyID: return TypeSize::Fixed(128);
+  case Type::PPC_FP128TyID: return TypeSize::Fixed(128);
+  case Type::X86_MMXTyID: return TypeSize::Fixed(64);
+  case Type::IntegerTyID:
+    return TypeSize::Fixed(cast<IntegerType>(this)->getBitWidth());
+  case Type::FixedVectorTyID:
+  case Type::ScalableVectorTyID: {
+    const VectorType *VTy = cast<VectorType>(this);
+    ElementCount EC = VTy->getElementCount();
+    TypeSize ETS = VTy->getElementType()->getPrimitiveSizeInBits();
+    assert(!ETS.isScalable() && "Vector type should have fixed-width elements");
+    return {ETS.getFixedSize() * EC.Min, EC.Scalable};
+  }
+  default: return TypeSize::Fixed(0);
   }
 }
 
 unsigned Type::getScalarSizeInBits() const {
-  return getScalarType()->getPrimitiveSizeInBits();
+  // It is safe to assume that the scalar types have a fixed size.
+  return getScalarType()->getPrimitiveSizeInBits().getFixedSize();
 }
 
 int Type::getFPMantissaWidth() const {
@@ -255,7 +262,7 @@ IntegerType *IntegerType::get(LLVMContext &C, unsigned NumBits) {
   IntegerType *&Entry = C.pImpl->IntegerTypes[NumBits];
 
   if (!Entry)
-    Entry = new (C.pImpl->TypeAllocator) IntegerType(C, NumBits);
+    Entry = new (C.pImpl->Alloc) IntegerType(C, NumBits);
 
   return Entry;
 }
@@ -307,7 +314,7 @@ FunctionType *FunctionType::get(Type *ReturnType,
   if (Insertion.second) {
     // The function type was not found. Allocate one and update FunctionTypes
     // in-place.
-    FT = (FunctionType *)pImpl->TypeAllocator.Allocate(
+    FT = (FunctionType *)pImpl->Alloc.Allocate(
         sizeof(FunctionType) + sizeof(Type *) * (Params.size() + 1),
         alignof(FunctionType));
     new (FT) FunctionType(ReturnType, Params, isVarArg);
@@ -353,7 +360,7 @@ StructType *StructType::get(LLVMContext &Context, ArrayRef<Type*> ETypes,
   if (Insertion.second) {
     // The struct type was not found. Allocate one and update AnonStructTypes
     // in-place.
-    ST = new (Context.pImpl->TypeAllocator) StructType(Context);
+    ST = new (Context.pImpl->Alloc) StructType(Context);
     ST->setSubclassData(SCDB_IsLiteral);  // Literal struct.
     ST->setBody(ETypes, isPacked);
     *Insertion.first = ST;
@@ -379,7 +386,7 @@ void StructType::setBody(ArrayRef<Type*> Elements, bool isPacked) {
     return;
   }
 
-  ContainedTys = Elements.copy(getContext().pImpl->TypeAllocator).data();
+  ContainedTys = Elements.copy(getContext().pImpl->Alloc).data();
 }
 
 void StructType::setName(StringRef Name) {
@@ -434,7 +441,7 @@ void StructType::setName(StringRef Name) {
 // StructType Helper functions.
 
 StructType *StructType::create(LLVMContext &Context, StringRef Name) {
-  StructType *ST = new (Context.pImpl->TypeAllocator) StructType(Context);
+  StructType *ST = new (Context.pImpl->Alloc) StructType(Context);
   if (!Name.empty())
     ST->setName(Name);
   return ST;
@@ -506,7 +513,7 @@ StringRef StructType::getName() const {
 bool StructType::isValidElementType(Type *ElemTy) {
   return !ElemTy->isVoidTy() && !ElemTy->isLabelTy() &&
          !ElemTy->isMetadataTy() && !ElemTy->isFunctionTy() &&
-         !ElemTy->isTokenTy();
+         !ElemTy->isTokenTy() && !isa<ScalableVectorType>(ElemTy);
 }
 
 bool StructType::isLayoutIdentical(StructType *Other) const {
@@ -522,52 +529,22 @@ StructType *Module::getTypeByName(StringRef Name) const {
   return getContext().pImpl->NamedStructTypes.lookup(Name);
 }
 
-//===----------------------------------------------------------------------===//
-//                       CompositeType Implementation
-//===----------------------------------------------------------------------===//
-
-Type *CompositeType::getTypeAtIndex(const Value *V) const {
-  if (auto *STy = dyn_cast<StructType>(this)) {
-    unsigned Idx =
-      (unsigned)cast<Constant>(V)->getUniqueInteger().getZExtValue();
-    assert(indexValid(Idx) && "Invalid structure index!");
-    return STy->getElementType(Idx);
-  }
-
-  return cast<SequentialType>(this)->getElementType();
+Type *StructType::getTypeAtIndex(const Value *V) const {
+  unsigned Idx = (unsigned)cast<Constant>(V)->getUniqueInteger().getZExtValue();
+  assert(indexValid(Idx) && "Invalid structure index!");
+  return getElementType(Idx);
 }
 
-Type *CompositeType::getTypeAtIndex(unsigned Idx) const{
-  if (auto *STy = dyn_cast<StructType>(this)) {
-    assert(indexValid(Idx) && "Invalid structure index!");
-    return STy->getElementType(Idx);
-  }
-
-  return cast<SequentialType>(this)->getElementType();
-}
-
-bool CompositeType::indexValid(const Value *V) const {
-  if (auto *STy = dyn_cast<StructType>(this)) {
-    // Structure indexes require (vectors of) 32-bit integer constants.  In the
-    // vector case all of the indices must be equal.
-    if (!V->getType()->isIntOrIntVectorTy(32))
-      return false;
-    const Constant *C = dyn_cast<Constant>(V);
-    if (C && V->getType()->isVectorTy())
-      C = C->getSplatValue();
-    const ConstantInt *CU = dyn_cast_or_null<ConstantInt>(C);
-    return CU && CU->getZExtValue() < STy->getNumElements();
-  }
-
-  // Sequential types can be indexed by any integer.
-  return V->getType()->isIntOrIntVectorTy();
-}
-
-bool CompositeType::indexValid(unsigned Idx) const {
-  if (auto *STy = dyn_cast<StructType>(this))
-    return Idx < STy->getNumElements();
-  // Sequential types can be indexed by any integer.
-  return true;
+bool StructType::indexValid(const Value *V) const {
+  // Structure indexes require (vectors of) 32-bit integer constants.  In the
+  // vector case all of the indices must be equal.
+  if (!V->getType()->isIntOrIntVectorTy(32))
+    return false;
+  const Constant *C = dyn_cast<Constant>(V);
+  if (C && V->getType()->isVectorTy())
+    C = C->getSplatValue();
+  const ConstantInt *CU = dyn_cast_or_null<ConstantInt>(C);
+  return CU && CU->getZExtValue() < getNumElements();
 }
 
 //===----------------------------------------------------------------------===//
@@ -575,7 +552,11 @@ bool CompositeType::indexValid(unsigned Idx) const {
 //===----------------------------------------------------------------------===//
 
 ArrayType::ArrayType(Type *ElType, uint64_t NumEl)
-  : SequentialType(ArrayTyID, ElType, NumEl) {}
+    : Type(ElType->getContext(), ArrayTyID), ContainedType(ElType),
+      NumElements(NumEl) {
+  ContainedTys = &ContainedType;
+  NumContainedTys = 1;
+}
 
 ArrayType *ArrayType::get(Type *ElementType, uint64_t NumElements) {
   assert(isValidElementType(ElementType) && "Invalid type for array element!");
@@ -585,41 +566,80 @@ ArrayType *ArrayType::get(Type *ElementType, uint64_t NumElements) {
     pImpl->ArrayTypes[std::make_pair(ElementType, NumElements)];
 
   if (!Entry)
-    Entry = new (pImpl->TypeAllocator) ArrayType(ElementType, NumElements);
+    Entry = new (pImpl->Alloc) ArrayType(ElementType, NumElements);
   return Entry;
 }
 
 bool ArrayType::isValidElementType(Type *ElemTy) {
   return !ElemTy->isVoidTy() && !ElemTy->isLabelTy() &&
          !ElemTy->isMetadataTy() && !ElemTy->isFunctionTy() &&
-         !ElemTy->isTokenTy();
+         !ElemTy->isTokenTy() && !isa<ScalableVectorType>(ElemTy);
 }
 
 //===----------------------------------------------------------------------===//
 //                          VectorType Implementation
 //===----------------------------------------------------------------------===//
 
-VectorType::VectorType(Type *ElType, unsigned NumEl)
-  : SequentialType(VectorTyID, ElType, NumEl) {}
+VectorType::VectorType(Type *ElType, unsigned EQ, Type::TypeID TID)
+    : Type(ElType->getContext(), TID), ContainedType(ElType),
+      ElementQuantity(EQ) {
+  ContainedTys = &ContainedType;
+  NumContainedTys = 1;
+}
 
-VectorType *VectorType::get(Type *ElementType, unsigned NumElements) {
-  assert(NumElements > 0 && "#Elements of a VectorType must be greater than 0");
-  assert(isValidElementType(ElementType) && "Element type of a VectorType must "
-                                            "be an integer, floating point, or "
-                                            "pointer type.");
-
-  LLVMContextImpl *pImpl = ElementType->getContext().pImpl;
-  VectorType *&Entry = ElementType->getContext().pImpl
-    ->VectorTypes[std::make_pair(ElementType, NumElements)];
-
-  if (!Entry)
-    Entry = new (pImpl->TypeAllocator) VectorType(ElementType, NumElements);
-  return Entry;
+VectorType *VectorType::get(Type *ElementType, ElementCount EC) {
+  if (EC.Scalable)
+    return ScalableVectorType::get(ElementType, EC.Min);
+  else
+    return FixedVectorType::get(ElementType, EC.Min);
 }
 
 bool VectorType::isValidElementType(Type *ElemTy) {
   return ElemTy->isIntegerTy() || ElemTy->isFloatingPointTy() ||
-    ElemTy->isPointerTy();
+         ElemTy->isPointerTy();
+}
+
+//===----------------------------------------------------------------------===//
+//                        FixedVectorType Implementation
+//===----------------------------------------------------------------------===//
+
+FixedVectorType *FixedVectorType::get(Type *ElementType, unsigned NumElts) {
+  assert(NumElts > 0 && "#Elements of a VectorType must be greater than 0");
+  assert(isValidElementType(ElementType) && "Element type of a VectorType must "
+                                            "be an integer, floating point, or "
+                                            "pointer type.");
+
+  ElementCount EC(NumElts, false);
+
+  LLVMContextImpl *pImpl = ElementType->getContext().pImpl;
+  VectorType *&Entry = ElementType->getContext()
+                           .pImpl->VectorTypes[std::make_pair(ElementType, EC)];
+
+  if (!Entry)
+    Entry = new (pImpl->Alloc) FixedVectorType(ElementType, NumElts);
+  return cast<FixedVectorType>(Entry);
+}
+
+//===----------------------------------------------------------------------===//
+//                       ScalableVectorType Implementation
+//===----------------------------------------------------------------------===//
+
+ScalableVectorType *ScalableVectorType::get(Type *ElementType,
+                                            unsigned MinNumElts) {
+  assert(MinNumElts > 0 && "#Elements of a VectorType must be greater than 0");
+  assert(isValidElementType(ElementType) && "Element type of a VectorType must "
+                                            "be an integer, floating point, or "
+                                            "pointer type.");
+
+  ElementCount EC(MinNumElts, true);
+
+  LLVMContextImpl *pImpl = ElementType->getContext().pImpl;
+  VectorType *&Entry = ElementType->getContext()
+                           .pImpl->VectorTypes[std::make_pair(ElementType, EC)];
+
+  if (!Entry)
+    Entry = new (pImpl->Alloc) ScalableVectorType(ElementType, MinNumElts);
+  return cast<ScalableVectorType>(Entry);
 }
 
 //===----------------------------------------------------------------------===//
@@ -637,7 +657,7 @@ PointerType *PointerType::get(Type *EltTy, unsigned AddressSpace) {
      : CImpl->ASPointerTypes[std::make_pair(EltTy, AddressSpace)];
 
   if (!Entry)
-    Entry = new (CImpl->TypeAllocator) PointerType(EltTy, AddressSpace);
+    Entry = new (CImpl->Alloc) PointerType(EltTy, AddressSpace);
   return Entry;
 }
 

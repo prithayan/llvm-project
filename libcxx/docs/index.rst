@@ -93,17 +93,17 @@ and GCC.
 ============ ==================== ============ ========================
 OS           Arch                 Compilers    ABI Library
 ============ ==================== ============ ========================
-Mac OS X     i386, x86_64         Clang, GCC   libc++abi
+macOS        i386, x86_64         Clang, GCC   libc++abi
 FreeBSD 10+  i386, x86_64, ARM    Clang, GCC   libcxxrt, libc++abi
 Linux        i386, x86_64         Clang, GCC   libc++abi
 ============ ==================== ============ ========================
 
 The following minimum compiler versions are strongly recommended.
 
-* Clang 3.5 and above
-* GCC 4.7 and above.
+* Clang 4.0 and above
+* GCC 5.0 and above.
 
-Anything older *may* work.
+The C++03 dialect is only supported for Clang compilers.
 
 C++ Dialect Support
 ---------------------
@@ -137,10 +137,12 @@ Design Documents
    DesignDocs/DebugMode
    DesignDocs/CapturingConfigInfo
    DesignDocs/ABIVersioning
+   DesignDocs/ExperimentalFeatures
    DesignDocs/VisibilityMacros
    DesignDocs/ThreadingSupportAPI
    DesignDocs/FileTimeType
    DesignDocs/FeatureTestMacros
+   DesignDocs/ExtendedCXX03Support
 
 * `<atomic> design <http://libcxx.llvm.org/atomic_design.html>`_
 * `<type_traits> design <http://libcxx.llvm.org/type_traits_design.html>`_
@@ -159,8 +161,8 @@ Build Bots and Test Coverage
 Getting Involved
 ================
 
-First please review our `Developer's Policy <http://llvm.org/docs/DeveloperPolicy.html>`__
-and `Getting started with LLVM <http://llvm.org/docs/GettingStarted.html>`__.
+First please review our `Developer's Policy <https://llvm.org/docs/DeveloperPolicy.html>`__
+and `Getting started with LLVM <https://llvm.org/docs/GettingStarted.html>`__.
 
 **Bug Reports**
 
@@ -171,7 +173,7 @@ can post a message to the `libcxx-dev mailing list`_ or on IRC.
 **Patches**
 
 If you want to contribute a patch to libc++, the best place for that is
-`Phabricator <http://llvm.org/docs/Phabricator.html>`_. Please add `libcxx-commits` as a subscriber.
+`Phabricator <https://llvm.org/docs/Phabricator.html>`_. Please add `libcxx-commits` as a subscriber.
 Also make sure you are subscribed to the `libcxx-commits mailing list <http://lists.llvm.org/mailman/listinfo/libcxx-commits>`_.
 
 **Discussion and Questions**
@@ -183,7 +185,7 @@ Send discussions and questions to the
 
 Quick Links
 ===========
-* `LLVM Homepage <http://llvm.org/>`_
+* `LLVM Homepage <https://llvm.org/>`_
 * `libc++abi Homepage <http://libcxxabi.llvm.org/>`_
 * `LLVM Bugzilla <https://bugs.llvm.org/>`_
 * `libcxx-commits Mailing List`_

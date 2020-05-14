@@ -1,4 +1,4 @@
-//===-- DomainSocket.cpp ----------------------------------------*- C++ -*-===//
+//===-- DomainSocket.cpp --------------------------------------------------===//
 //
 // Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
 // See https://llvm.org/LICENSE.txt for license information.
@@ -124,4 +124,32 @@ size_t DomainSocket::GetNameOffset() const { return 0; }
 
 void DomainSocket::DeleteSocketFile(llvm::StringRef name) {
   llvm::sys::fs::remove(name);
+}
+
+std::string DomainSocket::GetSocketName() const {
+  if (m_socket != kInvalidSocketValue) {
+    struct sockaddr_un saddr_un;
+    saddr_un.sun_family = AF_UNIX;
+    socklen_t sock_addr_len = sizeof(struct sockaddr_un);
+    if (::getpeername(m_socket, (struct sockaddr *)&saddr_un, &sock_addr_len) ==
+        0) {
+      std::string name(saddr_un.sun_path + GetNameOffset(),
+                       sock_addr_len -
+                           offsetof(struct sockaddr_un, sun_path) -
+                           GetNameOffset());
+      if (name.back() == '\0') name.pop_back();
+      return name;
+    }
+  }
+  return "";
+}
+
+std::string DomainSocket::GetRemoteConnectionURI() const {
+  if (m_socket != kInvalidSocketValue) {
+    return std::string(llvm::formatv(
+        "{0}://{1}",
+        GetNameOffset() == 0 ? "unix-connect" : "unix-abstract-connect",
+        GetSocketName()));
+  }
+  return "";
 }

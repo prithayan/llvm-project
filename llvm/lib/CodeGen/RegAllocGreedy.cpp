@@ -16,7 +16,6 @@
 #include "LiveDebugVariables.h"
 #include "RegAllocBase.h"
 #include "SpillPlacement.h"
-#include "Spiller.h"
 #include "SplitKit.h"
 #include "llvm/ADT/ArrayRef.h"
 #include "llvm/ADT/BitVector.h"
@@ -53,6 +52,7 @@
 #include "llvm/CodeGen/RegAllocRegistry.h"
 #include "llvm/CodeGen/RegisterClassInfo.h"
 #include "llvm/CodeGen/SlotIndexes.h"
+#include "llvm/CodeGen/Spiller.h"
 #include "llvm/CodeGen/TargetInstrInfo.h"
 #include "llvm/CodeGen/TargetRegisterInfo.h"
 #include "llvm/CodeGen/TargetSubtargetInfo.h"
@@ -124,12 +124,6 @@ static cl::opt<bool> EnableDeferredSpilling(
              "variable because of other evicted variables."),
     cl::init(false));
 
-static cl::opt<unsigned>
-    HugeSizeForSplit("huge-size-for-split", cl::Hidden,
-                     cl::desc("A threshold of live range size which may cause "
-                              "high compile time cost in global splitting."),
-                     cl::init(5000));
-
 // FIXME: Find a good default for this flag and remove the flag.
 static cl::opt<unsigned>
 CSRFirstTimeCost("regalloc-csr-first-time-cost",
@@ -137,7 +131,7 @@ CSRFirstTimeCost("regalloc-csr-first-time-cost",
               cl::init(0), cl::Hidden);
 
 static cl::opt<bool> ConsiderLocalIntervalCost(
-    "condsider-local-interval-cost", cl::Hidden,
+    "consider-local-interval-cost", cl::Hidden,
     cl::desc("Consider the cost of local intervals created by a split "
              "candidate when choosing the best split candidate."),
     cl::init(false));
@@ -486,7 +480,6 @@ private:
                     const SmallVirtRegSet&);
   unsigned tryRegionSplit(LiveInterval&, AllocationOrder&,
                           SmallVectorImpl<unsigned>&);
-  unsigned isSplitBenefitWorthCost(LiveInterval &VirtReg);
   /// Calculate cost of region splitting.
   unsigned calculateRegionSplitCost(LiveInterval &VirtReg,
                                     AllocationOrder &Order,
@@ -685,7 +678,7 @@ void RAGreedy::enqueue(PQueue &CurQueue, LiveInterval *LI) {
   // The queue holds (size, reg) pairs.
   const unsigned Size = LI->getSize();
   const unsigned Reg = LI->reg;
-  assert(TargetRegisterInfo::isVirtualRegister(Reg) &&
+  assert(Register::isVirtualRegister(Reg) &&
          "Can only enqueue virtual registers");
   unsigned Prio;
 
@@ -899,7 +892,7 @@ bool RAGreedy::canEvictInterference(LiveInterval &VirtReg, unsigned PhysReg,
     // Check if any interfering live range is heavier than MaxWeight.
     for (unsigned i = Q.interferingVRegs().size(); i; --i) {
       LiveInterval *Intf = Q.interferingVRegs()[i - 1];
-      assert(TargetRegisterInfo::isVirtualRegister(Intf->reg) &&
+      assert(Register::isVirtualRegister(Intf->reg) &&
              "Only expecting virtual register interference from query");
 
       // Do not allow eviction of a virtual register if we are in the middle
@@ -984,7 +977,7 @@ bool RAGreedy::canEvictInterferenceInRange(LiveInterval &VirtReg,
         continue;
 
       // Cannot evict non virtual reg interference.
-      if (!TargetRegisterInfo::isVirtualRegister(Intf->reg))
+      if (!Register::isVirtualRegister(Intf->reg))
         return false;
       // Never evict spill products. They cannot split or spill.
       if (getStage(*Intf) == RS_Done)
@@ -1815,20 +1808,9 @@ void RAGreedy::splitAroundRegion(LiveRangeEdit &LREdit,
     MF->verify(this, "After splitting live range around region");
 }
 
-// Global split has high compile time cost especially for large live range.
-// Return false for the case here where the potential benefit will never
-// worth the cost.
-unsigned RAGreedy::isSplitBenefitWorthCost(LiveInterval &VirtReg) {
-  MachineInstr *MI = MRI->getUniqueVRegDef(VirtReg.reg);
-  if (MI && TII->isTriviallyReMaterializable(*MI, AA) &&
-      VirtReg.size() > HugeSizeForSplit)
-    return false;
-  return true;
-}
-
 unsigned RAGreedy::tryRegionSplit(LiveInterval &VirtReg, AllocationOrder &Order,
                                   SmallVectorImpl<unsigned> &NewVRegs) {
-  if (!isSplitBenefitWorthCost(VirtReg))
+  if (!TRI->shouldRegionSplitForVirtReg(*MF, VirtReg))
     return 0;
   unsigned NumCands = 0;
   BlockFrequency SpillCost = calcSpillCost();
@@ -2874,14 +2856,14 @@ void RAGreedy::collectHintInfo(unsigned Reg, HintsInfo &Out) {
     if (!Instr.isFullCopy())
       continue;
     // Look for the other end of the copy.
-    unsigned OtherReg = Instr.getOperand(0).getReg();
+    Register OtherReg = Instr.getOperand(0).getReg();
     if (OtherReg == Reg) {
       OtherReg = Instr.getOperand(1).getReg();
       if (OtherReg == Reg)
         continue;
     }
     // Get the current assignment.
-    unsigned OtherPhysReg = TargetRegisterInfo::isPhysicalRegister(OtherReg)
+    Register OtherPhysReg = Register::isPhysicalRegister(OtherReg)
                                 ? OtherReg
                                 : VRM->getPhys(OtherReg);
     // Push the collected information.
@@ -2919,7 +2901,7 @@ void RAGreedy::tryHintRecoloring(LiveInterval &VirtReg) {
   SmallVector<unsigned, 2> RecoloringCandidates;
   HintsInfo Info;
   unsigned Reg = VirtReg.reg;
-  unsigned PhysReg = VRM->getPhys(Reg);
+  Register PhysReg = VRM->getPhys(Reg);
   // Start the recoloring algorithm from the input live-interval, then
   // it will propagate to the ones that are copy-related with it.
   Visited.insert(Reg);
@@ -2932,7 +2914,7 @@ void RAGreedy::tryHintRecoloring(LiveInterval &VirtReg) {
     Reg = RecoloringCandidates.pop_back_val();
 
     // We cannot recolor physical register.
-    if (TargetRegisterInfo::isPhysicalRegister(Reg))
+    if (Register::isPhysicalRegister(Reg))
       continue;
 
     assert(VRM->hasPhys(Reg) && "We have unallocated variable!!");
@@ -2940,7 +2922,7 @@ void RAGreedy::tryHintRecoloring(LiveInterval &VirtReg) {
     // Get the live interval mapped with this virtual register to be able
     // to check for the interference with the new color.
     LiveInterval &LI = LIS->getInterval(Reg);
-    unsigned CurrPhys = VRM->getPhys(Reg);
+    Register CurrPhys = VRM->getPhys(Reg);
     // Check that the new color matches the register class constraints and
     // that it is free for this live range.
     if (CurrPhys != PhysReg && (!MRI->getRegClass(Reg)->contains(PhysReg) ||
@@ -3021,7 +3003,7 @@ void RAGreedy::tryHintRecoloring(LiveInterval &VirtReg) {
 /// getting rid of 2 copies.
 void RAGreedy::tryHintsRecoloring() {
   for (LiveInterval *LI : SetOfBrokenHints) {
-    assert(TargetRegisterInfo::isVirtualRegister(LI->reg) &&
+    assert(Register::isVirtualRegister(LI->reg) &&
            "Recoloring is possible only for virtual registers");
     // Some dead defs may be around (e.g., because of debug uses).
     // Ignore those.
@@ -3098,7 +3080,7 @@ unsigned RAGreedy::selectOrSplitImpl(LiveInterval &VirtReg,
     unsigned NewVRegSizeBefore = NewVRegs.size();
     unsigned PhysReg = trySplit(VirtReg, Order, NewVRegs, FixedRegisters);
     if (PhysReg || (NewVRegs.size() - NewVRegSizeBefore)) {
-      // If VirtReg got split, the eviction info is no longre relevant.
+      // If VirtReg got split, the eviction info is no longer relevant.
       LastEvicted.clearEvicteeInfo(VirtReg.reg);
       return PhysReg;
     }
@@ -3125,6 +3107,11 @@ unsigned RAGreedy::selectOrSplitImpl(LiveInterval &VirtReg,
     LiveRangeEdit LRE(&VirtReg, NewVRegs, *MF, *LIS, VRM, this, &DeadRemats);
     spiller().spill(LRE);
     setStage(NewVRegs.begin(), NewVRegs.end(), RS_Done);
+
+    // Tell LiveDebugVariables about the new ranges. Ranges not being covered by
+    // the new regs are kept in LDV (still mapping to the old register), until
+    // we rewrite spilled locations in LDV at a later stage.
+    DebugVars->splitRegister(VirtReg.reg, LRE.regs(), *LIS);
 
     if (VerifyEnabled)
       MF->verify(this, "After spilling");
@@ -3220,8 +3207,10 @@ bool RAGreedy::runOnMachineFunction(MachineFunction &mf) {
                         MF->getSubtarget().enableRALocalReassignment(
                             MF->getTarget().getOptLevel());
 
-  EnableAdvancedRASplitCost = ConsiderLocalIntervalCost ||
-                              MF->getSubtarget().enableAdvancedRASplitCost();
+  EnableAdvancedRASplitCost =
+      ConsiderLocalIntervalCost.getNumOccurrences()
+          ? ConsiderLocalIntervalCost
+          : MF->getSubtarget().enableAdvancedRASplitCost();
 
   if (VerifyEnabled)
     MF->verify(this, "Before greedy register allocator");

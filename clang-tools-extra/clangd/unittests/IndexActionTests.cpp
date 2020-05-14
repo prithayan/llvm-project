@@ -6,6 +6,7 @@
 //
 //===----------------------------------------------------------------------===//
 
+#include "Headers.h"
 #include "TestFS.h"
 #include "index/IndexAction.h"
 #include "clang/Tooling/Tooling.h"
@@ -25,7 +26,7 @@ using ::testing::UnorderedPointwise;
 
 std::string toUri(llvm::StringRef Path) { return URI::create(Path).toString(); }
 
-MATCHER(IsTU, "") { return arg.IsTU; }
+MATCHER(IsTU, "") { return arg.Flags & IncludeGraphNode::SourceFlag::IsTU; }
 
 MATCHER_P(HasDigest, Digest, "") { return arg.Digest == Digest; }
 
@@ -58,7 +59,7 @@ void checkNodesAreInitialized(const IndexFileIn &IndexFile,
 std::map<std::string, const IncludeGraphNode &> toMap(const IncludeGraph &IG) {
   std::map<std::string, const IncludeGraphNode &> Nodes;
   for (auto &I : IG)
-    Nodes.emplace(I.getKey(), I.getValue());
+    Nodes.emplace(std::string(I.getKey()), I.getValue());
   return Nodes;
 }
 
@@ -77,16 +78,17 @@ public:
         SymbolCollector::Options(),
         [&](SymbolSlab S) { IndexFile.Symbols = std::move(S); },
         [&](RefSlab R) { IndexFile.Refs = std::move(R); },
+        [&](RelationSlab R) { IndexFile.Relations = std::move(R); },
         [&](IncludeGraph IG) { IndexFile.Sources = std::move(IG); });
 
     std::vector<std::string> Args = {"index_action", "-fsyntax-only",
                                      "-xc++",        "-std=c++11",
                                      "-iquote",      testRoot()};
     Args.insert(Args.end(), ExtraArgs.begin(), ExtraArgs.end());
-    Args.push_back(MainFilePath);
+    Args.push_back(std::string(MainFilePath));
 
     tooling::ToolInvocation Invocation(
-        Args, Action.release(), Files.get(),
+        Args, std::move(Action), Files.get(),
         std::make_shared<PCHContainerOperations>());
 
     Invocation.run();
@@ -98,7 +100,7 @@ public:
   void addFile(llvm::StringRef Path, llvm::StringRef Content) {
     InMemoryFileSystem->addFile(Path, 0,
                                 llvm::MemoryBuffer::getMemBuffer(Content));
-    FilePaths.push_back(Path);
+    FilePaths.push_back(std::string(Path));
   }
 
 protected:

@@ -15,6 +15,7 @@
 #include "X86InstrInfo.h"
 #include "X86RegisterInfo.h"
 #include "X86Subtarget.h"
+#include "llvm/CodeGen/MachineFrameInfo.h"
 #include "llvm/CodeGen/SelectionDAG.h"
 #include "llvm/CodeGen/TargetLowering.h"
 #include "llvm/IR/DerivedTypes.h"
@@ -36,7 +37,7 @@ bool X86SelectionDAGInfo::isBaseRegConflictPossible(
 
   const X86RegisterInfo *TRI = static_cast<const X86RegisterInfo *>(
       DAG.getSubtarget().getRegisterInfo());
-  unsigned BaseReg = TRI->getBaseRegister();
+  Register BaseReg = TRI->getBaseRegister();
   for (unsigned R : ClobberSet)
     if (BaseReg == R)
       return true;
@@ -172,9 +173,8 @@ SDValue X86SelectionDAGInfo::EmitTargetCodeForMemset(
     Chain = DAG.getMemset(Chain, dl,
                           DAG.getNode(ISD::ADD, dl, AddrVT, Dst,
                                       DAG.getConstant(Offset, dl, AddrVT)),
-                          Val,
-                          DAG.getConstant(BytesLeft, dl, SizeVT),
-                          Align, isVolatile, false,
+                          Val, DAG.getConstant(BytesLeft, dl, SizeVT),
+                          llvm::Align(Align), isVolatile, false,
                           DstPtrInfo.getWithOffset(Offset));
   }
 
@@ -283,7 +283,7 @@ static SDValue emitConstantSizeRepmov(
       Chain, dl,
       DAG.getNode(ISD::ADD, dl, DstVT, Dst, DAG.getConstant(Offset, dl, DstVT)),
       DAG.getNode(ISD::ADD, dl, SrcVT, Src, DAG.getConstant(Offset, dl, SrcVT)),
-      DAG.getConstant(BytesLeft, dl, SizeVT), Align, isVolatile,
+      DAG.getConstant(BytesLeft, dl, SizeVT), llvm::Align(Align), isVolatile,
       /*AlwaysInline*/ true, /*isTailCall*/ false,
       DstPtrInfo.getWithOffset(Offset), SrcPtrInfo.getWithOffset(Offset)));
   return DAG.getNode(ISD::TokenFactor, dl, MVT::Other, Results);

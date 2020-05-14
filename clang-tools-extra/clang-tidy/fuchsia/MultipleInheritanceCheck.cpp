@@ -88,12 +88,9 @@ bool MultipleInheritanceCheck::isInterface(const CXXRecordDecl *Node) {
 }
 
 void MultipleInheritanceCheck::registerMatchers(MatchFinder *Finder) {
-  // Requires C++.
-  if (!getLangOpts().CPlusPlus)
-    return;
-
   // Match declarations which have bases.
-  Finder->addMatcher(cxxRecordDecl(hasBases()).bind("decl"), this);
+  Finder->addMatcher(
+      cxxRecordDecl(allOf(hasBases(), isDefinition())).bind("decl"), this);
 }
 
 void MultipleInheritanceCheck::check(const MatchFinder::MatchResult &Result) {
@@ -119,7 +116,7 @@ void MultipleInheritanceCheck::check(const MatchFinder::MatchResult &Result) {
     }
 
     if (NumConcrete > 1) {
-      diag(D->getBeginLoc(), "inheriting mulitple classes that aren't "
+      diag(D->getBeginLoc(), "inheriting multiple classes that aren't "
                              "pure virtual is discouraged");
     }
   }

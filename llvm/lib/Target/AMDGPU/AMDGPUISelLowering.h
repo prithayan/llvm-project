@@ -38,6 +38,7 @@ private:
 public:
   static unsigned numBitsUnsigned(SDValue Op, SelectionDAG &DAG);
   static unsigned numBitsSigned(SDValue Op, SelectionDAG &DAG);
+  static bool hasDefinedInitializer(const GlobalValue *GV);
 
 protected:
   SDValue LowerEXTRACT_SUBVECTOR(SDValue Op, SelectionDAG &DAG) const;
@@ -51,8 +52,6 @@ protected:
   SDValue LowerFRINT(SDValue Op, SelectionDAG &DAG) const;
   SDValue LowerFNEARBYINT(SDValue Op, SelectionDAG &DAG) const;
 
-  SDValue LowerFROUND32_16(SDValue Op, SelectionDAG &DAG) const;
-  SDValue LowerFROUND64(SDValue Op, SelectionDAG &DAG) const;
   SDValue LowerFROUND(SDValue Op, SelectionDAG &DAG) const;
   SDValue LowerFFLOOR(SDValue Op, SelectionDAG &DAG) const;
   SDValue LowerFLOG(SDValue Op, SelectionDAG &DAG,
@@ -78,6 +77,7 @@ protected:
   SDValue performLoadCombine(SDNode *N, DAGCombinerInfo &DCI) const;
   SDValue performStoreCombine(SDNode *N, DAGCombinerInfo &DCI) const;
   SDValue performAssertSZExtCombine(SDNode *N, DAGCombinerInfo &DCI) const;
+  SDValue performIntrinsicWOChainCombine(SDNode *N, DAGCombinerInfo &DCI) const;
 
   SDValue splitBinaryBitConstantOpImpl(DAGCombinerInfo &DCI, const SDLoc &SL,
                                        unsigned Opc, SDValue LHS,
@@ -170,7 +170,14 @@ public:
   bool isZExtFree(EVT Src, EVT Dest) const override;
   bool isZExtFree(SDValue Val, EVT VT2) const override;
 
+  NegatibleCost getNegatibleCost(SDValue Op, SelectionDAG &DAG,
+                                 bool LegalOperations, bool ForCodeSize,
+                                 unsigned Depth) const override;
+
   bool isNarrowingProfitable(EVT VT1, EVT VT2) const override;
+
+  EVT getTypeForExtReturn(LLVMContext &Context, EVT VT,
+                          ISD::NodeType ExtendKind) const override;
 
   MVT getVectorIdxTy(const DataLayout &) const override;
   bool isSelectSupported(SelectSupportKind) const override;
@@ -182,7 +189,8 @@ public:
                              ISD::LoadExtType ExtType,
                              EVT ExtVT) const override;
 
-  bool isLoadBitCastBeneficial(EVT, EVT) const final;
+  bool isLoadBitCastBeneficial(EVT, EVT, const SelectionDAG &DAG,
+                               const MachineMemOperand &MMO) const final;
 
   bool storeOfVectorConstantIsCheap(EVT MemVT,
                                     unsigned NumElem,
@@ -234,7 +242,7 @@ public:
   // MergeConsecutiveStores() merges two stores; LegalizeStoreOps() un-merges;
   // MergeConsecutiveStores() re-merges, etc. ) to warrant turning it off for
   // now.
-  bool mergeStoresAfterLegalization() const override { return false; }
+  bool mergeStoresAfterLegalization(EVT) const override { return false; }
 
   bool isFsqrtCheap(SDValue Operand, SelectionDAG &DAG) const override {
     return true;
@@ -261,6 +269,12 @@ public:
                                            const SelectionDAG &DAG,
                                            unsigned Depth = 0) const override;
 
+  unsigned computeNumSignBitsForTargetInstr(GISelKnownBits &Analysis,
+                                            Register R,
+                                            const APInt &DemandedElts,
+                                            const MachineRegisterInfo &MRI,
+                                            unsigned Depth = 0) const override;
+
   bool isKnownNeverNaNForTargetNode(SDValue Op,
                                     const SelectionDAG &DAG,
                                     bool SNaN = false,
@@ -273,19 +287,19 @@ public:
   /// a copy from the register.
   SDValue CreateLiveInRegister(SelectionDAG &DAG,
                                const TargetRegisterClass *RC,
-                               unsigned Reg, EVT VT,
+                               Register Reg, EVT VT,
                                const SDLoc &SL,
                                bool RawReg = false) const;
   SDValue CreateLiveInRegister(SelectionDAG &DAG,
                                const TargetRegisterClass *RC,
-                               unsigned Reg, EVT VT) const {
+                               Register Reg, EVT VT) const {
     return CreateLiveInRegister(DAG, RC, Reg, VT, SDLoc(DAG.getEntryNode()));
   }
 
   // Returns the raw live in register rather than a copy from it.
   SDValue CreateLiveInRegisterRaw(SelectionDAG &DAG,
                                   const TargetRegisterClass *RC,
-                                  unsigned Reg, EVT VT) const {
+                                  Register Reg, EVT VT) const {
     return CreateLiveInRegister(DAG, RC, Reg, VT, SDLoc(DAG.getEntryNode()), true);
   }
 
@@ -323,10 +337,6 @@ public:
   }
 
   AtomicExpansionKind shouldExpandAtomicRMWInIR(AtomicRMWInst *) const override;
-
-  bool SelectFlatOffset(bool IsSigned, SelectionDAG &DAG, SDNode *N,
-                        SDValue Addr, SDValue &VAddr, SDValue &Offset,
-                        SDValue &SLC) const;
 };
 
 namespace AMDGPUISD {
@@ -368,6 +378,9 @@ enum NodeType : unsigned {
   // result bit per item in the wavefront.
   SETCC,
   SETREG,
+
+  DENORM_MODE,
+
   // FP ops with input and output chain.
   FMA_W_CHAIN,
   FMUL_W_CHAIN,
@@ -403,7 +416,6 @@ enum NodeType : unsigned {
   RCP,
   RSQ,
   RCP_LEGACY,
-  RSQ_LEGACY,
   RCP_IFLAG,
   FMUL_LEGACY,
   RSQ_CLAMP,
@@ -431,8 +443,6 @@ enum NodeType : unsigned {
   MUL_LOHI_U24,
   PERM,
   TEXTURE_FETCH,
-  EXPORT, // exp on SI+
-  EXPORT_DONE, // exp on SI+ with done bit set
   R600_EXPORT,
   CONST_ADDRESS,
   REGISTER_LOAD,
@@ -474,18 +484,8 @@ enum NodeType : unsigned {
   BUILD_VERTICAL_VECTOR,
   /// Pointer to the start of the shader's constant data.
   CONST_DATA_PTR,
-  INIT_EXEC,
-  INIT_EXEC_FROM_INPUT,
-  SENDMSG,
-  SENDMSGHALT,
-  INTERP_MOV,
-  INTERP_P1,
-  INTERP_P2,
-  INTERP_P1LL_F16,
-  INTERP_P1LV_F16,
-  INTERP_P2_F16,
   PC_ADD_REL_OFFSET,
-  KILL,
+  LDS,
   DUMMY_CHAIN,
   FIRST_MEM_OPCODE_NUMBER = ISD::FIRST_TARGET_MEMORY_OPCODE,
   LOAD_D16_HI,
@@ -530,7 +530,12 @@ enum NodeType : unsigned {
   BUFFER_ATOMIC_AND,
   BUFFER_ATOMIC_OR,
   BUFFER_ATOMIC_XOR,
+  BUFFER_ATOMIC_INC,
+  BUFFER_ATOMIC_DEC,
   BUFFER_ATOMIC_CMPSWAP,
+  BUFFER_ATOMIC_FADD,
+  BUFFER_ATOMIC_PK_FADD,
+  ATOMIC_PK_FADD,
 
   LAST_AMDGPU_ISD_NUMBER
 };

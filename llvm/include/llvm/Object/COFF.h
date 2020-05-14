@@ -314,7 +314,10 @@ public:
     return CS16 ? CS16->Name.Offset : CS32->Name.Offset;
   }
 
-  uint32_t getValue() const { return CS16 ? CS16->Value : CS32->Value; }
+  uint32_t getValue() const {
+    assert(isSet() && "COFFSymbolRef points to nothing!");
+    return CS16 ? CS16->Value : CS32->Value;
+  }
 
   int32_t getSectionNumber() const {
     assert(isSet() && "COFFSymbolRef points to nothing!");
@@ -761,6 +764,8 @@ struct debug_h_header {
 
 class COFFObjectFile : public ObjectFile {
 private:
+  COFFObjectFile(MemoryBufferRef Object);
+
   friend class ImportDirectoryEntryRef;
   friend class ExportDirectoryEntryRef;
   const coff_file_header *COFFHeader;
@@ -784,12 +789,15 @@ private:
   // Either coff_load_configuration32 or coff_load_configuration64.
   const void *LoadConfig = nullptr;
 
-  std::error_code getString(uint32_t offset, StringRef &Res) const;
+  Expected<StringRef> getString(uint32_t offset) const;
 
   template <typename coff_symbol_type>
   const coff_symbol_type *toSymb(DataRefImpl Symb) const;
   const coff_section *toSec(DataRefImpl Sec) const;
   const coff_relocation *toRel(DataRefImpl Rel) const;
+
+  // Finish initializing the object and return success or an error.
+  Error initialize();
 
   std::error_code initSymbolTablePtr();
   std::error_code initImportTablePtr();
@@ -800,6 +808,9 @@ private:
   std::error_code initLoadConfigPtr();
 
 public:
+  static Expected<std::unique_ptr<COFFObjectFile>>
+  create(MemoryBufferRef Object);
+
   uintptr_t getSymbolTable() const {
     if (SymbolTable16)
       return reinterpret_cast<uintptr_t>(SymbolTable16);
@@ -875,6 +886,8 @@ public:
     return getRawNumberOfSymbols();
   }
 
+  uint32_t getStringTableSize() const { return StringTableSize; }
+
   const coff_load_configuration32 *getLoadConfig32() const {
     assert(!is64());
     return reinterpret_cast<const coff_load_configuration32 *>(LoadConfig);
@@ -893,7 +906,7 @@ protected:
   uint32_t getSymbolAlignment(DataRefImpl Symb) const override;
   uint64_t getSymbolValueImpl(DataRefImpl Symb) const override;
   uint64_t getCommonSymbolSizeImpl(DataRefImpl Symb) const override;
-  uint32_t getSymbolFlags(DataRefImpl Symb) const override;
+  Expected<uint32_t> getSymbolFlags(DataRefImpl Symb) const override;
   Expected<SymbolRef::Type> getSymbolType(DataRefImpl Symb) const override;
   Expected<section_iterator> getSymbolSection(DataRefImpl Symb) const override;
   void moveSectionNext(DataRefImpl &Sec) const override;
@@ -909,6 +922,7 @@ protected:
   bool isSectionData(DataRefImpl Sec) const override;
   bool isSectionBSS(DataRefImpl Sec) const override;
   bool isSectionVirtual(DataRefImpl Sec) const override;
+  bool isDebugSection(StringRef SectionName) const override;
   relocation_iterator section_rel_begin(DataRefImpl Sec) const override;
   relocation_iterator section_rel_end(DataRefImpl Sec) const override;
 
@@ -920,8 +934,6 @@ protected:
                              SmallVectorImpl<char> &Result) const override;
 
 public:
-  COFFObjectFile(MemoryBufferRef Object, std::error_code &EC);
-
   basic_symbol_iterator symbol_begin() const override;
   basic_symbol_iterator symbol_end() const override;
   section_iterator section_begin() const override;
@@ -969,39 +981,25 @@ public:
       return nullptr;
     return reinterpret_cast<const dos_header *>(base());
   }
-  std::error_code getCOFFHeader(const coff_file_header *&Res) const;
-  std::error_code
-  getCOFFBigObjHeader(const coff_bigobj_file_header *&Res) const;
-  std::error_code getPE32Header(const pe32_header *&Res) const;
-  std::error_code getPE32PlusHeader(const pe32plus_header *&Res) const;
+
+  const coff_file_header *getCOFFHeader() const { return COFFHeader; }
+  const coff_bigobj_file_header *getCOFFBigObjHeader() const {
+    return COFFBigObjHeader;
+  }
+  const pe32_header *getPE32Header() const { return PE32Header; }
+  const pe32plus_header *getPE32PlusHeader() const { return PE32PlusHeader; }
+
   std::error_code getDataDirectory(uint32_t index,
                                    const data_directory *&Res) const;
-  std::error_code getSection(int32_t index, const coff_section *&Res) const;
-  std::error_code getSection(StringRef SectionName,
-                             const coff_section *&Res) const;
+  Expected<const coff_section *> getSection(int32_t index) const;
 
-  template <typename coff_symbol_type>
-  std::error_code getSymbol(uint32_t Index,
-                            const coff_symbol_type *&Res) const {
-    if (Index >= getNumberOfSymbols())
-      return object_error::parse_failed;
-
-    Res = reinterpret_cast<coff_symbol_type *>(getSymbolTable()) + Index;
-    return std::error_code();
-  }
   Expected<COFFSymbolRef> getSymbol(uint32_t index) const {
-    if (SymbolTable16) {
-      const coff_symbol16 *Symb = nullptr;
-      if (std::error_code EC = getSymbol(index, Symb))
-        return errorCodeToError(EC);
-      return COFFSymbolRef(Symb);
-    }
-    if (SymbolTable32) {
-      const coff_symbol32 *Symb = nullptr;
-      if (std::error_code EC = getSymbol(index, Symb))
-        return errorCodeToError(EC);
-      return COFFSymbolRef(Symb);
-    }
+    if (index >= getNumberOfSymbols())
+      return errorCodeToError(object_error::parse_failed);
+    if (SymbolTable16)
+      return COFFSymbolRef(SymbolTable16 + index);
+    if (SymbolTable32)
+      return COFFSymbolRef(SymbolTable32 + index);
     return errorCodeToError(object_error::parse_failed);
   }
 
@@ -1014,9 +1012,8 @@ public:
     return std::error_code();
   }
 
-  std::error_code getSymbolName(COFFSymbolRef Symbol, StringRef &Res) const;
-  std::error_code getSymbolName(const coff_symbol_generic *Symbol,
-                                StringRef &Res) const;
+  Expected<StringRef> getSymbolName(COFFSymbolRef Symbol) const;
+  Expected<StringRef> getSymbolName(const coff_symbol_generic *Symbol) const;
 
   ArrayRef<uint8_t> getSymbolAuxData(COFFSymbolRef Symbol) const;
 
@@ -1201,16 +1198,34 @@ public:
   ResourceSectionRef() = default;
   explicit ResourceSectionRef(StringRef Ref) : BBS(Ref, support::little) {}
 
+  Error load(const COFFObjectFile *O);
+  Error load(const COFFObjectFile *O, const SectionRef &S);
+
   Expected<ArrayRef<UTF16>>
   getEntryNameString(const coff_resource_dir_entry &Entry);
   Expected<const coff_resource_dir_table &>
   getEntrySubDir(const coff_resource_dir_entry &Entry);
+  Expected<const coff_resource_data_entry &>
+  getEntryData(const coff_resource_dir_entry &Entry);
   Expected<const coff_resource_dir_table &> getBaseTable();
+  Expected<const coff_resource_dir_entry &>
+  getTableEntry(const coff_resource_dir_table &Table, uint32_t Index);
+
+  Expected<StringRef> getContents(const coff_resource_data_entry &Entry);
 
 private:
   BinaryByteStream BBS;
 
+  SectionRef Section;
+  const COFFObjectFile *Obj;
+
+  std::vector<const coff_relocation *> Relocs;
+
   Expected<const coff_resource_dir_table &> getTableAtOffset(uint32_t Offset);
+  Expected<const coff_resource_dir_entry &>
+  getTableEntryAtOffset(uint32_t Offset);
+  Expected<const coff_resource_data_entry &>
+  getDataEntryAtOffset(uint32_t Offset);
   Expected<ArrayRef<UTF16>> getDirStringAtOffset(uint32_t Offset);
 };
 

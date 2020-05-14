@@ -15,15 +15,15 @@
 #ifndef LLVM_CLANG_TOOLS_EXTRA_CLANGD_CODECOMPLETE_H
 #define LLVM_CLANG_TOOLS_EXTRA_CLANGD_CODECOMPLETE_H
 
-#include "ClangdUnit.h"
 #include "Headers.h"
-#include "Logger.h"
-#include "Path.h"
 #include "Protocol.h"
+#include "Quality.h"
 #include "index/Index.h"
 #include "index/Symbol.h"
 #include "index/SymbolOrigin.h"
-#include "clang/Frontend/PrecompiledPreamble.h"
+#include "support/Logger.h"
+#include "support/Markup.h"
+#include "support/Path.h"
 #include "clang/Sema/CodeCompleteConsumer.h"
 #include "clang/Sema/CodeCompleteOptions.h"
 #include "clang/Tooling/CompilationDatabase.h"
@@ -31,11 +31,14 @@
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/StringRef.h"
 #include "llvm/Support/Error.h"
+#include <functional>
 #include <future>
 
 namespace clang {
 class NamedDecl;
 namespace clangd {
+struct PreambleData;
+struct CodeCompletion;
 
 struct CodeCompleteOptions {
   /// Returns options that can be passed to clang's completion engine.
@@ -62,11 +65,17 @@ struct CodeCompleteOptions {
   bool IncludeIneligibleResults = false;
 
   /// Combine overloads into a single completion item where possible.
-  bool BundleOverloads = false;
+  /// If none, the implementation may choose an appropriate behavior.
+  /// (In practice, ClangdLSPServer enables bundling if the client claims
+  /// to supports signature help).
+  llvm::Optional<bool> BundleOverloads;
 
   /// Limit the number of results returned (0 means no limit).
   /// If more results are available, we set CompletionList.isIncomplete.
   size_t Limit = 0;
+
+  /// Whether to present doc comments as plain-text or markdown.
+  MarkupKind DocumentationFormat = MarkupKind::PlainText;
 
   enum IncludeInsertion {
     IWYU,
@@ -115,11 +124,28 @@ struct CodeCompleteOptions {
   /// Such completions can insert scope qualifiers.
   bool AllScopes = false;
 
-  /// Whether to allow falling back to code completion without compiling files
-  /// (using identifiers in the current file and symbol indexes), when file
-  /// cannot be built (e.g. missing compile command), or the build is not ready
-  /// (e.g. preamble is still being built).
-  bool AllowFallback = false;
+  /// Whether to use the clang parser, or fallback to text-based completion
+  /// (using identifiers in the current file and symbol indexes).
+  enum CodeCompletionParse {
+    /// Block until we can run the parser (e.g. preamble is built).
+    /// Return an error if this fails.
+    AlwaysParse,
+    /// Run the parser if inputs (preamble) are ready.
+    /// Otherwise, use text-based completion.
+    ParseIfReady,
+    /// Always use text-based completion.
+    NeverParse,
+  } RunParser = ParseIfReady;
+
+  /// Callback invoked on all CompletionCandidate after they are scored and
+  /// before they are ranked (by -Score). Thus the results are yielded in
+  /// arbitrary order.
+  ///
+  /// This callbacks allows capturing various internal structures used by clangd
+  /// during code completion. Eg: Symbol quality and relevance signals.
+  std::function<void(const CodeCompletion &, const SymbolQualitySignals &,
+                     const SymbolRelevanceSignals &, float Score)>
+      RecordCCResult;
 };
 
 // Semi-structured representation of a code-complete suggestion for our C++ API.
@@ -139,7 +165,8 @@ struct CodeCompletion {
   std::string SnippetSuffix;
   // Type to be displayed for this completion.
   std::string ReturnType;
-  std::string Documentation;
+  // The parsed documentation comment.
+  llvm::Optional<markup::Document> Documentation;
   CompletionItemKind Kind = CompletionItemKind::Missing;
   // This completion item may represent several symbols that can be inserted in
   // the same way, such as function overloads. In this case BundleSize > 1, and
@@ -207,6 +234,11 @@ struct CodeCompleteResult {
   std::vector<CodeCompletion> Completions;
   bool HasMore = false;
   CodeCompletionContext::Kind Context = CodeCompletionContext::CCC_Other;
+  // The text that is being directly completed.
+  // Example: foo.pb^ -> foo.push_back()
+  //              ~~
+  // Typically matches the textEdit.range of Completions, but not guaranteed to.
+  llvm::Optional<Range> CompletionRange;
   // Usually the source will be parsed with a real C++ parser.
   // But heuristics may be used instead if e.g. the preamble is not ready.
   bool RanParser = true;
@@ -249,7 +281,7 @@ CodeCompleteResult codeComplete(PathRef FileName,
 /// Get signature help at a specified \p Pos in \p FileName.
 SignatureHelp signatureHelp(PathRef FileName,
                             const tooling::CompileCommand &Command,
-                            const PreambleData *Preamble, StringRef Contents,
+                            const PreambleData &Preamble, StringRef Contents,
                             Position Pos,
                             IntrusiveRefCntPtr<llvm::vfs::FileSystem> VFS,
                             const SymbolIndex *Index);

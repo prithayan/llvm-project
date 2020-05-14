@@ -98,7 +98,7 @@ static void addByteCountSuffix(raw_ostream &OS, const Function *F,
        AI != AE; ++AI) {
     Type *Ty = AI->getType();
     // 'Dereference' type in case of byval or inalloca parameter attribute.
-    if (AI->hasByValOrInAllocaAttr())
+    if (AI->hasPassPointeeByValueAttr())
       Ty = cast<PointerType>(Ty)->getElementType();
     // Size should be aligned to pointer size.
     unsigned PtrSize = DL.getPointerSize();
@@ -186,7 +186,7 @@ void llvm::emitLinkerFlagsForGlobalCOFF(raw_ostream &OS, const GlobalValue *GV,
   if (!GV->hasDLLExportStorageClass() || GV->isDeclaration())
     return;
 
-  if (TT.isKnownWindowsMSVCEnvironment())
+  if (TT.isWindowsMSVCEnvironment())
     OS << " /EXPORT:";
   else
     OS << " -export:";
@@ -205,7 +205,7 @@ void llvm::emitLinkerFlagsForGlobalCOFF(raw_ostream &OS, const GlobalValue *GV,
   }
 
   if (!GV->getValueType()->isFunctionTy()) {
-    if (TT.isKnownWindowsMSVCEnvironment())
+    if (TT.isWindowsMSVCEnvironment())
       OS << ",DATA";
     else
       OS << ",data";
@@ -214,7 +214,7 @@ void llvm::emitLinkerFlagsForGlobalCOFF(raw_ostream &OS, const GlobalValue *GV,
 
 void llvm::emitLinkerFlagsForUsedCOFF(raw_ostream &OS, const GlobalValue *GV,
                                       const Triple &T, Mangler &M) {
-  if (!T.isKnownWindowsMSVCEnvironment())
+  if (!T.isWindowsMSVCEnvironment())
     return;
 
   OS << " /INCLUDE:";

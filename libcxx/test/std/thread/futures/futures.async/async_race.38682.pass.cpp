@@ -17,8 +17,6 @@
 // UNSUPPORTED: with_system_cxx_lib=macosx10.11
 // UNSUPPORTED: with_system_cxx_lib=macosx10.10
 // UNSUPPORTED: with_system_cxx_lib=macosx10.9
-// UNSUPPORTED: with_system_cxx_lib=macosx10.8
-// UNSUPPORTED: with_system_cxx_lib=macosx10.7
 
 // This test is designed to cause and allow TSAN to detect a race condition
 // in std::async, as reported in https://bugs.llvm.org/show_bug.cgi?id=38682.
@@ -28,6 +26,8 @@
 #include <future>
 #include <numeric>
 #include <vector>
+
+#include "test_macros.h"
 
 
 static int worker(std::vector<int> const& data) {
