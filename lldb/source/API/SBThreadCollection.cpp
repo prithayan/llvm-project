@@ -1,4 +1,4 @@
-//===-- SBThreadCollection.cpp ----------------------------------*- C++ -*-===//
+//===-- SBThreadCollection.cpp --------------------------------------------===//
 //
 // Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
 // See https://llvm.org/LICENSE.txt for license information.
@@ -38,7 +38,7 @@ operator=(const SBThreadCollection &rhs) {
 SBThreadCollection::SBThreadCollection(const ThreadCollectionSP &threads)
     : m_opaque_sp(threads) {}
 
-SBThreadCollection::~SBThreadCollection() {}
+SBThreadCollection::~SBThreadCollection() = default;
 
 void SBThreadCollection::SetOpaque(const lldb::ThreadCollectionSP &threads) {
   m_opaque_sp = threads;
@@ -67,7 +67,7 @@ bool SBThreadCollection::IsValid() const {
 SBThreadCollection::operator bool() const {
   LLDB_RECORD_METHOD_CONST_NO_ARGS(bool, SBThreadCollection, operator bool);
 
-  return m_opaque_sp.get() != NULL;
+  return m_opaque_sp.get() != nullptr;
 }
 
 size_t SBThreadCollection::GetSize() {

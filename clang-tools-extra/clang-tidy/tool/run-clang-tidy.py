@@ -78,15 +78,14 @@ def make_absolute(f, directory):
 
 
 def get_tidy_invocation(f, clang_tidy_binary, checks, tmpdir, build_path,
-                        header_filter, extra_arg, extra_arg_before, quiet,
-                        config):
+                        header_filter, allow_enabling_alpha_checkers,
+                        extra_arg, extra_arg_before, quiet, config):
   """Gets a command line for clang-tidy."""
   start = [clang_tidy_binary]
+  if allow_enabling_alpha_checkers is not None:
+    start.append('-allow-enabling-analyzer-alpha-checkers')
   if header_filter is not None:
     start.append('-header-filter=' + header_filter)
-  else:
-    # Show warnings in all in-project headers by default.
-    start.append('-header-filter=^' + build_path + '/.*')
   if checks:
     start.append('-checks=' + checks)
   if tmpdir is not None:
@@ -162,6 +161,7 @@ def run_tidy(args, tmpdir, build_path, queue, lock, failed_files):
     name = queue.get()
     invocation = get_tidy_invocation(name, args.clang_tidy_binary, args.checks,
                                      tmpdir, build_path, args.header_filter,
+                                     args.allow_enabling_alpha_checkers,
                                      args.extra_arg, args.extra_arg_before,
                                      args.quiet, args.config)
 
@@ -170,10 +170,10 @@ def run_tidy(args, tmpdir, build_path, queue, lock, failed_files):
     if proc.returncode != 0:
       failed_files.append(name)
     with lock:
-      sys.stdout.write(' '.join(invocation) + '\n' + output.decode('utf-8') + '\n')
+      sys.stdout.write(' '.join(invocation) + '\n' + output.decode('utf-8'))
       if len(err) > 0:
         sys.stdout.flush()
-        sys.stderr.write(err.decode('utf-8') + '\n')
+        sys.stderr.write(err.decode('utf-8'))
     queue.task_done()
 
 
@@ -182,6 +182,9 @@ def main():
                                    'in a compilation database. Requires '
                                    'clang-tidy and clang-apply-replacements in '
                                    '$PATH.')
+  parser.add_argument('-allow-enabling-alpha-checkers',
+                      action='store_true', help='allow alpha checkers from '
+                                                'clang-analyzer.')
   parser.add_argument('-clang-tidy-binary', metavar='PATH',
                       default='clang-tidy',
                       help='path to clang-tidy binary')
@@ -241,11 +244,18 @@ def main():
 
   try:
     invocation = [args.clang_tidy_binary, '-list-checks']
+    if args.allow_enabling_alpha_checkers:
+      invocation.append('-allow-enabling-analyzer-alpha-checkers')
     invocation.append('-p=' + build_path)
     if args.checks:
       invocation.append('-checks=' + args.checks)
     invocation.append('-')
-    subprocess.check_call(invocation)
+    if args.quiet:
+      # Even with -quiet we still want to check if we can call clang-tidy.
+      with open(os.devnull, 'w') as dev_null:
+        subprocess.check_call(invocation, stdout=dev_null)
+    else:
+      subprocess.check_call(invocation)
   except:
     print("Unable to run clang-tidy.", file=sys.stderr)
     sys.exit(1)

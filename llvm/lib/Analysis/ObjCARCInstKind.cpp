@@ -234,11 +234,11 @@ ARCInstKind llvm::objcarc::GetARCInstKind(const Value *V) {
       }
 
       // Otherwise, be conservative.
-      return GetCallSiteClass(CI);
+      return GetCallSiteClass(*CI);
     }
     case Instruction::Invoke:
       // Otherwise, be conservative.
-      return GetCallSiteClass(cast<InvokeInst>(I));
+      return GetCallSiteClass(cast<InvokeInst>(*I));
     case Instruction::BitCast:
     case Instruction::GetElementPtr:
     case Instruction::Select:
@@ -462,6 +462,41 @@ bool llvm::objcarc::IsNoopOnNull(ARCInstKind Class) {
   case ARCInstKind::AutoreleasepoolPop:
   case ARCInstKind::FusedRetainAutorelease:
   case ARCInstKind::FusedRetainAutoreleaseRV:
+  case ARCInstKind::LoadWeakRetained:
+  case ARCInstKind::StoreWeak:
+  case ARCInstKind::InitWeak:
+  case ARCInstKind::LoadWeak:
+  case ARCInstKind::MoveWeak:
+  case ARCInstKind::CopyWeak:
+  case ARCInstKind::DestroyWeak:
+  case ARCInstKind::StoreStrong:
+  case ARCInstKind::IntrinsicUser:
+  case ARCInstKind::CallOrUser:
+  case ARCInstKind::Call:
+  case ARCInstKind::User:
+  case ARCInstKind::None:
+  case ARCInstKind::NoopCast:
+    return false;
+  }
+  llvm_unreachable("covered switch isn't covered?");
+}
+
+/// Test if the given class represents instructions which do nothing if
+/// passed a global variable.
+bool llvm::objcarc::IsNoopOnGlobal(ARCInstKind Class) {
+  switch (Class) {
+  case ARCInstKind::Retain:
+  case ARCInstKind::RetainRV:
+  case ARCInstKind::ClaimRV:
+  case ARCInstKind::Release:
+  case ARCInstKind::Autorelease:
+  case ARCInstKind::AutoreleaseRV:
+  case ARCInstKind::RetainBlock:
+  case ARCInstKind::FusedRetainAutorelease:
+  case ARCInstKind::FusedRetainAutoreleaseRV:
+    return true;
+  case ARCInstKind::AutoreleasepoolPush:
+  case ARCInstKind::AutoreleasepoolPop:
   case ARCInstKind::LoadWeakRetained:
   case ARCInstKind::StoreWeak:
   case ARCInstKind::InitWeak:

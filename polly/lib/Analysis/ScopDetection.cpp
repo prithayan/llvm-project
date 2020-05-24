@@ -74,6 +74,7 @@
 #include "llvm/IR/Module.h"
 #include "llvm/IR/PassManager.h"
 #include "llvm/IR/Value.h"
+#include "llvm/InitializePasses.h"
 #include "llvm/Pass.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/raw_ostream.h"
@@ -468,7 +469,7 @@ bool ScopDetection::onlyValidRequiredInvariantLoads(
 
     for (auto NonAffineRegion : Context.NonAffineSubRegionSet) {
       if (isSafeToLoadUnconditionally(Load->getPointerOperand(),
-                                      Load->getAlignment(), DL))
+                                      Load->getType(), Load->getAlign(), DL))
         continue;
 
       if (NonAffineRegion->contains(Load) &&
@@ -694,6 +695,8 @@ bool ScopDetection::isValidCallInst(CallInst &CI,
       return false;
     case FMRB_DoesNotAccessMemory:
     case FMRB_OnlyReadsMemory:
+    case FMRB_OnlyReadsInaccessibleMem:
+    case FMRB_OnlyReadsInaccessibleOrArgMem:
       // Implicitly disable delinearization since we have an unknown
       // accesses with an unknown access function.
       Context.HasUnknownAccess = true;
@@ -703,6 +706,7 @@ bool ScopDetection::isValidCallInst(CallInst &CI,
       return true;
     case FMRB_OnlyReadsArgumentPointees:
     case FMRB_OnlyAccessesArgumentPointees:
+    case FMRB_OnlyWritesArgumentPointees:
       for (const auto &Arg : CI.arg_operands()) {
         if (!Arg->getType()->isPointerTy())
           continue;
@@ -726,7 +730,9 @@ bool ScopDetection::isValidCallInst(CallInst &CI,
       // pointer into the alias set.
       Context.AST.addUnknown(&CI);
       return true;
-    case FMRB_DoesNotReadMemory:
+    case FMRB_OnlyWritesMemory:
+    case FMRB_OnlyWritesInaccessibleMem:
+    case FMRB_OnlyWritesInaccessibleOrArgMem:
     case FMRB_OnlyAccessesInaccessibleMem:
     case FMRB_OnlyAccessesInaccessibleOrArgMem:
       return false;
@@ -1651,7 +1657,8 @@ bool ScopDetection::isValidRegion(DetectionContext &Context) const {
                                             CurRegion.getExit(), DbgLoc);
   }
 
-  if (!CurRegion.getEntry()->getName().count(OnlyRegion)) {
+  if (!OnlyRegion.empty() &&
+      !CurRegion.getEntry()->getName().count(OnlyRegion)) {
     LLVM_DEBUG({
       dbgs() << "Region entry does not match -polly-region-only";
       dbgs() << "\n";

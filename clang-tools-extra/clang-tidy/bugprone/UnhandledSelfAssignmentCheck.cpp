@@ -16,10 +16,19 @@ namespace clang {
 namespace tidy {
 namespace bugprone {
 
-void UnhandledSelfAssignmentCheck::registerMatchers(MatchFinder *Finder) {
-  if (!getLangOpts().CPlusPlus)
-    return;
+UnhandledSelfAssignmentCheck::UnhandledSelfAssignmentCheck(
+    StringRef Name, ClangTidyContext *Context)
+    : ClangTidyCheck(Name, Context),
+      WarnOnlyIfThisHasSuspiciousField(
+          Options.get("WarnOnlyIfThisHasSuspiciousField", true)) {}
 
+void UnhandledSelfAssignmentCheck::storeOptions(
+    ClangTidyOptions::OptionMap &Opts) {
+  Options.store(Opts, "WarnOnlyIfThisHasSuspiciousField",
+                WarnOnlyIfThisHasSuspiciousField);
+}
+
+void UnhandledSelfAssignmentCheck::registerMatchers(MatchFinder *Finder) {
   // We don't care about deleted, default or implicit operator implementations.
   const auto IsUserDefined = cxxMethodDecl(
       isDefinition(), unless(anyOf(isDeleted(), isImplicit(), isDefaulted())));
@@ -31,9 +40,12 @@ void UnhandledSelfAssignmentCheck::registerMatchers(MatchFinder *Finder) {
 
   // Self-check: Code compares something with 'this' pointer. We don't check
   // whether it is actually the parameter what we compare.
-  const auto HasNoSelfCheck = cxxMethodDecl(unless(hasDescendant(
-      binaryOperator(anyOf(hasOperatorName("=="), hasOperatorName("!=")),
-                     has(ignoringParenCasts(cxxThisExpr()))))));
+  const auto HasNoSelfCheck = cxxMethodDecl(unless(anyOf(
+      hasDescendant(binaryOperator(hasAnyOperatorName("==", "!="),
+                                   has(ignoringParenCasts(cxxThisExpr())))),
+      hasDescendant(cxxOperatorCallExpr(
+          hasAnyOverloadedOperatorName("==", "!="), argumentCountIs(2),
+          has(ignoringParenCasts(cxxThisExpr())))))));
 
   // Both copy-and-swap and copy-and-move method creates a copy first and
   // assign it to 'this' with swap or move.
@@ -61,29 +73,32 @@ void UnhandledSelfAssignmentCheck::registerMatchers(MatchFinder *Finder) {
       cxxMethodDecl(unless(hasDescendant(cxxMemberCallExpr(callee(cxxMethodDecl(
           hasName("operator="), ofClass(equalsBoundNode("class"))))))));
 
-  // Matcher for standard smart pointers.
-  const auto SmartPointerType = qualType(hasUnqualifiedDesugaredType(
-      recordType(hasDeclaration(classTemplateSpecializationDecl(
-          hasAnyName("::std::shared_ptr", "::std::unique_ptr",
-                     "::std::weak_ptr", "::std::auto_ptr"),
-          templateArgumentCountIs(1))))));
+  DeclarationMatcher AdditionalMatcher = cxxMethodDecl();
+  if (WarnOnlyIfThisHasSuspiciousField) {
+    // Matcher for standard smart pointers.
+    const auto SmartPointerType = qualType(hasUnqualifiedDesugaredType(
+        recordType(hasDeclaration(classTemplateSpecializationDecl(
+            hasAnyName("::std::shared_ptr", "::std::unique_ptr",
+                       "::std::weak_ptr", "::std::auto_ptr"),
+            templateArgumentCountIs(1))))));
 
-  // We will warn only if the class has a pointer or a C array field which
-  // probably causes a problem during self-assignment (e.g. first resetting the
-  // pointer member, then trying to access the object pointed by the pointer, or
-  // memcpy overlapping arrays).
-  const auto ThisHasSuspiciousField = cxxMethodDecl(ofClass(cxxRecordDecl(
-      has(fieldDecl(anyOf(hasType(pointerType()), hasType(SmartPointerType),
-                          hasType(arrayType())))))));
+    // We will warn only if the class has a pointer or a C array field which
+    // probably causes a problem during self-assignment (e.g. first resetting
+    // the pointer member, then trying to access the object pointed by the
+    // pointer, or memcpy overlapping arrays).
+    AdditionalMatcher = cxxMethodDecl(ofClass(cxxRecordDecl(
+        has(fieldDecl(anyOf(hasType(pointerType()), hasType(SmartPointerType),
+                            hasType(arrayType())))))));
+  }
 
-  Finder->addMatcher(
-      cxxMethodDecl(ofClass(cxxRecordDecl().bind("class")),
-                    isCopyAssignmentOperator(), IsUserDefined,
-                    HasReferenceParam, HasNoSelfCheck,
-                    unless(HasNonTemplateSelfCopy), unless(HasTemplateSelfCopy),
-                    HasNoNestedSelfAssign, ThisHasSuspiciousField)
-          .bind("copyAssignmentOperator"),
-      this);
+  Finder->addMatcher(cxxMethodDecl(ofClass(cxxRecordDecl().bind("class")),
+                                   isCopyAssignmentOperator(), IsUserDefined,
+                                   HasReferenceParam, HasNoSelfCheck,
+                                   unless(HasNonTemplateSelfCopy),
+                                   unless(HasTemplateSelfCopy),
+                                   HasNoNestedSelfAssign, AdditionalMatcher)
+                         .bind("copyAssignmentOperator"),
+                     this);
 }
 
 void UnhandledSelfAssignmentCheck::check(

@@ -1,4 +1,4 @@
-//===-- ProcessLauncherWindows.cpp ------------------------------*- C++ -*-===//
+//===-- ProcessLauncherWindows.cpp ----------------------------------------===//
 //
 // Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
 // See https://llvm.org/LICENSE.txt for license information.
@@ -23,18 +23,21 @@ using namespace lldb_private;
 namespace {
 void CreateEnvironmentBuffer(const Environment &env,
                              std::vector<char> &buffer) {
-  if (env.size() == 0)
-    return;
-
-  // Environment buffer is a null terminated list of null terminated strings
+  // The buffer is a list of null-terminated UTF-16 strings, followed by an
+  // extra L'\0' (two bytes of 0).  An empty environment must have one
+  // empty string, followed by an extra L'\0'.
   for (const auto &KV : env) {
     std::wstring warg;
     if (llvm::ConvertUTF8toWide(Environment::compose(KV), warg)) {
-      buffer.insert(buffer.end(), (char *)warg.c_str(),
-                    (char *)(warg.c_str() + warg.size() + 1));
+      buffer.insert(
+          buffer.end(), reinterpret_cast<const char *>(warg.c_str()),
+          reinterpret_cast<const char *>(warg.c_str() + warg.size() + 1));
     }
   }
   // One null wchar_t (to end the block) is two null bytes
+  buffer.push_back(0);
+  buffer.push_back(0);
+  // Insert extra two bytes, just in case the environment was empty.
   buffer.push_back(0);
   buffer.push_back(0);
 }
@@ -45,7 +48,7 @@ bool GetFlattenedWindowsCommandString(Args args, std::string &command) {
 
   std::vector<llvm::StringRef> args_ref;
   for (auto &entry : args.entries())
-    args_ref.push_back(entry.ref);
+    args_ref.push_back(entry.ref());
 
   command = llvm::sys::flattenWindowsCommandLine(args_ref);
   return true;
@@ -93,8 +96,7 @@ ProcessLauncherWindows::LaunchProcess(const ProcessLaunchInfo &launch_info,
 
   LPVOID env_block = nullptr;
   ::CreateEnvironmentBuffer(launch_info.GetEnvironment(), environment);
-  if (!environment.empty())
-    env_block = environment.data();
+  env_block = environment.data();
 
   executable = launch_info.GetExecutableFile().GetPath();
   GetFlattenedWindowsCommandString(launch_info.GetArguments(), commandLine);

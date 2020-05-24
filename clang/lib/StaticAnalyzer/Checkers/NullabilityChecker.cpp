@@ -81,7 +81,7 @@ class NullabilityChecker
     : public Checker<check::Bind, check::PreCall, check::PreStmt<ReturnStmt>,
                      check::PostCall, check::PostStmt<ExplicitCastExpr>,
                      check::PostObjCMessage, check::DeadSymbols,
-                     check::Event<ImplicitNullDerefEvent>> {
+                     check::Location, check::Event<ImplicitNullDerefEvent>> {
   mutable std::unique_ptr<BugType> BT;
 
 public:
@@ -101,6 +101,8 @@ public:
   void checkPreCall(const CallEvent &Call, CheckerContext &C) const;
   void checkDeadSymbols(SymbolReaper &SR, CheckerContext &C) const;
   void checkEvent(ImplicitNullDerefEvent Event) const;
+  void checkLocation(SVal Location, bool IsLoad, const Stmt *S,
+                     CheckerContext &C) const;
 
   void printState(raw_ostream &Out, ProgramStateRef State, const char *NL,
                   const char *Sep) const override;
@@ -112,11 +114,11 @@ public:
     DefaultBool CheckNullablePassedToNonnull;
     DefaultBool CheckNullableReturnedFromNonnull;
 
-    CheckName CheckNameNullPassedToNonnull;
-    CheckName CheckNameNullReturnedFromNonnull;
-    CheckName CheckNameNullableDereferenced;
-    CheckName CheckNameNullablePassedToNonnull;
-    CheckName CheckNameNullableReturnedFromNonnull;
+    CheckerNameRef CheckNameNullPassedToNonnull;
+    CheckerNameRef CheckNameNullReturnedFromNonnull;
+    CheckerNameRef CheckNameNullableDereferenced;
+    CheckerNameRef CheckNameNullablePassedToNonnull;
+    CheckerNameRef CheckNameNullableReturnedFromNonnull;
   };
 
   NullabilityChecksFilter Filter;
@@ -137,9 +139,9 @@ private:
       ID.AddPointer(Region);
     }
 
-    std::shared_ptr<PathDiagnosticPiece> VisitNode(const ExplodedNode *N,
-                                                   BugReporterContext &BRC,
-                                                   BugReport &BR) override;
+    PathDiagnosticPieceRef VisitNode(const ExplodedNode *N,
+                                     BugReporterContext &BRC,
+                                     PathSensitiveBugReport &BR) override;
 
   private:
     // The tracked region.
@@ -163,10 +165,10 @@ private:
     if (!BT)
       BT.reset(new BugType(this, "Nullability", categories::MemoryError));
 
-    auto R = llvm::make_unique<BugReport>(*BT, Msg, N);
+    auto R = std::make_unique<PathSensitiveBugReport>(*BT, Msg, N);
     if (Region) {
       R->markInteresting(Region);
-      R->addVisitor(llvm::make_unique<NullabilityBugVisitor>(Region));
+      R->addVisitor(std::make_unique<NullabilityBugVisitor>(Region));
     }
     if (ValueExpr) {
       R->addRange(ValueExpr->getSourceRange());
@@ -290,10 +292,9 @@ NullabilityChecker::getTrackRegion(SVal Val, bool CheckSuperRegion) const {
   return dyn_cast<SymbolicRegion>(Region);
 }
 
-std::shared_ptr<PathDiagnosticPiece>
-NullabilityChecker::NullabilityBugVisitor::VisitNode(const ExplodedNode *N,
-                                                     BugReporterContext &BRC,
-                                                     BugReport &BR) {
+PathDiagnosticPieceRef NullabilityChecker::NullabilityBugVisitor::VisitNode(
+    const ExplodedNode *N, BugReporterContext &BRC,
+    PathSensitiveBugReport &BR) {
   ProgramStateRef State = N->getState();
   ProgramStateRef StatePrev = N->getFirstPred()->getState();
 
@@ -310,7 +311,7 @@ NullabilityChecker::NullabilityBugVisitor::VisitNode(const ExplodedNode *N,
   // Retrieve the associated statement.
   const Stmt *S = TrackedNullab->getNullabilitySource();
   if (!S || S->getBeginLoc().isInvalid()) {
-    S = PathDiagnosticLocation::getStmt(N);
+    S = N->getStmtForDiagnostics();
   }
 
   if (!S)
@@ -324,8 +325,7 @@ NullabilityChecker::NullabilityBugVisitor::VisitNode(const ExplodedNode *N,
   // Generate the extra diagnostic.
   PathDiagnosticLocation Pos(S, BRC.getSourceManager(),
                              N->getLocationContext());
-  return std::make_shared<PathDiagnosticEventPiece>(Pos, InfoText, true,
-                                                    nullptr);
+  return std::make_shared<PathDiagnosticEventPiece>(Pos, InfoText, true);
 }
 
 /// Returns true when the value stored at the given location has been
@@ -478,7 +478,7 @@ void NullabilityChecker::checkEvent(ImplicitNullDerefEvent Event) const {
     return;
 
   const MemRegion *Region =
-      getTrackRegion(Event.Location, /*CheckSuperregion=*/true);
+      getTrackRegion(Event.Location, /*CheckSuperRegion=*/true);
   if (!Region)
     return;
 
@@ -505,18 +505,58 @@ void NullabilityChecker::checkEvent(ImplicitNullDerefEvent Event) const {
   }
 }
 
+// Whenever we see a load from a typed memory region that's been annotated as
+// 'nonnull', we want to trust the user on that and assume that it is is indeed
+// non-null.
+//
+// We do so even if the value is known to have been assigned to null.
+// The user should be warned on assigning the null value to a non-null pointer
+// as opposed to warning on the later dereference of this pointer.
+//
+// \code
+//   int * _Nonnull var = 0; // we want to warn the user here...
+//   // . . .
+//   *var = 42;              // ...and not here
+// \endcode
+void NullabilityChecker::checkLocation(SVal Location, bool IsLoad,
+                                       const Stmt *S,
+                                       CheckerContext &Context) const {
+  // We should care only about loads.
+  // The main idea is to add a constraint whenever we're loading a value from
+  // an annotated pointer type.
+  if (!IsLoad)
+    return;
+
+  // Annotations that we want to consider make sense only for types.
+  const auto *Region =
+      dyn_cast_or_null<TypedValueRegion>(Location.getAsRegion());
+  if (!Region)
+    return;
+
+  ProgramStateRef State = Context.getState();
+
+  auto StoredVal = State->getSVal(Region).getAs<loc::MemRegionVal>();
+  if (!StoredVal)
+    return;
+
+  Nullability NullabilityOfTheLoadedValue =
+      getNullabilityAnnotation(Region->getValueType());
+
+  if (NullabilityOfTheLoadedValue == Nullability::Nonnull) {
+    // It doesn't matter what we think about this particular pointer, it should
+    // be considered non-null as annotated by the developer.
+    if (ProgramStateRef NewState = State->assume(*StoredVal, true)) {
+      Context.addTransition(NewState);
+    }
+  }
+}
+
 /// Find the outermost subexpression of E that is not an implicit cast.
 /// This looks through the implicit casts to _Nonnull that ARC adds to
 /// return expressions of ObjC types when the return type of the function or
 /// method is non-null but the express is not.
 static const Expr *lookThroughImplicitCasts(const Expr *E) {
-  assert(E);
-
-  while (auto *ICE = dyn_cast<ImplicitCastExpr>(E)) {
-    E = ICE->getSubExpr();
-  }
-
-  return E;
+  return E->IgnoreImpCasts();
 }
 
 /// This method check when nullable pointer or null value is returned from a
@@ -730,11 +770,6 @@ void NullabilityChecker::checkPreCall(const CallEvent &Call,
       }
       continue;
     }
-    // No tracked nullability yet.
-    if (ArgExprTypeLevelNullability != Nullability::Nullable)
-      continue;
-    State = State->set<NullabilityMap>(
-        Region, NullabilityState(ArgExprTypeLevelNullability, ArgExpr));
   }
   if (State != OrigState)
     C.addTransition(State);
@@ -1195,7 +1230,7 @@ void ento::registerNullabilityBase(CheckerManager &mgr) {
   mgr.registerChecker<NullabilityChecker>();
 }
 
-bool ento::shouldRegisterNullabilityBase(const LangOptions &LO) {
+bool ento::shouldRegisterNullabilityBase(const CheckerManager &mgr) {
   return true;
 }
 
@@ -1203,15 +1238,15 @@ bool ento::shouldRegisterNullabilityBase(const LangOptions &LO) {
   void ento::register##name##Checker(CheckerManager &mgr) {                    \
     NullabilityChecker *checker = mgr.getChecker<NullabilityChecker>();        \
     checker->Filter.Check##name = true;                                        \
-    checker->Filter.CheckName##name = mgr.getCurrentCheckName();               \
+    checker->Filter.CheckName##name = mgr.getCurrentCheckerName();             \
     checker->NeedTracking = checker->NeedTracking || trackingRequired;         \
     checker->NoDiagnoseCallsToSystemHeaders =                                  \
         checker->NoDiagnoseCallsToSystemHeaders ||                             \
         mgr.getAnalyzerOptions().getCheckerBooleanOption(                      \
-                      checker, "NoDiagnoseCallsToSystemHeaders", false, true); \
+            checker, "NoDiagnoseCallsToSystemHeaders", true);                  \
   }                                                                            \
                                                                                \
-  bool ento::shouldRegister##name##Checker(const LangOptions &LO) {            \
+  bool ento::shouldRegister##name##Checker(const CheckerManager &mgr) {            \
     return true;                                                               \
   }
 

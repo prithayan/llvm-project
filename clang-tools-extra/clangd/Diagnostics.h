@@ -9,8 +9,8 @@
 #ifndef LLVM_CLANG_TOOLS_EXTRA_CLANGD_DIAGNOSTICS_H
 #define LLVM_CLANG_TOOLS_EXTRA_CLANGD_DIAGNOSTICS_H
 
-#include "Path.h"
 #include "Protocol.h"
+#include "support/Path.h"
 #include "clang/Basic/Diagnostic.h"
 #include "clang/Basic/LangOptions.h"
 #include "llvm/ADT/ArrayRef.h"
@@ -53,7 +53,7 @@ struct ClangdDiagnosticOptions {
 struct DiagBase {
   std::string Message;
   // Intended to be used only in error messages.
-  // May be relative, absolute or even artifically constructed.
+  // May be relative, absolute or even artificially constructed.
   std::string File;
   // Absolute path to containing file, if available.
   llvm::Optional<std::string> AbsFile;
@@ -128,17 +128,27 @@ public:
 
   using DiagFixer = std::function<std::vector<Fix>(DiagnosticsEngine::Level,
                                                    const clang::Diagnostic &)>;
+  using LevelAdjuster = std::function<DiagnosticsEngine::Level(
+      DiagnosticsEngine::Level, const clang::Diagnostic &)>;
   /// If set, possibly adds fixes for diagnostics using \p Fixer.
   void contributeFixes(DiagFixer Fixer) { this->Fixer = Fixer; }
+  /// If set, this allows the client of this class to adjust the level of
+  /// diagnostics, such as promoting warnings to errors, or ignoring
+  /// diagnostics.
+  void setLevelAdjuster(LevelAdjuster Adjuster) { this->Adjuster = Adjuster; }
 
 private:
   void flushLastDiag();
 
   DiagFixer Fixer = nullptr;
+  LevelAdjuster Adjuster = nullptr;
   std::vector<Diag> Output;
   llvm::Optional<LangOptions> LangOpts;
   llvm::Optional<Diag> LastDiag;
+  /// Set iff adjustDiagFromHeader resulted in changes to LastDiag.
+  bool LastDiagWasAdjusted = false;
   llvm::DenseSet<int> IncludeLinesWithErrors;
+  bool LastPrimaryDiagnosticWasSuppressed = false;
 };
 
 } // namespace clangd

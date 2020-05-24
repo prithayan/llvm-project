@@ -1,4 +1,4 @@
-//===-- DWARFDIE.cpp --------------------------------------------*- C++ -*-===//
+//===-- DWARFDIE.cpp ------------------------------------------------------===//
 //
 // Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
 // See https://llvm.org/LICENSE.txt for license information.
@@ -32,7 +32,7 @@ class ElaboratingDIEIterator
   // Container sizes are optimized for the case of following DW_AT_specification
   // and DW_AT_abstract_origin just once.
   llvm::SmallVector<DWARFDIE, 2> m_worklist;
-  llvm::SmallSet<lldb::user_id_t, 3> m_seen;
+  llvm::SmallSet<DWARFDebugInfoEntry *, 3> m_seen;
 
   void Next() {
     assert(!m_worklist.empty() && "Incrementing end iterator?");
@@ -44,7 +44,7 @@ class ElaboratingDIEIterator
     // And add back any items that elaborate it.
     for (dw_attr_t attr : {DW_AT_specification, DW_AT_abstract_origin}) {
       if (DWARFDIE d = die.GetReferencedDIE(attr))
-        if (m_seen.insert(die.GetID()).second)
+        if (m_seen.insert(die.GetDIE()).second)
           m_worklist.push_back(d);
     }
   }
@@ -113,7 +113,7 @@ DWARFDIE::GetSibling() const {
 DWARFDIE
 DWARFDIE::GetReferencedDIE(const dw_attr_t attr) const {
   if (IsValid())
-    return m_die->GetAttributeValueAsReference(GetDWARF(), GetCU(), attr);
+    return m_die->GetAttributeValueAsReference(GetCU(), attr);
   else
     return {};
 }
@@ -130,10 +130,9 @@ DWARFDIE
 DWARFDIE::GetAttributeValueAsReferenceDIE(const dw_attr_t attr) const {
   if (IsValid()) {
     DWARFUnit *cu = GetCU();
-    SymbolFileDWARF *dwarf = cu->GetSymbolFileDWARF();
     const bool check_specification_or_abstract_origin = true;
     DWARFFormValue form_value;
-    if (m_die->GetAttributeValue(dwarf, cu, attr, form_value, nullptr,
+    if (m_die->GetAttributeValue(cu, attr, form_value, nullptr,
                                  check_specification_or_abstract_origin))
       return form_value.Reference();
   }
@@ -141,45 +140,209 @@ DWARFDIE::GetAttributeValueAsReferenceDIE(const dw_attr_t attr) const {
 }
 
 DWARFDIE
-DWARFDIE::LookupDeepestBlock(lldb::addr_t file_addr) const {
-  if (IsValid()) {
-    SymbolFileDWARF *dwarf = GetDWARF();
-    DWARFUnit *cu = GetCU();
-    DWARFDebugInfoEntry *function_die = nullptr;
-    DWARFDebugInfoEntry *block_die = nullptr;
-    if (m_die->LookupAddress(file_addr, dwarf, cu, &function_die, &block_die)) {
-      if (block_die && block_die != function_die) {
-        if (cu->ContainsDIEOffset(block_die->GetOffset()))
-          return DWARFDIE(cu, block_die);
-        else
-          return DWARFDIE(dwarf->DebugInfo()->GetUnit(
-                              DIERef(cu->GetOffset(), block_die->GetOffset())),
-                          block_die);
+DWARFDIE::LookupDeepestBlock(lldb::addr_t address) const {
+  if (!IsValid())
+    return DWARFDIE();
+
+  DWARFDIE result;
+  bool check_children = false;
+  bool match_addr_range = false;
+  switch (Tag()) {
+  case DW_TAG_class_type:
+  case DW_TAG_namespace:
+  case DW_TAG_structure_type:
+  case DW_TAG_common_block:
+    check_children = true;
+    break;
+  case DW_TAG_compile_unit:
+  case DW_TAG_module:
+  case DW_TAG_catch_block:
+  case DW_TAG_subprogram:
+  case DW_TAG_try_block:
+  case DW_TAG_partial_unit:
+    match_addr_range = true;
+    break;
+  case DW_TAG_lexical_block:
+  case DW_TAG_inlined_subroutine:
+    check_children = true;
+    match_addr_range = true;
+    break;
+  default:
+    break;
+  }
+
+  if (match_addr_range) {
+    DWARFRangeList ranges;
+    if (m_die->GetAttributeAddressRanges(m_cu, ranges,
+                                         /*check_hi_lo_pc=*/true) &&
+        ranges.FindEntryThatContains(address)) {
+      check_children = true;
+      switch (Tag()) {
+      default:
+        break;
+
+      case DW_TAG_inlined_subroutine: // Inlined Function
+      case DW_TAG_lexical_block:      // Block { } in code
+        result = *this;
+        break;
       }
+    } else {
+      check_children = false;
     }
   }
-  return DWARFDIE();
+
+  if (check_children) {
+    for (DWARFDIE child = GetFirstChild(); child; child = child.GetSibling()) {
+      if (DWARFDIE child_result = child.LookupDeepestBlock(address))
+        return child_result;
+    }
+  }
+  return result;
 }
 
 const char *DWARFDIE::GetMangledName() const {
   if (IsValid())
-    return m_die->GetMangledName(GetDWARF(), m_cu);
+    return m_die->GetMangledName(m_cu);
   else
     return nullptr;
 }
 
 const char *DWARFDIE::GetPubname() const {
   if (IsValid())
-    return m_die->GetPubname(GetDWARF(), m_cu);
+    return m_die->GetPubname(m_cu);
   else
     return nullptr;
 }
 
 const char *DWARFDIE::GetQualifiedName(std::string &storage) const {
   if (IsValid())
-    return m_die->GetQualifiedName(GetDWARF(), m_cu, storage);
+    return m_die->GetQualifiedName(m_cu, storage);
   else
     return nullptr;
+}
+
+// GetName
+//
+// Get value of the DW_AT_name attribute and place that value into the supplied
+// stream object. If the DIE is a NULL object "NULL" is placed into the stream,
+// and if no DW_AT_name attribute exists for the DIE then nothing is printed.
+void DWARFDIE::GetName(Stream &s) const {
+  if (!IsValid())
+    return;
+  if (GetDIE()->IsNULL()) {
+    s.PutCString("NULL");
+    return;
+  }
+  const char *name = GetDIE()->GetAttributeValueAsString(GetCU(), DW_AT_name, nullptr, true);
+  if (!name)
+    return;
+  s.PutCString(name);
+}
+
+// AppendTypeName
+//
+// Follows the type name definition down through all needed tags to end up with
+// a fully qualified type name and dump the results to the supplied stream.
+// This is used to show the name of types given a type identifier.
+void DWARFDIE::AppendTypeName(Stream &s) const {
+  if (!IsValid())
+    return;
+  if (GetDIE()->IsNULL()) {
+    s.PutCString("NULL");
+    return;
+  }
+  if (const char *name = GetPubname()) {
+    s.PutCString(name);
+    return;
+  }
+  switch (Tag()) {
+  case DW_TAG_array_type:
+    break; // print out a "[]" after printing the full type of the element
+           // below
+  case DW_TAG_base_type:
+    s.PutCString("base ");
+    break;
+  case DW_TAG_class_type:
+    s.PutCString("class ");
+    break;
+  case DW_TAG_const_type:
+    s.PutCString("const ");
+    break;
+  case DW_TAG_enumeration_type:
+    s.PutCString("enum ");
+    break;
+  case DW_TAG_file_type:
+    s.PutCString("file ");
+    break;
+  case DW_TAG_interface_type:
+    s.PutCString("interface ");
+    break;
+  case DW_TAG_packed_type:
+    s.PutCString("packed ");
+    break;
+  case DW_TAG_pointer_type:
+    break; // print out a '*' after printing the full type below
+  case DW_TAG_ptr_to_member_type:
+    break; // print out a '*' after printing the full type below
+  case DW_TAG_reference_type:
+    break; // print out a '&' after printing the full type below
+  case DW_TAG_restrict_type:
+    s.PutCString("restrict ");
+    break;
+  case DW_TAG_set_type:
+    s.PutCString("set ");
+    break;
+  case DW_TAG_shared_type:
+    s.PutCString("shared ");
+    break;
+  case DW_TAG_string_type:
+    s.PutCString("string ");
+    break;
+  case DW_TAG_structure_type:
+    s.PutCString("struct ");
+    break;
+  case DW_TAG_subrange_type:
+    s.PutCString("subrange ");
+    break;
+  case DW_TAG_subroutine_type:
+    s.PutCString("function ");
+    break;
+  case DW_TAG_thrown_type:
+    s.PutCString("thrown ");
+    break;
+  case DW_TAG_union_type:
+    s.PutCString("union ");
+    break;
+  case DW_TAG_unspecified_type:
+    s.PutCString("unspecified ");
+    break;
+  case DW_TAG_volatile_type:
+    s.PutCString("volatile ");
+    break;
+  default:
+    return;
+  }
+
+  // Follow the DW_AT_type if possible
+  if (DWARFDIE next_die = GetAttributeValueAsReferenceDIE(DW_AT_type))
+    next_die.AppendTypeName(s);
+
+  switch (Tag()) {
+  case DW_TAG_array_type:
+    s.PutCString("[]");
+    break;
+  case DW_TAG_pointer_type:
+    s.PutChar('*');
+    break;
+  case DW_TAG_ptr_to_member_type:
+    s.PutChar('*');
+    break;
+  case DW_TAG_reference_type:
+    s.PutChar('&');
+    break;
+  default:
+    break;
+  }
 }
 
 lldb_private::Type *DWARFDIE::ResolveType() const {
@@ -189,12 +352,10 @@ lldb_private::Type *DWARFDIE::ResolveType() const {
     return nullptr;
 }
 
-lldb_private::Type *DWARFDIE::ResolveTypeUID(const DIERef &die_ref) const {
-  SymbolFileDWARF *dwarf = GetDWARF();
-  if (dwarf)
-    return dwarf->ResolveTypeUID(dwarf->GetDIE(die_ref), true);
-  else
-    return nullptr;
+lldb_private::Type *DWARFDIE::ResolveTypeUID(const DWARFDIE &die) const {
+  if (SymbolFileDWARF *dwarf = GetDWARF())
+    return dwarf->ResolveTypeUID(die, true);
+  return nullptr;
 }
 
 std::vector<DWARFDIE> DWARFDIE::GetDeclContextDIEs() const {
@@ -211,16 +372,8 @@ std::vector<DWARFDIE> DWARFDIE::GetDeclContextDIEs() const {
   return result;
 }
 
-void DWARFDIE::GetDWARFDeclContext(DWARFDeclContext &dwarf_decl_ctx) const {
-  if (IsValid()) {
-    dwarf_decl_ctx.SetLanguage(GetLanguage());
-    m_die->GetDWARFDeclContext(GetDWARF(), GetCU(), dwarf_decl_ctx);
-  } else {
-    dwarf_decl_ctx.Clear();
-  }
-}
-
-void DWARFDIE::GetDeclContext(std::vector<CompilerContext> &context) const {
+void DWARFDIE::GetDeclContext(
+    llvm::SmallVectorImpl<lldb_private::CompilerContext> &context) const {
   const dw_tag_t tag = Tag();
   if (tag == DW_TAG_compile_unit || tag == DW_TAG_partial_unit)
     return;
@@ -229,40 +382,33 @@ void DWARFDIE::GetDeclContext(std::vector<CompilerContext> &context) const {
     parent.GetDeclContext(context);
   switch (tag) {
   case DW_TAG_module:
-    context.push_back(
-        CompilerContext(CompilerContextKind::Module, ConstString(GetName())));
+    context.push_back({CompilerContextKind::Module, ConstString(GetName())});
     break;
   case DW_TAG_namespace:
-    context.push_back(CompilerContext(CompilerContextKind::Namespace,
-                                      ConstString(GetName())));
+    context.push_back({CompilerContextKind::Namespace, ConstString(GetName())});
     break;
   case DW_TAG_structure_type:
-    context.push_back(CompilerContext(CompilerContextKind::Structure,
-                                      ConstString(GetName())));
+    context.push_back({CompilerContextKind::Struct, ConstString(GetName())});
     break;
   case DW_TAG_union_type:
-    context.push_back(
-        CompilerContext(CompilerContextKind::Union, ConstString(GetName())));
+    context.push_back({CompilerContextKind::Union, ConstString(GetName())});
     break;
   case DW_TAG_class_type:
-    context.push_back(
-        CompilerContext(CompilerContextKind::Class, ConstString(GetName())));
+    context.push_back({CompilerContextKind::Class, ConstString(GetName())});
     break;
   case DW_TAG_enumeration_type:
-    context.push_back(CompilerContext(CompilerContextKind::Enumeration,
-                                      ConstString(GetName())));
+    context.push_back({CompilerContextKind::Enum, ConstString(GetName())});
     break;
   case DW_TAG_subprogram:
-    context.push_back(CompilerContext(CompilerContextKind::Function,
-                                      ConstString(GetPubname())));
+    context.push_back(
+        {CompilerContextKind::Function, ConstString(GetPubname())});
     break;
   case DW_TAG_variable:
-    context.push_back(CompilerContext(CompilerContextKind::Variable,
-                                      ConstString(GetPubname())));
+    context.push_back(
+        {CompilerContextKind::Variable, ConstString(GetPubname())});
     break;
   case DW_TAG_typedef:
-    context.push_back(
-        CompilerContext(CompilerContextKind::Typedef, ConstString(GetName())));
+    context.push_back({CompilerContextKind::Typedef, ConstString(GetName())});
     break;
   default:
     break;
@@ -272,7 +418,7 @@ void DWARFDIE::GetDeclContext(std::vector<CompilerContext> &context) const {
 DWARFDIE
 DWARFDIE::GetParentDeclContextDIE() const {
   if (IsValid())
-    return m_die->GetParentDeclContextDIE(GetDWARF(), m_cu);
+    return m_die->GetParentDeclContextDIE(m_cu);
   else
     return DWARFDIE();
 }
@@ -290,39 +436,6 @@ bool DWARFDIE::IsMethod() const {
   return false;
 }
 
-DWARFDIE
-DWARFDIE::GetContainingDWOModuleDIE() const {
-  if (IsValid()) {
-    DWARFDIE top_module_die;
-    // Now make sure this DIE is scoped in a DW_TAG_module tag and return true
-    // if so
-    for (DWARFDIE parent = GetParent(); parent.IsValid();
-         parent = parent.GetParent()) {
-      const dw_tag_t tag = parent.Tag();
-      if (tag == DW_TAG_module)
-        top_module_die = parent;
-      else if (tag == DW_TAG_compile_unit || tag == DW_TAG_partial_unit)
-        break;
-    }
-
-    return top_module_die;
-  }
-  return DWARFDIE();
-}
-
-lldb::ModuleSP DWARFDIE::GetContainingDWOModule() const {
-  if (IsValid()) {
-    DWARFDIE dwo_module_die = GetContainingDWOModuleDIE();
-
-    if (dwo_module_die) {
-      const char *module_name = dwo_module_die.GetName();
-      if (module_name)
-        return GetDWARF()->GetDWOModule(lldb_private::ConstString(module_name));
-    }
-  }
-  return lldb::ModuleSP();
-}
-
 bool DWARFDIE::GetDIENamesAndRanges(
     const char *&name, const char *&mangled, DWARFRangeList &ranges,
     int &decl_file, int &decl_line, int &decl_column, int &call_file,
@@ -330,32 +443,8 @@ bool DWARFDIE::GetDIENamesAndRanges(
     lldb_private::DWARFExpression *frame_base) const {
   if (IsValid()) {
     return m_die->GetDIENamesAndRanges(
-        GetDWARF(), GetCU(), name, mangled, ranges, decl_file, decl_line,
-        decl_column, call_file, call_line, call_column, frame_base);
+        GetCU(), name, mangled, ranges, decl_file, decl_line, decl_column,
+        call_file, call_line, call_column, frame_base);
   } else
     return false;
-}
-
-CompilerDecl DWARFDIE::GetDecl() const {
-  DWARFASTParser *dwarf_ast = GetDWARFParser();
-  if (dwarf_ast)
-    return dwarf_ast->GetDeclForUIDFromDWARF(*this);
-  else
-    return CompilerDecl();
-}
-
-CompilerDeclContext DWARFDIE::GetDeclContext() const {
-  DWARFASTParser *dwarf_ast = GetDWARFParser();
-  if (dwarf_ast)
-    return dwarf_ast->GetDeclContextForUIDFromDWARF(*this);
-  else
-    return CompilerDeclContext();
-}
-
-CompilerDeclContext DWARFDIE::GetContainingDeclContext() const {
-  DWARFASTParser *dwarf_ast = GetDWARFParser();
-  if (dwarf_ast)
-    return dwarf_ast->GetDeclContextContainingUIDFromDWARF(*this);
-  else
-    return CompilerDeclContext();
 }

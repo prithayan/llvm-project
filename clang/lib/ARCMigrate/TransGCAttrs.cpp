@@ -231,8 +231,7 @@ static void checkAllAtProps(MigrationContext &MigrateCtx,
 
   SmallVector<std::pair<AttributedTypeLoc, ObjCPropertyDecl *>, 4> ATLs;
   bool hasWeak = false, hasStrong = false;
-  ObjCPropertyDecl::PropertyAttributeKind
-    Attrs = ObjCPropertyDecl::OBJC_PR_noattr;
+  ObjCPropertyAttribute::Kind Attrs = ObjCPropertyAttribute::kind_noattr;
   for (IndivPropsTy::iterator
          PI = IndProps.begin(), PE = IndProps.end(); PI != PE; ++PI) {
     ObjCPropertyDecl *PD = *PI;
@@ -269,12 +268,12 @@ static void checkAllAtProps(MigrationContext &MigrateCtx,
     StringRef toAttr = "strong";
     if (hasWeak) {
       if (canApplyWeak(MigrateCtx.Pass.Ctx, IndProps.front()->getType(),
-                       /*AllowOnUnkwownClass=*/true))
+                       /*AllowOnUnknownClass=*/true))
         toAttr = "weak";
       else
         toAttr = "unsafe_unretained";
     }
-    if (Attrs & ObjCPropertyDecl::OBJC_PR_assign)
+    if (Attrs & ObjCPropertyAttribute::kind_assign)
       MigrateCtx.rewritePropertyAttribute("assign", toAttr, AtLoc);
     else
       MigrateCtx.addPropertyAttribute(toAttr, AtLoc);
@@ -302,8 +301,8 @@ static void checkAllProps(MigrationContext &MigrateCtx,
   for (unsigned i = 0, e = AllProps.size(); i != e; ++i) {
     ObjCPropertyDecl *PD = AllProps[i];
     if (PD->getPropertyAttributesAsWritten() &
-          (ObjCPropertyDecl::OBJC_PR_assign |
-           ObjCPropertyDecl::OBJC_PR_readonly)) {
+        (ObjCPropertyAttribute::kind_assign |
+         ObjCPropertyAttribute::kind_readonly)) {
       SourceLocation AtLoc = PD->getAtLoc();
       if (AtLoc.isInvalid())
         continue;

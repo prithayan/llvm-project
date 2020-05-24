@@ -12,9 +12,13 @@
 #include <time.h>        // clock_gettime, CLOCK_MONOTONIC and CLOCK_REALTIME
 #include "include/apple_availability.h"
 
-#if !defined(__APPLE__)
+#if __has_include(<unistd.h>)
+#include <unistd.h>
+#endif
+
+#if !defined(__APPLE__) && _POSIX_TIMERS > 0
 #define _LIBCPP_USE_CLOCK_GETTIME
-#endif // __APPLE__
+#endif
 
 #if defined(_LIBCPP_WIN32API)
 #define WIN32_LEAN_AND_MEAN
@@ -25,8 +29,8 @@
 #endif
 #else
 #if !defined(CLOCK_REALTIME) || !defined(_LIBCPP_USE_CLOCK_GETTIME)
-#include <sys/time.h>        // for gettimeofday and timeval
-#endif // !defined(CLOCK_REALTIME)
+#include <sys/time.h> // for gettimeofday and timeval
+#endif
 #endif // defined(_LIBCPP_WIN32API)
 
 #if !defined(_LIBCPP_HAS_NO_MONOTONIC_CLOCK)
@@ -35,6 +39,10 @@
 #elif !defined(_LIBCPP_WIN32API) && !defined(CLOCK_MONOTONIC)
 #error "Monotonic clock not implemented"
 #endif
+#endif
+
+#if defined(__ELF__) && defined(_LIBCPP_LINK_RT_LIB)
+#pragma comment(lib, "rt")
 #endif
 
 _LIBCPP_BEGIN_NAMESPACE_STD
@@ -110,14 +118,14 @@ const bool steady_clock::is_steady;
 
 #if defined(__APPLE__)
 
-// Darwin libc versions >= 1133 provide ns precision via CLOCK_UPTIME_RAW
-#if defined(_LIBCPP_USE_CLOCK_GETTIME) && defined(CLOCK_UPTIME_RAW)
+// Darwin libc versions >= 1133 provide ns precision via CLOCK_MONOTONIC_RAW
+#if defined(_LIBCPP_USE_CLOCK_GETTIME) && defined(CLOCK_MONOTONIC_RAW)
 steady_clock::time_point
 steady_clock::now() _NOEXCEPT
 {
     struct timespec tp;
-    if (0 != clock_gettime(CLOCK_UPTIME_RAW, &tp))
-        __throw_system_error(errno, "clock_gettime(CLOCK_UPTIME_RAW) failed");
+    if (0 != clock_gettime(CLOCK_MONOTONIC_RAW, &tp))
+        __throw_system_error(errno, "clock_gettime(CLOCK_MONOTONIC_RAW) failed");
     return time_point(seconds(tp.tv_sec) + nanoseconds(tp.tv_nsec));
 }
 
@@ -173,13 +181,13 @@ steady_clock::now() _NOEXCEPT
     static FP fp = init_steady_clock();
     return time_point(duration(fp()));
 }
-#endif // defined(_LIBCPP_USE_CLOCK_GETTIME) && defined(CLOCK_UPTIME_RAW)
+#endif // defined(_LIBCPP_USE_CLOCK_GETTIME) && defined(CLOCK_MONOTONIC_RAW)
 
 #elif defined(_LIBCPP_WIN32API)
 
 // https://msdn.microsoft.com/en-us/library/windows/desktop/ms644905(v=vs.85).aspx says:
 //    If the function fails, the return value is zero. <snip>
-//    On systems that run Windows XP or later, the function will always succeed 
+//    On systems that run Windows XP or later, the function will always succeed
 //      and will thus never return zero.
 
 static LARGE_INTEGER
@@ -202,9 +210,9 @@ steady_clock::now() _NOEXCEPT
 
 #elif defined(CLOCK_MONOTONIC)
 
-// On Apple platforms only CLOCK_UPTIME_RAW or mach_absolute_time are able to
-// time functions in the nanosecond range. Thus, they are the only acceptable
-// implementations of steady_clock.
+// On Apple platforms only CLOCK_UPTIME_RAW, CLOCK_MONOTONIC_RAW or
+// mach_absolute_time are able to time functions in the nanosecond range.
+// Thus, they are the only acceptable implementations of steady_clock.
 #ifdef __APPLE__
 #error "Never use CLOCK_MONOTONIC for steady_clock::now on Apple platforms"
 #endif

@@ -1,4 +1,4 @@
-//===-- MonitoringProcessLauncher.cpp ---------------------------*- C++ -*-===//
+//===-- MonitoringProcessLauncher.cpp -------------------------------------===//
 //
 // Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
 // See https://llvm.org/LICENSE.txt for license information.
@@ -53,8 +53,12 @@ MonitoringProcessLauncher::LaunchProcess(const ProcessLaunchInfo &launch_info,
     Log *log(lldb_private::GetLogIfAllCategoriesSet(LIBLLDB_LOG_PROCESS));
 
     assert(launch_info.GetMonitorProcessCallback());
-    process.StartMonitoring(launch_info.GetMonitorProcessCallback(),
-                            launch_info.GetMonitorSignals());
+    llvm::Expected<HostThread> maybe_thread =
+        process.StartMonitoring(launch_info.GetMonitorProcessCallback(),
+                                launch_info.GetMonitorSignals());
+    if (!maybe_thread)
+      error.SetErrorStringWithFormatv("failed to launch host thread: {}",
+                                      llvm::toString(maybe_thread.takeError()));
     if (log)
       log->PutCString("started monitoring child process.");
   } else {

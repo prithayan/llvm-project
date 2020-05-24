@@ -19,6 +19,7 @@
 #include <memory>
 #include <cassert>
 
+#include "test_macros.h"
 #include "allocators.h"
 #include "../alloc_first.h"
 #include "../alloc_last.h"
@@ -32,19 +33,19 @@ struct ImplicitCopy {
 // copy conversions in return value expressions.
 std::tuple<ImplicitCopy> testImplicitCopy1() {
     ImplicitCopy i(42);
-    return {std::allocator_arg, std::allocator<void>{}, i};
+    return {std::allocator_arg, std::allocator<int>{}, i};
 }
 
 std::tuple<ImplicitCopy> testImplicitCopy2() {
     const ImplicitCopy i(42);
-    return {std::allocator_arg, std::allocator<void>{}, i};
+    return {std::allocator_arg, std::allocator<int>{}, i};
 }
 
 int main(int, char**)
 {
     {
         // check that the literal '0' can implicitly initialize a stored pointer.
-        std::tuple<int*> t = {std::allocator_arg, std::allocator<void>{}, 0};
+        std::tuple<int*>{std::allocator_arg, std::allocator<int>{}, 0};
     }
     {
         std::tuple<int> t(std::allocator_arg, A1<int>(), 3);

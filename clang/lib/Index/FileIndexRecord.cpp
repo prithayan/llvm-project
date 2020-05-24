@@ -10,6 +10,7 @@
 #include "FileIndexRecord.h"
 #include "clang/AST/ASTContext.h"
 #include "clang/AST/DeclTemplate.h"
+#include "clang/Basic/SourceManager.h"
 #include "llvm/ADT/SmallString.h"
 #include "llvm/Support/Path.h"
 
@@ -36,7 +37,7 @@ void FileIndexRecord::addDeclOccurence(SymbolRoleSet Roles, unsigned Offset,
 
   DeclOccurrence NewInfo(Roles, Offset, D, Relations);
   // We keep Decls in order as we need to access them in this order in all cases.
-  auto It = std::upper_bound(Decls.begin(), Decls.end(), NewInfo);
+  auto It = llvm::upper_bound(Decls, NewInfo);
   Decls.insert(It, std::move(NewInfo));
 }
 

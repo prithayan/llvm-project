@@ -6,8 +6,8 @@
 //
 //===----------------------------------------------------------------------===//
 
-#ifndef liblldb_Timer_h_
-#define liblldb_Timer_h_
+#ifndef LLDB_UTILITY_TIMER_H
+#define LLDB_UTILITY_TIMER_H
 
 #include "lldb/lldb-defines.h"
 #include "llvm/Support/Chrono.h"
@@ -30,6 +30,8 @@ public:
     friend class Timer;
     const char *m_name;
     std::atomic<uint64_t> m_nanos;
+    std::atomic<uint64_t> m_nanos_total;
+    std::atomic<uint64_t> m_count;
     std::atomic<Category *> m_next;
 
     DISALLOW_COPY_AND_ASSIGN(Category);
@@ -69,4 +71,4 @@ private:
 
 } // namespace lldb_private
 
-#endif // liblldb_Timer_h_
+#endif // LLDB_UTILITY_TIMER_H

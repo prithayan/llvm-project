@@ -273,6 +273,18 @@ void MappingTraits<MachO::dyld_info_command>::mapping(
   IO.mapRequired("export_size", LoadCommand.export_size);
 }
 
+void MappingTraits<MachOYAML::Relocation>::mapping(
+    IO &IO, MachOYAML::Relocation &Relocation) {
+  IO.mapRequired("address", Relocation.address);
+  IO.mapRequired("symbolnum", Relocation.symbolnum);
+  IO.mapRequired("pcrel", Relocation.is_pcrel);
+  IO.mapRequired("length", Relocation.length);
+  IO.mapRequired("extern", Relocation.is_extern);
+  IO.mapRequired("type", Relocation.type);
+  IO.mapRequired("scattered", Relocation.is_scattered);
+  IO.mapRequired("value", Relocation.value);
+}
+
 void MappingTraits<MachOYAML::Section>::mapping(IO &IO,
                                                 MachOYAML::Section &Section) {
   IO.mapRequired("sectname", Section.sectname);
@@ -287,6 +299,16 @@ void MappingTraits<MachOYAML::Section>::mapping(IO &IO,
   IO.mapRequired("reserved1", Section.reserved1);
   IO.mapRequired("reserved2", Section.reserved2);
   IO.mapOptional("reserved3", Section.reserved3);
+  IO.mapOptional("content", Section.content);
+  IO.mapOptional("relocations", Section.relocations);
+}
+
+StringRef
+MappingTraits<MachOYAML::Section>::validate(IO &IO,
+                                            MachOYAML::Section &Section) {
+  if (Section.content && Section.size < Section.content->binary_size())
+    return "Section size must be greater than or equal to the content size";
+  return {};
 }
 
 void MappingTraits<MachO::build_tool_version>::mapping(

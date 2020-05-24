@@ -1,4 +1,4 @@
-//===-- RegisterContextPOSIX_mips64.cpp -------------------------*- C++ -*-===//
+//===-- RegisterContextPOSIX_mips64.cpp -----------------------------------===//
 //
 // Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
 // See https://llvm.org/LICENSE.txt for license information.
@@ -96,7 +96,7 @@ RegisterContextPOSIX_mips64::GetRegisterInfoAtIndex(size_t reg) {
   if (reg < m_num_registers)
     return &GetRegisterInfo()[reg];
   else
-    return NULL;
+    return nullptr;
 }
 
 size_t RegisterContextPOSIX_mips64::GetRegisterSetCount() {

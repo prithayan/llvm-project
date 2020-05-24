@@ -31,6 +31,8 @@ defm demangle: B<"demangle",
     "Demangle symbol names",
     "Do not demangle symbol names">;
 
+def emit_relocs: F<"emit-relocs">, HelpText<"Generate relocations in output">;
+
 defm export_dynamic: B<"export-dynamic",
     "Put symbols in the dynamic symbol table",
     "Do not put symbols in the dynamic symbol table (default)">;
@@ -62,9 +64,6 @@ def L: JoinedOrSeparate<["-"], "L">, MetaVarName<"<dir>">,
 
 def mllvm: S<"mllvm">, HelpText<"Options to pass to LLVM">;
 
-def no_threads: F<"no-threads">,
-  HelpText<"Do not run the linker multi-threaded">;
-
 def no_color_diagnostics: F<"no-color-diagnostics">,
   HelpText<"Do not use colors in diagnostics">;
 
@@ -85,13 +84,20 @@ defm print_gc_sections: B<"print-gc-sections",
 
 def relocatable: F<"relocatable">, HelpText<"Create relocatable object file">;
 
+defm reproduce: Eq<"reproduce", "Dump linker invocation and input files for debugging">;
+
+defm rsp_quoting: Eq<"rsp-quoting", "Quoting style for response files">,
+  MetaVarName<"[posix,windows]">;
+
 def shared: F<"shared">, HelpText<"Build a shared object">;
 
 def strip_all: F<"strip-all">, HelpText<"Strip all symbols">;
 
 def strip_debug: F<"strip-debug">, HelpText<"Strip debugging information">;
 
-def threads: F<"threads">, HelpText<"Run the linker multi-threaded">;
+defm threads
+    : Eq<"threads", "Number of threads. '1' disables multi-threading. By "
+                    "default all available hardware threads are used">;
 
 def trace: F<"trace">, HelpText<"Print the names of the input files">;
 
@@ -107,6 +113,9 @@ def version: F<"version">, HelpText<"Display the version number and exit">;
 
 def z: JoinedOrSeparate<["-"], "z">, MetaVarName<"<option>">,
   HelpText<"Linker option extensions">;
+
+defm wrap: Eq<"wrap", "Use wrapper functions for symbol">,
+  MetaVarName<"<symbol>=<symbol>">;
 
 // The follow flags are unique to wasm
 
@@ -126,6 +135,9 @@ def export_all: F<"export-all">,
 
 def export_table: F<"export-table">,
   HelpText<"Export function table to the environment">;
+
+def growable_table: F<"growable-table">,
+  HelpText<"Remove maximum size from function table, allowing table to grow">;
 
 def global_base: J<"global-base=">,
   HelpText<"Where to start to place global data">;
@@ -185,4 +197,5 @@ def save_temps: F<"save-temps">;
 def thinlto_cache_dir: J<"thinlto-cache-dir=">,
   HelpText<"Path to ThinLTO cached object file directory">;
 defm thinlto_cache_policy: Eq<"thinlto-cache-policy", "Pruning policy for the ThinLTO cache">;
-def thinlto_jobs: J<"thinlto-jobs=">, HelpText<"Number of ThinLTO jobs">;
+def thinlto_jobs: J<"thinlto-jobs=">,
+  HelpText<"Number of ThinLTO jobs. Default to --threads=">;

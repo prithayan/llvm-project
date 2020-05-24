@@ -42,7 +42,13 @@ class PPCFunctionInfo : public MachineFunctionInfo {
   /// MustSaveLR - Indicates whether LR is defined (or clobbered) in the current
   /// function.  This is only valid after the initial scan of the function by
   /// PEI.
-  bool MustSaveLR;
+  bool MustSaveLR = false;
+
+  /// MustSaveTOC - Indicates that the TOC save needs to be performed in the
+  /// prologue of the function. This is typically the case when there are
+  /// indirect calls in the function and it is more profitable to save the
+  /// TOC pointer in the prologue than in the block(s) containing the call(s).
+  bool MustSaveTOC = false;
 
   /// Do we have to disable shrink-wrapping? This has to be set if we emit any
   /// instructions that clobber LR in the entry block because discovering this
@@ -58,6 +64,10 @@ class PPCFunctionInfo : public MachineFunctionInfo {
 
   /// SpillsCR - Indicates whether CR is spilled in the current function.
   bool SpillsCR = false;
+
+  /// DisableNonVolatileCR - Indicates whether non-volatile CR fields would be
+  /// disabled.
+  bool DisableNonVolatileCR = false;
 
   /// Indicates whether VRSAVE is spilled in the current function.
   bool SpillsVRSAVE = false;
@@ -114,16 +124,12 @@ class PPCFunctionInfo : public MachineFunctionInfo {
   /// Whether this uses the PIC Base register or not.
   bool UsesPICBase = false;
 
-  /// True if this function has a subset of CSRs that is handled explicitly via
-  /// copies
-  bool IsSplitCSR = false;
-
   /// We keep track attributes for each live-in virtual registers
   /// to use SExt/ZExt flags in later optimization.
   std::vector<std::pair<unsigned, ISD::ArgFlagsTy>> LiveInAttrs;
 
 public:
-  explicit PPCFunctionInfo(MachineFunction &MF) : MF(MF) {}
+  explicit PPCFunctionInfo(MachineFunction &MF);
 
   int getFramePointerSaveIndex() const { return FramePointerSaveIndex; }
   void setFramePointerSaveIndex(int Idx) { FramePointerSaveIndex = Idx; }
@@ -151,6 +157,9 @@ public:
   void setMustSaveLR(bool U) { MustSaveLR = U; }
   bool mustSaveLR() const    { return MustSaveLR; }
 
+  void setMustSaveTOC(bool U) { MustSaveTOC = U; }
+  bool mustSaveTOC() const    { return MustSaveTOC; }
+
   /// We certainly don't want to shrink wrap functions if we've emitted a
   /// MovePCtoLR8 as that has to go into the entry, so the prologue definitely
   /// has to go into the entry block.
@@ -165,6 +174,9 @@ public:
 
   void setSpillsCR()       { SpillsCR = true; }
   bool isCRSpilled() const { return SpillsCR; }
+
+  void setDisableNonVolatileCR() { DisableNonVolatileCR = true; }
+  bool isNonVolatileCRDisabled() const { return DisableNonVolatileCR; }
 
   void setSpillsVRSAVE()       { SpillsVRSAVE = true; }
   bool isVRSAVESpilled() const { return SpillsVRSAVE; }
@@ -212,9 +224,6 @@ public:
 
   void setUsesPICBase(bool uses) { UsesPICBase = uses; }
   bool usesPICBase() const { return UsesPICBase; }
-
-  bool isSplitCSR() const { return IsSplitCSR; }
-  void setIsSplitCSR(bool s) { IsSplitCSR = s; }
 
   MCSymbol *getPICOffsetSymbol() const;
 

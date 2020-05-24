@@ -145,9 +145,9 @@ private:
   ObjCNoReturn ObjCNoRet;
 
   /// The BugReporter associated with this engine.  It is important that
-  ///  this object be placed at the very end of member variables so that its
-  ///  destructor is called before the rest of the ExprEngine is destroyed.
-  GRBugReporter BR;
+  /// this object be placed at the very end of member variables so that its
+  /// destructor is called before the rest of the ExprEngine is destroyed.
+  PathSensitiveBugReporter BR;
 
   /// The functions which have been analyzed through inlining. This is owned by
   /// AnalysisConsumer. It can be null.
@@ -156,14 +156,12 @@ private:
   /// The flag, which specifies the mode of inlining for the engine.
   InliningModes HowToInline;
 
-  NoteTag::Factory NoteTags;
-
 public:
   ExprEngine(cross_tu::CrossTranslationUnitContext &CTU, AnalysisManager &mgr,
              SetOfConstDecls *VisitedCalleesIn,
              FunctionSummariesTy *FS, InliningModes HowToInlineIn);
 
-  ~ExprEngine() override;
+  ~ExprEngine() override = default;
 
   /// Returns true if there is still simulation state on the worklist.
   bool ExecuteWorkList(const LocationContext *L, unsigned Steps = 150000) {
@@ -378,10 +376,10 @@ public:
                        const LocationContext *LCtx,
                        const CallEvent *Call) override;
 
-  /// printState - Called by ProgramStateManager to print checker-specific data.
-  void printState(raw_ostream &Out, ProgramStateRef State, const char *NL,
-                  const char *Sep,
-                  const LocationContext *LCtx = nullptr) override;
+  /// printJson - Called by ProgramStateManager to print checker-specific data.
+  void printJson(raw_ostream &Out, ProgramStateRef State,
+                 const LocationContext *LCtx, const char *NL,
+                 unsigned int Space, bool IsDot) const override;
 
   ProgramStateManager &getStateManager() override { return StateMgr; }
 
@@ -399,7 +397,7 @@ public:
   SymbolManager &getSymbolManager() { return SymMgr; }
   MemRegionManager &getRegionManager() { return MRMgr; }
 
-  NoteTag::Factory &getNoteTags() { return NoteTags; }
+  NoteTag::Factory &getNoteTags() { return Engine.getNoteTags(); }
 
 
   // Functions for external checking of whether we have unfinished work
@@ -529,10 +527,13 @@ public:
   void VisitCXXConstructExpr(const CXXConstructExpr *E, ExplodedNode *Pred,
                              ExplodedNodeSet &Dst);
 
+  void VisitCXXInheritedCtorInitExpr(const CXXInheritedCtorInitExpr *E,
+                                     ExplodedNode *Pred, ExplodedNodeSet &Dst);
+
   void VisitCXXDestructor(QualType ObjectType, const MemRegion *Dest,
                           const Stmt *S, bool IsBaseDtor,
                           ExplodedNode *Pred, ExplodedNodeSet &Dst,
-                          const EvalCallOptions &Options);
+                          EvalCallOptions &Options);
 
   void VisitCXXNewAllocatorCall(const CXXNewExpr *CNE,
                                 ExplodedNode *Pred,
@@ -615,10 +616,16 @@ protected:
                 const ProgramPoint *PP = nullptr);
 
   /// Call PointerEscape callback when a value escapes as a result of bind.
-  ProgramStateRef processPointerEscapedOnBind(ProgramStateRef State,
-                                              SVal Loc,
-                                              SVal Val,
-                                              const LocationContext *LCtx) override;
+  ProgramStateRef processPointerEscapedOnBind(
+      ProgramStateRef State, ArrayRef<std::pair<SVal, SVal>> LocAndVals,
+      const LocationContext *LCtx, PointerEscapeKind Kind,
+      const CallEvent *Call) override;
+
+  ProgramStateRef
+  processPointerEscapedOnBind(ProgramStateRef State,
+                              SVal Loc, SVal Val,
+                              const LocationContext *LCtx);
+
   /// Call PointerEscape callback when a value escapes as a result of
   /// region invalidation.
   /// \param[in] ITraits Specifies invalidation traits for regions/symbols.
@@ -630,9 +637,10 @@ protected:
                            RegionAndSymbolInvalidationTraits &ITraits) override;
 
   /// A simple wrapper when you only need to notify checkers of pointer-escape
-  /// of a single value.
-  ProgramStateRef escapeValue(ProgramStateRef State, SVal V,
-                              PointerEscapeKind K) const;
+  /// of some values.
+  ProgramStateRef escapeValues(ProgramStateRef State, ArrayRef<SVal> Vs,
+                               PointerEscapeKind K,
+                               const CallEvent *Call = nullptr) const;
 
 public:
   // FIXME: 'tag' should be removed, and a LocationContext should be used
@@ -668,7 +676,7 @@ public:
                                   const LocationContext *LCtx,
                                   ProgramStateRef State);
 
-  /// Evaluate a call, running pre- and post-call checks and allowing checkers
+  /// Evaluate a call, running pre- and post-call checkers and allowing checkers
   /// to be responsible for handling the evaluation of the call itself.
   void evalCall(ExplodedNodeSet &Dst, ExplodedNode *Pred,
                 const CallEvent &Call);
@@ -802,9 +810,14 @@ private:
   /// or unusable for any reason, a dummy temporary region is returned, and the
   /// IsConstructorWithImproperlyModeledTargetRegion flag is set in \p CallOpts.
   /// Returns the updated program state and the new object's this-region.
-  std::pair<ProgramStateRef, SVal> prepareForObjectConstruction(
+  std::pair<ProgramStateRef, SVal> handleConstructionContext(
       const Expr *E, ProgramStateRef State, const LocationContext *LCtx,
       const ConstructionContext *CC, EvalCallOptions &CallOpts);
+
+  /// Common code that handles either a CXXConstructExpr or a
+  /// CXXInheritedCtorInitExpr.
+  void handleConstructor(const Expr *E, ExplodedNode *Pred,
+                         ExplodedNodeSet &Dst);
 
   /// Store the location of a C++ object corresponding to a statement
   /// until the statement is actually encountered. For example, if a DeclStmt

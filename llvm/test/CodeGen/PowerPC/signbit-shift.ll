@@ -29,7 +29,7 @@ define i32 @add_zext_ifpos(i32 %x) {
 define <4 x i32> @add_zext_ifpos_vec_splat(<4 x i32> %x) {
 ; CHECK-LABEL: add_zext_ifpos_vec_splat:
 ; CHECK:       # %bb.0:
-; CHECK-NEXT:    vspltisb 3, -1
+; CHECK-NEXT:    xxleqv 35, 35, 35
 ; CHECK-NEXT:    addis 3, 2, .LCPI2_0@toc@ha
 ; CHECK-NEXT:    addi 3, 3, .LCPI2_0@toc@l
 ; CHECK-NEXT:    vcmpgtsw 2, 2, 3
@@ -46,7 +46,7 @@ define i32 @sel_ifpos_tval_bigger(i32 %x) {
 ; CHECK-LABEL: sel_ifpos_tval_bigger:
 ; CHECK:       # %bb.0:
 ; CHECK-NEXT:    li 4, 41
-; CHECK-NEXT:    cmpwi 0, 3, -1
+; CHECK-NEXT:    cmpwi 3, -1
 ; CHECK-NEXT:    li 3, 42
 ; CHECK-NEXT:    isel 3, 3, 4, 1
 ; CHECK-NEXT:    blr
@@ -81,7 +81,7 @@ define i32 @add_sext_ifpos(i32 %x) {
 define <4 x i32> @add_sext_ifpos_vec_splat(<4 x i32> %x) {
 ; CHECK-LABEL: add_sext_ifpos_vec_splat:
 ; CHECK:       # %bb.0:
-; CHECK-NEXT:    vspltisb 3, -1
+; CHECK-NEXT:    xxleqv 35, 35, 35
 ; CHECK-NEXT:    addis 3, 2, .LCPI6_0@toc@ha
 ; CHECK-NEXT:    addi 3, 3, .LCPI6_0@toc@l
 ; CHECK-NEXT:    vcmpgtsw 2, 2, 3
@@ -98,7 +98,7 @@ define i32 @sel_ifpos_fval_bigger(i32 %x) {
 ; CHECK-LABEL: sel_ifpos_fval_bigger:
 ; CHECK:       # %bb.0:
 ; CHECK-NEXT:    li 4, 42
-; CHECK-NEXT:    cmpwi 0, 3, -1
+; CHECK-NEXT:    cmpwi 3, -1
 ; CHECK-NEXT:    li 3, 41
 ; CHECK-NEXT:    isel 3, 3, 4, 1
 ; CHECK-NEXT:    blr
@@ -135,7 +135,7 @@ define i32 @sel_ifneg_tval_bigger(i32 %x) {
 ; CHECK-LABEL: sel_ifneg_tval_bigger:
 ; CHECK:       # %bb.0:
 ; CHECK-NEXT:    li 4, 41
-; CHECK-NEXT:    cmpwi 0, 3, 0
+; CHECK-NEXT:    cmpwi 3, 0
 ; CHECK-NEXT:    li 3, 42
 ; CHECK-NEXT:    isel 3, 3, 4, 0
 ; CHECK-NEXT:    blr
@@ -170,7 +170,7 @@ define i32 @sel_ifneg_fval_bigger(i32 %x) {
 ; CHECK-LABEL: sel_ifneg_fval_bigger:
 ; CHECK:       # %bb.0:
 ; CHECK-NEXT:    li 4, 42
-; CHECK-NEXT:    cmpwi 0, 3, 0
+; CHECK-NEXT:    cmpwi 3, 0
 ; CHECK-NEXT:    li 3, 41
 ; CHECK-NEXT:    isel 3, 3, 4, 0
 ; CHECK-NEXT:    blr

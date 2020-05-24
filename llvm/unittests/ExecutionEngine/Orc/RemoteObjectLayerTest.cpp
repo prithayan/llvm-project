@@ -16,6 +16,19 @@
 using namespace llvm;
 using namespace llvm::orc;
 
+// Writing 64-bit XCOFF isn't supported yet, so we need to disable some tests on
+// AIX till it is.
+#ifdef _AIX
+#define SKIPTEST_IF_UNSUPPORTED()                                              \
+  do {                                                                         \
+    return;                                                                    \
+  } while (false)
+#else
+#define SKIPTEST_IF_UNSUPPORTED()                                              \
+  do {                                                                         \
+  } while (false)
+#endif
+
 namespace {
 
 class MockObjectLayer {
@@ -105,10 +118,11 @@ MockObjectLayer::ObjectPtr createTestObject() {
   B.CreateRet(ConstantInt::getSigned(Type::getInt32Ty(Ctx), 42));
 
   SimpleCompiler IRCompiler(*TM);
-  return IRCompiler(*MB.getModule());
+  return cantFail(IRCompiler(*MB.getModule()));
 }
 
 TEST(RemoteObjectLayer, AddObject) {
+  SKIPTEST_IF_UNSUPPORTED();
   llvm::orc::rpc::registerStringError<rpc::RawByteChannel>();
   auto TestObject = createTestObject();
   if (!TestObject)
@@ -127,7 +141,8 @@ TEST(RemoteObjectLayer, AddObject) {
   std::copy(ObjBytes.begin(), ObjBytes.end(), ObjContents.begin());
 
   RPCEndpoint ClientEP(*Channels.first, true);
-  RemoteObjectClientLayer<RPCEndpoint> Client(ClientEP, ReportError);
+  RemoteObjectClientLayer<RPCEndpoint> Client(AcknowledgeORCv1Deprecation,
+                                              ClientEP, ReportError);
 
   RPCEndpoint ServerEP(*Channels.second, true);
   MockObjectLayer BaseLayer(
@@ -144,9 +159,8 @@ TEST(RemoteObjectLayer, AddObject) {
 
       return 1;
     });
-  RemoteObjectServerLayer<MockObjectLayer, RPCEndpoint> Server(BaseLayer,
-                                                               ServerEP,
-                                                               ReportError);
+  RemoteObjectServerLayer<MockObjectLayer, RPCEndpoint> Server(
+      AcknowledgeORCv1Deprecation, BaseLayer, ServerEP, ReportError);
 
   bool Finished = false;
   ServerEP.addHandler<remote::utils::TerminateSession>(
@@ -166,6 +180,7 @@ TEST(RemoteObjectLayer, AddObject) {
 }
 
 TEST(RemoteObjectLayer, AddObjectFailure) {
+  SKIPTEST_IF_UNSUPPORTED();
   llvm::orc::rpc::registerStringError<rpc::RawByteChannel>();
   auto TestObject = createTestObject();
   if (!TestObject)
@@ -181,7 +196,8 @@ TEST(RemoteObjectLayer, AddObjectFailure) {
     };
 
   RPCEndpoint ClientEP(*Channels.first, true);
-  RemoteObjectClientLayer<RPCEndpoint> Client(ClientEP, ReportError);
+  RemoteObjectClientLayer<RPCEndpoint> Client(AcknowledgeORCv1Deprecation,
+                                              ClientEP, ReportError);
 
   RPCEndpoint ServerEP(*Channels.second, true);
   MockObjectLayer BaseLayer(
@@ -191,9 +207,8 @@ TEST(RemoteObjectLayer, AddObjectFailure) {
       return make_error<StringError>("AddObjectFailure - Test Message",
                                      inconvertibleErrorCode());
     });
-  RemoteObjectServerLayer<MockObjectLayer, RPCEndpoint> Server(BaseLayer,
-                                                               ServerEP,
-                                                               ReportError);
+  RemoteObjectServerLayer<MockObjectLayer, RPCEndpoint> Server(
+      AcknowledgeORCv1Deprecation, BaseLayer, ServerEP, ReportError);
 
   bool Finished = false;
   ServerEP.addHandler<remote::utils::TerminateSession>(
@@ -221,6 +236,7 @@ TEST(RemoteObjectLayer, AddObjectFailure) {
 
 
 TEST(RemoteObjectLayer, RemoveObject) {
+  SKIPTEST_IF_UNSUPPORTED();
   llvm::orc::rpc::registerStringError<rpc::RawByteChannel>();
   auto TestObject = createTestObject();
   if (!TestObject)
@@ -233,7 +249,8 @@ TEST(RemoteObjectLayer, RemoveObject) {
   };
 
   RPCEndpoint ClientEP(*Channels.first, true);
-  RemoteObjectClientLayer<RPCEndpoint> Client(ClientEP, ReportError);
+  RemoteObjectClientLayer<RPCEndpoint> Client(AcknowledgeORCv1Deprecation,
+                                              ClientEP, ReportError);
 
   RPCEndpoint ServerEP(*Channels.second, true);
 
@@ -243,9 +260,8 @@ TEST(RemoteObjectLayer, RemoveObject) {
       SymTab[1] = MockObjectLayer::LookupFn();
       return 1;
     });
-  RemoteObjectServerLayer<MockObjectLayer, RPCEndpoint> Server(BaseLayer,
-                                                               ServerEP,
-                                                               ReportError);
+  RemoteObjectServerLayer<MockObjectLayer, RPCEndpoint> Server(
+      AcknowledgeORCv1Deprecation, BaseLayer, ServerEP, ReportError);
 
   bool Finished = false;
   ServerEP.addHandler<remote::utils::TerminateSession>(
@@ -268,6 +284,7 @@ TEST(RemoteObjectLayer, RemoveObject) {
 }
 
 TEST(RemoteObjectLayer, RemoveObjectFailure) {
+  SKIPTEST_IF_UNSUPPORTED();
   llvm::orc::rpc::registerStringError<rpc::RawByteChannel>();
   auto TestObject = createTestObject();
   if (!TestObject)
@@ -283,7 +300,8 @@ TEST(RemoteObjectLayer, RemoveObjectFailure) {
     };
 
   RPCEndpoint ClientEP(*Channels.first, true);
-  RemoteObjectClientLayer<RPCEndpoint> Client(ClientEP, ReportError);
+  RemoteObjectClientLayer<RPCEndpoint> Client(AcknowledgeORCv1Deprecation,
+                                              ClientEP, ReportError);
 
   RPCEndpoint ServerEP(*Channels.second, true);
 
@@ -294,9 +312,8 @@ TEST(RemoteObjectLayer, RemoveObjectFailure) {
        MockObjectLayer::SymbolLookupTable &SymTab) {
       return 42;
     });
-  RemoteObjectServerLayer<MockObjectLayer, RPCEndpoint> Server(BaseLayer,
-                                                               ServerEP,
-                                                               ReportError);
+  RemoteObjectServerLayer<MockObjectLayer, RPCEndpoint> Server(
+      AcknowledgeORCv1Deprecation, BaseLayer, ServerEP, ReportError);
 
   bool Finished = false;
   ServerEP.addHandler<remote::utils::TerminateSession>(
@@ -324,6 +341,7 @@ TEST(RemoteObjectLayer, RemoveObjectFailure) {
 }
 
 TEST(RemoteObjectLayer, FindSymbol) {
+  SKIPTEST_IF_UNSUPPORTED();
   llvm::orc::rpc::registerStringError<rpc::RawByteChannel>();
   auto TestObject = createTestObject();
   if (!TestObject)
@@ -339,7 +357,8 @@ TEST(RemoteObjectLayer, FindSymbol) {
     };
 
   RPCEndpoint ClientEP(*Channels.first, true);
-  RemoteObjectClientLayer<RPCEndpoint> Client(ClientEP, ReportError);
+  RemoteObjectClientLayer<RPCEndpoint> Client(AcknowledgeORCv1Deprecation,
+                                              ClientEP, ReportError);
 
   RPCEndpoint ServerEP(*Channels.second, true);
 
@@ -353,14 +372,13 @@ TEST(RemoteObjectLayer, FindSymbol) {
           if (Name == "foobar")
             return JITSymbol(0x12348765, JITSymbolFlags::Exported);
           if (Name == "badsymbol")
-            return make_error<JITSymbolNotFound>(Name);
+            return make_error<JITSymbolNotFound>(std::string(Name));
           return nullptr;
         };
       return 42;
     });
-  RemoteObjectServerLayer<MockObjectLayer, RPCEndpoint> Server(BaseLayer,
-                                                               ServerEP,
-                                                               ReportError);
+  RemoteObjectServerLayer<MockObjectLayer, RPCEndpoint> Server(
+      AcknowledgeORCv1Deprecation, BaseLayer, ServerEP, ReportError);
 
   bool Finished = false;
   ServerEP.addHandler<remote::utils::TerminateSession>(
@@ -406,6 +424,7 @@ TEST(RemoteObjectLayer, FindSymbol) {
 }
 
 TEST(RemoteObjectLayer, FindSymbolIn) {
+  SKIPTEST_IF_UNSUPPORTED();
   llvm::orc::rpc::registerStringError<rpc::RawByteChannel>();
   auto TestObject = createTestObject();
   if (!TestObject)
@@ -421,7 +440,8 @@ TEST(RemoteObjectLayer, FindSymbolIn) {
     };
 
   RPCEndpoint ClientEP(*Channels.first, true);
-  RemoteObjectClientLayer<RPCEndpoint> Client(ClientEP, ReportError);
+  RemoteObjectClientLayer<RPCEndpoint> Client(AcknowledgeORCv1Deprecation,
+                                              ClientEP, ReportError);
 
   RPCEndpoint ServerEP(*Channels.second, true);
 
@@ -434,7 +454,7 @@ TEST(RemoteObjectLayer, FindSymbolIn) {
         [](StringRef Name, bool ExportedSymbolsOnly) -> JITSymbol {
           if (Name == "foobar")
             return JITSymbol(0x12348765, JITSymbolFlags::Exported);
-          return make_error<JITSymbolNotFound>(Name);
+          return make_error<JITSymbolNotFound>(std::string(Name));
         };
       // Dummy symbol table entry - this should not be visible to
       // findSymbolIn.
@@ -442,14 +462,13 @@ TEST(RemoteObjectLayer, FindSymbolIn) {
         [](StringRef Name, bool ExportedSymbolsOnly) -> JITSymbol {
           if (Name == "barbaz")
             return JITSymbol(0xdeadbeef, JITSymbolFlags::Exported);
-          return make_error<JITSymbolNotFound>(Name);
+          return make_error<JITSymbolNotFound>(std::string(Name));
         };
 
       return 42;
     });
-  RemoteObjectServerLayer<MockObjectLayer, RPCEndpoint> Server(BaseLayer,
-                                                               ServerEP,
-                                                               ReportError);
+  RemoteObjectServerLayer<MockObjectLayer, RPCEndpoint> Server(
+      AcknowledgeORCv1Deprecation, BaseLayer, ServerEP, ReportError);
 
   bool Finished = false;
   ServerEP.addHandler<remote::utils::TerminateSession>(
@@ -484,6 +503,7 @@ TEST(RemoteObjectLayer, FindSymbolIn) {
 }
 
 TEST(RemoteObjectLayer, EmitAndFinalize) {
+  SKIPTEST_IF_UNSUPPORTED();
   llvm::orc::rpc::registerStringError<rpc::RawByteChannel>();
   auto TestObject = createTestObject();
   if (!TestObject)
@@ -496,7 +516,8 @@ TEST(RemoteObjectLayer, EmitAndFinalize) {
   };
 
   RPCEndpoint ClientEP(*Channels.first, true);
-  RemoteObjectClientLayer<RPCEndpoint> Client(ClientEP, ReportError);
+  RemoteObjectClientLayer<RPCEndpoint> Client(AcknowledgeORCv1Deprecation,
+                                              ClientEP, ReportError);
 
   RPCEndpoint ServerEP(*Channels.second, true);
 
@@ -506,9 +527,8 @@ TEST(RemoteObjectLayer, EmitAndFinalize) {
       SymTab[1] = MockObjectLayer::LookupFn();
       return 1;
     });
-  RemoteObjectServerLayer<MockObjectLayer, RPCEndpoint> Server(BaseLayer,
-                                                               ServerEP,
-                                                               ReportError);
+  RemoteObjectServerLayer<MockObjectLayer, RPCEndpoint> Server(
+      AcknowledgeORCv1Deprecation, BaseLayer, ServerEP, ReportError);
 
   bool Finished = false;
   ServerEP.addHandler<remote::utils::TerminateSession>(
@@ -532,6 +552,7 @@ TEST(RemoteObjectLayer, EmitAndFinalize) {
 }
 
 TEST(RemoteObjectLayer, EmitAndFinalizeFailure) {
+  SKIPTEST_IF_UNSUPPORTED();
   llvm::orc::rpc::registerStringError<rpc::RawByteChannel>();
   auto TestObject = createTestObject();
   if (!TestObject)
@@ -547,7 +568,8 @@ TEST(RemoteObjectLayer, EmitAndFinalizeFailure) {
     };
 
   RPCEndpoint ClientEP(*Channels.first, true);
-  RemoteObjectClientLayer<RPCEndpoint> Client(ClientEP, ReportError);
+  RemoteObjectClientLayer<RPCEndpoint> Client(AcknowledgeORCv1Deprecation,
+                                              ClientEP, ReportError);
 
   RPCEndpoint ServerEP(*Channels.second, true);
 
@@ -556,9 +578,8 @@ TEST(RemoteObjectLayer, EmitAndFinalizeFailure) {
        MockObjectLayer::SymbolLookupTable &SymTab) {
       return 1;
     });
-  RemoteObjectServerLayer<MockObjectLayer, RPCEndpoint> Server(BaseLayer,
-                                                               ServerEP,
-                                                               ReportError);
+  RemoteObjectServerLayer<MockObjectLayer, RPCEndpoint> Server(
+      AcknowledgeORCv1Deprecation, BaseLayer, ServerEP, ReportError);
 
   bool Finished = false;
   ServerEP.addHandler<remote::utils::TerminateSession>(

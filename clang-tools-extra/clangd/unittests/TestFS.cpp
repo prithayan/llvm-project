@@ -6,7 +6,11 @@
 //
 //===----------------------------------------------------------------------===//
 #include "TestFS.h"
+#include "GlobalCompilationDatabase.h"
 #include "URI.h"
+#include "support/Path.h"
+#include "llvm/ADT/None.h"
+#include "llvm/ADT/Optional.h"
 #include "llvm/ADT/StringRef.h"
 #include "llvm/Support/Errc.h"
 #include "llvm/Support/Path.h"
@@ -36,9 +40,13 @@ MockCompilationDatabase::MockCompilationDatabase(llvm::StringRef Directory,
   // -ffreestanding avoids implicit stdc-predef.h.
 }
 
+llvm::Optional<ProjectInfo>
+MockCompilationDatabase::getProjectInfo(PathRef File) const {
+  return ProjectInfo{std::string(Directory)};
+}
+
 llvm::Optional<tooling::CompileCommand>
-MockCompilationDatabase::getCompileCommand(PathRef File,
-                                           ProjectInfo *Project) const {
+MockCompilationDatabase::getCompileCommand(PathRef File) const {
   if (ExtraClangFlags.empty())
     return None;
 
@@ -49,16 +57,14 @@ MockCompilationDatabase::getCompileCommand(PathRef File,
   CommandLine.insert(CommandLine.begin(), "clang");
   if (RelPathPrefix.empty()) {
     // Use the absolute path in the compile command.
-    CommandLine.push_back(File);
+    CommandLine.push_back(std::string(File));
   } else {
     // Build a relative path using RelPathPrefix.
     llvm::SmallString<32> RelativeFilePath(RelPathPrefix);
     llvm::sys::path::append(RelativeFilePath, FileName);
-    CommandLine.push_back(RelativeFilePath.str());
+    CommandLine.push_back(std::string(RelativeFilePath.str()));
   }
 
-  if (Project)
-    Project->SourceRoot = Directory;
   return {tooling::CompileCommand(Directory != llvm::StringRef()
                                       ? Directory
                                       : llvm::sys::path::parent_path(File),
@@ -80,7 +86,7 @@ std::string testPath(PathRef File) {
   llvm::sys::path::native(NativeFile);
   llvm::SmallString<32> Path;
   llvm::sys::path::append(Path, testRoot(), NativeFile);
-  return Path.str();
+  return std::string(Path.str());
 }
 
 /// unittest: is a scheme that refers to files relative to testRoot().

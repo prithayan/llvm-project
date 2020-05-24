@@ -82,10 +82,14 @@ enum RuntimeLibcallSignature {
   func_iPTR_i32,
   func_iPTR_i64,
   func_iPTR_i64_i64,
+  func_iPTR_i64_i64_i32,
   func_iPTR_i64_i64_i64_i64,
   func_iPTR_i64_i64_i64_i64_i64_i64,
   i32_func_i64_i64,
   i32_func_i64_i64_i64_i64,
+  iPTR_func_f32,
+  iPTR_func_f64,
+  iPTR_func_i64_i64,
   unsupported
 };
 
@@ -170,10 +174,13 @@ struct RuntimeLibcallSignatureTable {
     Table[RTLIB::FMA_F128] = func_iPTR_i64_i64_i64_i64_i64_i64;
     Table[RTLIB::POWI_F32] = f32_func_f32_i32;
     Table[RTLIB::POWI_F64] = f64_func_f64_i32;
-    Table[RTLIB::POWI_F128] = func_iPTR_i64_i64_i64_i64;
+    Table[RTLIB::POWI_F128] = func_iPTR_i64_i64_i32;
     Table[RTLIB::SQRT_F32] = f32_func_f32;
     Table[RTLIB::SQRT_F64] = f64_func_f64;
     Table[RTLIB::SQRT_F128] = func_iPTR_i64_i64;
+    Table[RTLIB::CBRT_F32] = f32_func_f32;
+    Table[RTLIB::CBRT_F64] = f64_func_f64;
+    Table[RTLIB::CBRT_F128] = func_iPTR_i64_i64;
     Table[RTLIB::LOG_F32] = f32_func_f32;
     Table[RTLIB::LOG_F64] = f64_func_f64;
     Table[RTLIB::LOG_F128] = func_iPTR_i64_i64;
@@ -216,6 +223,18 @@ struct RuntimeLibcallSignatureTable {
     Table[RTLIB::ROUND_F32] = f32_func_f32;
     Table[RTLIB::ROUND_F64] = f64_func_f64;
     Table[RTLIB::ROUND_F128] = func_iPTR_i64_i64;
+    Table[RTLIB::LROUND_F32] = iPTR_func_f32;
+    Table[RTLIB::LROUND_F64] = iPTR_func_f64;
+    Table[RTLIB::LROUND_F128] = iPTR_func_i64_i64;
+    Table[RTLIB::LLROUND_F32] = i64_func_f32;
+    Table[RTLIB::LLROUND_F64] = i64_func_f64;
+    Table[RTLIB::LLROUND_F128] = i64_func_i64_i64;
+    Table[RTLIB::LRINT_F32] = iPTR_func_f32;
+    Table[RTLIB::LRINT_F64] = iPTR_func_f64;
+    Table[RTLIB::LRINT_F128] = iPTR_func_i64_i64;
+    Table[RTLIB::LLRINT_F32] = i64_func_f32;
+    Table[RTLIB::LLRINT_F64] = i64_func_f64;
+    Table[RTLIB::LLRINT_F128] = i64_func_i64_i64;
     Table[RTLIB::FLOOR_F32] = f32_func_f32;
     Table[RTLIB::FLOOR_F64] = f64_func_f64;
     Table[RTLIB::FLOOR_F128] = func_iPTR_i64_i64;
@@ -301,12 +320,6 @@ struct RuntimeLibcallSignatureTable {
     Table[RTLIB::UO_F32] = i32_func_f32_f32;
     Table[RTLIB::UO_F64] = i32_func_f64_f64;
     Table[RTLIB::UO_F128] = i32_func_i64_i64_i64_i64;
-    // O_FXX has the weird property that it uses the same libcall name as UO_FXX
-    // This breaks our name-based lookup. Fortunately only the UO family of
-    // libcalls appears to be actually used.
-    Table[RTLIB::O_F32] = unsupported;
-    Table[RTLIB::O_F64] = unsupported;
-    Table[RTLIB::O_F128] = unsupported;
 
     // Memory
     Table[RTLIB::MEMCPY] = iPTR_func_iPTR_iPTR_iPTR;
@@ -315,6 +328,9 @@ struct RuntimeLibcallSignatureTable {
 
     // __stack_chk_fail
     Table[RTLIB::STACKPROTECTOR_CHECK_FAIL] = func;
+
+    // Return address handling
+    Table[RTLIB::RETURN_ADDRESS] = i32_func_i32;
 
     // Element-wise Atomic memory
     // TODO: Fix these when we implement atomic support
@@ -490,6 +506,8 @@ struct StaticLibcallNameMap {
     // consistent with the f64 and f128 names.
     Map["__extendhfsf2"] = RTLIB::FPEXT_F16_F32;
     Map["__truncsfhf2"] = RTLIB::FPROUND_F32_F16;
+
+    Map["emscripten_return_address"] = RTLIB::RETURN_ADDRESS;
   }
 };
 
@@ -815,6 +833,12 @@ void llvm::getLibcallSignature(const WebAssemblySubtarget &Subtarget,
     Params.push_back(wasm::ValType::I64);
     Params.push_back(wasm::ValType::I64);
     break;
+  case func_iPTR_i64_i64_i32:
+    Params.push_back(PtrTy);
+    Params.push_back(wasm::ValType::I64);
+    Params.push_back(wasm::ValType::I64);
+    Params.push_back(wasm::ValType::I32);
+    break;
   case func_iPTR_i64_i64_i64_i64:
     Params.push_back(PtrTy);
     Params.push_back(wasm::ValType::I64);
@@ -840,6 +864,19 @@ void llvm::getLibcallSignature(const WebAssemblySubtarget &Subtarget,
     Rets.push_back(wasm::ValType::I32);
     Params.push_back(wasm::ValType::I64);
     Params.push_back(wasm::ValType::I64);
+    Params.push_back(wasm::ValType::I64);
+    Params.push_back(wasm::ValType::I64);
+    break;
+  case iPTR_func_f32:
+    Rets.push_back(PtrTy);
+    Params.push_back(wasm::ValType::F32);
+    break;
+  case iPTR_func_f64:
+    Rets.push_back(PtrTy);
+    Params.push_back(wasm::ValType::F64);
+    break;
+  case iPTR_func_i64_i64:
+    Rets.push_back(PtrTy);
     Params.push_back(wasm::ValType::I64);
     Params.push_back(wasm::ValType::I64);
     break;

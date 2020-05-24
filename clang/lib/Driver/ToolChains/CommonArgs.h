@@ -45,13 +45,6 @@ void AddRunTimeLibs(const ToolChain &TC, const Driver &D,
                     llvm::opt::ArgStringList &CmdArgs,
                     const llvm::opt::ArgList &Args);
 
-void AddOpenMPLinkerScript(const ToolChain &TC, Compilation &C,
-                           const InputInfo &Output,
-                           const InputInfoList &Inputs,
-                           const llvm::opt::ArgList &Args,
-                           llvm::opt::ArgStringList &CmdArgs,
-                           const JobAction &JA);
-
 void AddHIPLinkerScript(const ToolChain &TC, Compilation &C,
                         const InputInfo &Output, const InputInfoList &Inputs,
                         const llvm::opt::ArgList &Args,
@@ -65,7 +58,7 @@ void SplitDebugInfo(const ToolChain &TC, Compilation &C, const Tool &T,
                     const JobAction &JA, const llvm::opt::ArgList &Args,
                     const InputInfo &Output, const char *OutFile);
 
-void AddGoldPlugin(const ToolChain &ToolChain, const llvm::opt::ArgList &Args,
+void addLTOOptions(const ToolChain &ToolChain, const llvm::opt::ArgList &Args,
                    llvm::opt::ArgStringList &CmdArgs, const InputInfo &Output,
                    const InputInfo &Input, bool IsThinLTO);
 
@@ -74,6 +67,9 @@ ParsePICArgs(const ToolChain &ToolChain, const llvm::opt::ArgList &Args);
 
 unsigned ParseFunctionAlignment(const ToolChain &TC,
                                 const llvm::opt::ArgList &Args);
+
+unsigned ParseDebugDefaultVersion(const ToolChain &TC,
+                                  const llvm::opt::ArgList &Args);
 
 void AddAssemblerKPIC(const ToolChain &ToolChain,
                       const llvm::opt::ArgList &Args,
@@ -84,6 +80,7 @@ void addArchSpecificRPath(const ToolChain &TC, const llvm::opt::ArgList &Args,
 /// Returns true, if an OpenMP runtime has been added.
 bool addOpenMPRuntime(llvm::opt::ArgStringList &CmdArgs, const ToolChain &TC,
                       const llvm::opt::ArgList &Args,
+                      bool ForceStaticHostRuntime = false,
                       bool IsOffloadingHost = false, bool GompNeedsRT = false);
 
 llvm::opt::Arg *getLastProfileUseArg(const llvm::opt::ArgList &Args);
@@ -91,12 +88,18 @@ llvm::opt::Arg *getLastProfileSampleUseArg(const llvm::opt::ArgList &Args);
 
 bool isObjCAutoRefCount(const llvm::opt::ArgList &Args);
 
-unsigned getLTOParallelism(const llvm::opt::ArgList &Args, const Driver &D);
+llvm::StringRef getLTOParallelism(const llvm::opt::ArgList &Args,
+                                  const Driver &D);
 
 bool areOptimizationsEnabled(const llvm::opt::ArgList &Args);
 
 bool isUseSeparateSections(const llvm::Triple &Triple);
 
+/// \p EnvVar is split by system delimiter for environment variables.
+/// If \p ArgName is "-I", "-L", or an empty string, each entry from \p EnvVar
+/// is prefixed by \p ArgName then added to \p Args. Otherwise, for each
+/// entry of \p EnvVar, \p ArgName is added to \p Args first, then the entry
+/// itself is added.
 void addDirectoryList(const llvm::opt::ArgList &Args,
                       llvm::opt::ArgStringList &CmdArgs, const char *ArgName,
                       const char *EnvVar);

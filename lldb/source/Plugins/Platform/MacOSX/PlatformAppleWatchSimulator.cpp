@@ -1,4 +1,4 @@
-//===-- PlatformAppleWatchSimulator.cpp -------------------------*- C++ -*-===//
+//===-- PlatformAppleWatchSimulator.cpp -----------------------------------===//
 //
 // Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
 // See https://llvm.org/LICENSE.txt for license information.
@@ -69,8 +69,8 @@ PlatformSP PlatformAppleWatchSimulator::CreateInstance(bool force,
     const char *triple_cstr =
         arch ? arch->GetTriple().getTriple().c_str() : "<null>";
 
-    log->Printf("PlatformAppleWatchSimulator::%s(force=%s, arch={%s,%s})",
-                __FUNCTION__, force ? "true" : "false", arch_name, triple_cstr);
+    LLDB_LOGF(log, "PlatformAppleWatchSimulator::%s(force=%s, arch={%s,%s})",
+              __FUNCTION__, force ? "true" : "false", arch_name, triple_cstr);
   }
 
   bool create = force;
@@ -119,17 +119,15 @@ PlatformSP PlatformAppleWatchSimulator::CreateInstance(bool force,
     }
   }
   if (create) {
-    if (log)
-      log->Printf("PlatformAppleWatchSimulator::%s() creating platform",
-                  __FUNCTION__);
+    LLDB_LOGF(log, "PlatformAppleWatchSimulator::%s() creating platform",
+              __FUNCTION__);
 
     return PlatformSP(new PlatformAppleWatchSimulator());
   }
 
-  if (log)
-    log->Printf(
-        "PlatformAppleWatchSimulator::%s() aborting creation of platform",
-        __FUNCTION__);
+  LLDB_LOGF(log,
+            "PlatformAppleWatchSimulator::%s() aborting creation of platform",
+            __FUNCTION__);
 
   return PlatformSP();
 }
@@ -257,14 +255,14 @@ EnumerateDirectoryCallback(void *baton, llvm::sys::fs::file_type ft,
 const char *PlatformAppleWatchSimulator::GetSDKDirectoryAsCString() {
   std::lock_guard<std::mutex> guard(m_sdk_dir_mutex);
   if (m_sdk_directory.empty()) {
-    const char *developer_dir = GetDeveloperDirectory();
-    if (developer_dir) {
+    if (FileSpec fspec = GetXcodeDeveloperDirectory()) {
+      std::string developer_dir = fspec.GetPath();
       char sdks_directory[PATH_MAX];
       char sdk_dirname[PATH_MAX];
       sdk_dirname[0] = '\0';
       snprintf(sdks_directory, sizeof(sdks_directory),
                "%s/Platforms/AppleWatchSimulator.platform/Developer/SDKs",
-               developer_dir);
+               developer_dir.c_str());
       FileSpec simulator_sdk_spec;
       bool find_directories = true;
       bool find_files = false;
@@ -363,14 +361,13 @@ uint32_t PlatformAppleWatchSimulator::FindProcesses(
 
   // Now we filter them down to only the WatchOS triples
   for (uint32_t i = 0; i < n; ++i) {
-    const ProcessInstanceInfo &proc_info =
-        all_osx_process_infos.GetProcessInfoAtIndex(i);
+    const ProcessInstanceInfo &proc_info = all_osx_process_infos[i];
     if (proc_info.GetArchitecture().GetTriple().getOS() ==
         llvm::Triple::WatchOS) {
-      process_infos.Append(proc_info);
+      process_infos.push_back(proc_info);
     }
   }
-  return process_infos.GetSize();
+  return process_infos.size();
 }
 
 bool PlatformAppleWatchSimulator::GetSupportedArchitectureAtIndex(

@@ -156,3 +156,22 @@ namespace ClassScopeExplicitSpecializations {
   static_assert(A<4>().f<0>() == 2, "");
   static_assert(A<4>().f<1>() == 1, "");
 }
+
+namespace DependentMemberExpr {
+#ifndef NO_ERRORS
+  // This used to mark 'f' invalid without producing any diagnostic. That's a
+  // little hard to detect, but we can make sure that constexpr evaluation
+  // fails when it should.
+  static_assert(A<int>().f() == 1); // expected-error {{static_assert failed}}
+#endif
+}
+
+namespace DependentTemplateName {
+  struct HasMember {
+    template <class T> struct Member;
+  };
+
+  void test() {
+    getWithIdentifier<HasMember>();
+  }
+}

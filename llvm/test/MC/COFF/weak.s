@@ -54,12 +54,12 @@ LBB0_2:                                 # %return
 // CHECK-NEXT:   AuxSymbolCount: 1
 // CHECK-NEXT:   AuxWeakExternal {
 // CHECK-NEXT:     Linked: .weak._test_weak.default
-// CHECK-NEXT:      Search: Library
+// CHECK-NEXT:      Search: Alias
 // CHECK-NEXT:   }
 // CHECK-NEXT: }
 
 // CHECK:      Symbol {
-// CHECK:        Name:                .weak._test_weak.default
+// CHECK:        Name:                .weak._test_weak.default._main
 // CHECK-NEXT:   Value:               0
 // CHECK-NEXT:   Section:             IMAGE_SYM_ABSOLUTE (-1)
 // CHECK-NEXT:   BaseType:            Null
@@ -78,12 +78,12 @@ LBB0_2:                                 # %return
 // CHECK-NEXT:   AuxSymbolCount: 1
 // CHECK-NEXT:   AuxWeakExternal {
 // CHECK-NEXT:     Linked: .weak._test_weak_alias.default
-// CHECK-NEXT:      Search: Library
+// CHECK-NEXT:      Search: Alias
 // CHECK-NEXT:   }
 // CHECK-NEXT: }
 
 // CHECK:      Symbol {
-// CHECK:        Name: .weak._test_weak_alias.default
+// CHECK:        Name: .weak._test_weak_alias.default._main
 // CHECK-NEXT:   Value: 0
 // CHECK-NEXT:   Section: .text
 // CHECK-NEXT:   BaseType: Null

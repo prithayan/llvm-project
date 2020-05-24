@@ -219,12 +219,10 @@ define float @fsub_0_0_x(float %a) {
 ; fsub nsz 0.0, (fneg X) ==> X
 define float @fneg_x(float %a) {
 ; CHECK-LABEL: @fneg_x(
-; CHECK-NEXT:    [[T1:%.*]] = fsub float 0.000000e+00, [[A:%.*]]
-; CHECK-NEXT:    [[RET:%.*]] = fneg nsz float [[T1]]
-; CHECK-NEXT:    ret float [[RET]]
+; CHECK-NEXT:    ret float [[A:%.*]]
 ;
-  %t1 = fsub float 0.0, %a
-  %ret = fneg nsz float %t1
+  %t1 = fneg float %a
+  %ret = fsub nsz float 0.0, %t1
   ret float %ret
 }
 
@@ -239,12 +237,10 @@ define <2 x float> @fsub_0_0_x_vec_undef1(<2 x float> %a) {
 
 define <2 x float> @fneg_x_vec_undef1(<2 x float> %a) {
 ; CHECK-LABEL: @fneg_x_vec_undef1(
-; CHECK-NEXT:    [[T1:%.*]] = fsub <2 x float> <float 0.000000e+00, float undef>, [[A:%.*]]
-; CHECK-NEXT:    [[RET:%.*]] = fneg nsz <2 x float> [[T1]]
-; CHECK-NEXT:    ret <2 x float> [[RET]]
+; CHECK-NEXT:    ret <2 x float> [[A:%.*]]
 ;
-  %t1 = fsub <2 x float> <float 0.0, float undef>, %a
-  %ret = fneg nsz <2 x float> %t1
+  %t1 = fneg <2 x float> %a
+  %ret = fsub nsz <2 x float> <float 0.0, float undef>, %t1
   ret <2 x float> %ret
 }
 
@@ -297,10 +293,13 @@ define float @fold_fadd_nsz_x_0(float %a) {
   ret float %add
 }
 
+; 'nsz' does not guarantee that -0.0 does not occur, so this does not simplify.
+
 define float @fold_fadd_cannot_be_neg0_nsz_src_x_0(float %a, float %b) {
 ; CHECK-LABEL: @fold_fadd_cannot_be_neg0_nsz_src_x_0(
 ; CHECK-NEXT:    [[NSZ:%.*]] = fmul nsz float [[A:%.*]], [[B:%.*]]
-; CHECK-NEXT:    ret float [[NSZ]]
+; CHECK-NEXT:    [[ADD:%.*]] = fadd float [[NSZ]], 0.000000e+00
+; CHECK-NEXT:    ret float [[ADD]]
 ;
   %nsz = fmul nsz float %a, %b
   %add = fadd float %nsz, 0.0
@@ -317,11 +316,14 @@ define float @fold_fadd_cannot_be_neg0_fabs_src_x_0(float %a) {
   ret float %add
 }
 
+; 'nsz' does not guarantee that -0.0 does not occur, so this does not simplify.
+
 define float @fold_fadd_cannot_be_neg0_sqrt_nsz_src_x_0(float %a, float %b) {
 ; CHECK-LABEL: @fold_fadd_cannot_be_neg0_sqrt_nsz_src_x_0(
 ; CHECK-NEXT:    [[NSZ:%.*]] = fmul nsz float [[A:%.*]], [[B:%.*]]
 ; CHECK-NEXT:    [[SQRT:%.*]] = call float @llvm.sqrt.f32(float [[NSZ]])
-; CHECK-NEXT:    ret float [[SQRT]]
+; CHECK-NEXT:    [[ADD:%.*]] = fadd float [[SQRT]], 0.000000e+00
+; CHECK-NEXT:    ret float [[ADD]]
 ;
   %nsz = fmul nsz float %a, %b
   %sqrt = call float @llvm.sqrt.f32(float %nsz)
@@ -329,11 +331,14 @@ define float @fold_fadd_cannot_be_neg0_sqrt_nsz_src_x_0(float %a, float %b) {
   ret float %add
 }
 
+; 'nsz' does not guarantee that -0.0 does not occur, so this does not simplify.
+
 define float @fold_fadd_cannot_be_neg0_canonicalize_nsz_src_x_0(float %a, float %b) {
 ; CHECK-LABEL: @fold_fadd_cannot_be_neg0_canonicalize_nsz_src_x_0(
 ; CHECK-NEXT:    [[NSZ:%.*]] = fmul nsz float [[A:%.*]], [[B:%.*]]
 ; CHECK-NEXT:    [[CANON:%.*]] = call float @llvm.canonicalize.f32(float [[NSZ]])
-; CHECK-NEXT:    ret float [[CANON]]
+; CHECK-NEXT:    [[ADD:%.*]] = fadd float [[CANON]], 0.000000e+00
+; CHECK-NEXT:    ret float [[ADD]]
 ;
   %nsz = fmul nsz float %a, %b
   %canon = call float @llvm.canonicalize.f32(float %nsz)

@@ -24,11 +24,9 @@
 #include "llvm/Analysis/MemoryDependenceAnalysis.h"
 #include "llvm/Analysis/MemoryLocation.h"
 #include "llvm/Analysis/TargetLibraryInfo.h"
-#include "llvm/Transforms/Utils/Local.h"
 #include "llvm/Analysis/ValueTracking.h"
 #include "llvm/IR/Argument.h"
 #include "llvm/IR/BasicBlock.h"
-#include "llvm/IR/CallSite.h"
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/DataLayout.h"
 #include "llvm/IR/DerivedTypes.h"
@@ -49,12 +47,14 @@
 #include "llvm/IR/Type.h"
 #include "llvm/IR/User.h"
 #include "llvm/IR/Value.h"
+#include "llvm/InitializePasses.h"
 #include "llvm/Pass.h"
 #include "llvm/Support/Casting.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/MathExtras.h"
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/Transforms/Scalar.h"
+#include "llvm/Transforms/Utils/Local.h"
 #include <algorithm>
 #include <cassert>
 #include <cstdint>
@@ -68,90 +68,6 @@ STATISTIC(NumMemCpyInstr, "Number of memcpy instructions deleted");
 STATISTIC(NumMemSetInfer, "Number of memsets inferred");
 STATISTIC(NumMoveToCpy,   "Number of memmoves converted to memcpy");
 STATISTIC(NumCpyToSet,    "Number of memcpys converted to memset");
-
-static int64_t GetOffsetFromIndex(const GEPOperator *GEP, unsigned Idx,
-                                  bool &VariableIdxFound,
-                                  const DataLayout &DL) {
-  // Skip over the first indices.
-  gep_type_iterator GTI = gep_type_begin(GEP);
-  for (unsigned i = 1; i != Idx; ++i, ++GTI)
-    /*skip along*/;
-
-  // Compute the offset implied by the rest of the indices.
-  int64_t Offset = 0;
-  for (unsigned i = Idx, e = GEP->getNumOperands(); i != e; ++i, ++GTI) {
-    ConstantInt *OpC = dyn_cast<ConstantInt>(GEP->getOperand(i));
-    if (!OpC)
-      return VariableIdxFound = true;
-    if (OpC->isZero()) continue;  // No offset.
-
-    // Handle struct indices, which add their field offset to the pointer.
-    if (StructType *STy = GTI.getStructTypeOrNull()) {
-      Offset += DL.getStructLayout(STy)->getElementOffset(OpC->getZExtValue());
-      continue;
-    }
-
-    // Otherwise, we have a sequential type like an array or vector.  Multiply
-    // the index by the ElementSize.
-    uint64_t Size = DL.getTypeAllocSize(GTI.getIndexedType());
-    Offset += Size*OpC->getSExtValue();
-  }
-
-  return Offset;
-}
-
-/// Return true if Ptr1 is provably equal to Ptr2 plus a constant offset, and
-/// return that constant offset. For example, Ptr1 might be &A[42], and Ptr2
-/// might be &A[40]. In this case offset would be -8.
-static bool IsPointerOffset(Value *Ptr1, Value *Ptr2, int64_t &Offset,
-                            const DataLayout &DL) {
-  Ptr1 = Ptr1->stripPointerCasts();
-  Ptr2 = Ptr2->stripPointerCasts();
-
-  // Handle the trivial case first.
-  if (Ptr1 == Ptr2) {
-    Offset = 0;
-    return true;
-  }
-
-  GEPOperator *GEP1 = dyn_cast<GEPOperator>(Ptr1);
-  GEPOperator *GEP2 = dyn_cast<GEPOperator>(Ptr2);
-
-  bool VariableIdxFound = false;
-
-  // If one pointer is a GEP and the other isn't, then see if the GEP is a
-  // constant offset from the base, as in "P" and "gep P, 1".
-  if (GEP1 && !GEP2 && GEP1->getOperand(0)->stripPointerCasts() == Ptr2) {
-    Offset = -GetOffsetFromIndex(GEP1, 1, VariableIdxFound, DL);
-    return !VariableIdxFound;
-  }
-
-  if (GEP2 && !GEP1 && GEP2->getOperand(0)->stripPointerCasts() == Ptr1) {
-    Offset = GetOffsetFromIndex(GEP2, 1, VariableIdxFound, DL);
-    return !VariableIdxFound;
-  }
-
-  // Right now we handle the case when Ptr1/Ptr2 are both GEPs with an identical
-  // base.  After that base, they may have some number of common (and
-  // potentially variable) indices.  After that they handle some constant
-  // offset, which determines their offset from each other.  At this point, we
-  // handle no other case.
-  if (!GEP1 || !GEP2 || GEP1->getOperand(0) != GEP2->getOperand(0))
-    return false;
-
-  // Skip any common indices and track the GEP types.
-  unsigned Idx = 1;
-  for (; Idx != GEP1->getNumOperands() && Idx != GEP2->getNumOperands(); ++Idx)
-    if (GEP1->getOperand(Idx) != GEP2->getOperand(Idx))
-      break;
-
-  int64_t Offset1 = GetOffsetFromIndex(GEP1, Idx, VariableIdxFound, DL);
-  int64_t Offset2 = GetOffsetFromIndex(GEP2, Idx, VariableIdxFound, DL);
-  if (VariableIdxFound) return false;
-
-  Offset = Offset2-Offset1;
-  return true;
-}
 
 namespace {
 
@@ -227,6 +143,23 @@ bool MemsetRange::isProfitableToUseMemset(const DataLayout &DL) const {
   return TheStores.size() > NumPointerStores+NumByteStores;
 }
 
+
+static Align findStoreAlignment(const DataLayout &DL, const StoreInst *SI) {
+  return DL.getValueOrABITypeAlignment(SI->getAlign(),
+                                       SI->getOperand(0)->getType());
+}
+
+static Align findLoadAlignment(const DataLayout &DL, const LoadInst *LI) {
+  return DL.getValueOrABITypeAlignment(LI->getAlign(), LI->getType());
+}
+
+static Align findCommonAlignment(const DataLayout &DL, const StoreInst *SI,
+                                 const LoadInst *LI) {
+  Align StoreAlign = findStoreAlignment(DL, SI);
+  Align LoadAlign = findLoadAlignment(DL, LI);
+  return commonAlignment(StoreAlign, LoadAlign);
+}
+
 namespace {
 
 class MemsetRanges {
@@ -256,8 +189,8 @@ public:
   void addStore(int64_t OffsetFromFirst, StoreInst *SI) {
     int64_t StoreSize = DL.getTypeStoreSize(SI->getOperand(0)->getType());
 
-    addRange(OffsetFromFirst, StoreSize,
-             SI->getPointerOperand(), SI->getAlignment(), SI);
+    addRange(OffsetFromFirst, StoreSize, SI->getPointerOperand(),
+             findStoreAlignment(DL, SI).value(), SI);
   }
 
   void addMemSet(int64_t OffsetFromFirst, MemSetInst *MSI) {
@@ -278,8 +211,8 @@ void MemsetRanges::addRange(int64_t Start, int64_t Size, Value *Ptr,
                             unsigned Alignment, Instruction *Inst) {
   int64_t End = Start+Size;
 
-  range_iterator I = std::lower_bound(Ranges.begin(), Ranges.end(), Start,
-    [](const MemsetRange &LHS, int64_t RHS) { return LHS.End < RHS; });
+  range_iterator I = partition_point(
+      Ranges, [=](const MemsetRange &O) { return O.End < Start; });
 
   // We now know that I == E, in which case we didn't find anything to merge
   // with, or that Start <= I->End.  If End < I->Start or I == E, then we need
@@ -412,19 +345,19 @@ Instruction *MemCpyOptPass::tryMergingIntoMemset(Instruction *StartInst,
       if (!NextStore->isSimple()) break;
 
       // Check to see if this stored value is of the same byte-splattable value.
-      Value *StoredByte = isBytewiseValue(NextStore->getOperand(0));
+      Value *StoredByte = isBytewiseValue(NextStore->getOperand(0), DL);
       if (isa<UndefValue>(ByteVal) && StoredByte)
         ByteVal = StoredByte;
       if (ByteVal != StoredByte)
         break;
 
       // Check to see if this store is to a constant offset from the start ptr.
-      int64_t Offset;
-      if (!IsPointerOffset(StartPtr, NextStore->getPointerOperand(), Offset,
-                           DL))
+      Optional<int64_t> Offset =
+          isPointerOffset(StartPtr, NextStore->getPointerOperand(), DL);
+      if (!Offset)
         break;
 
-      Ranges.addStore(Offset, NextStore);
+      Ranges.addStore(*Offset, NextStore);
     } else {
       MemSetInst *MSI = cast<MemSetInst>(BI);
 
@@ -433,11 +366,11 @@ Instruction *MemCpyOptPass::tryMergingIntoMemset(Instruction *StartInst,
         break;
 
       // Check to see if this store is to a constant offset from the start ptr.
-      int64_t Offset;
-      if (!IsPointerOffset(StartPtr, MSI->getDest(), Offset, DL))
+      Optional<int64_t> Offset = isPointerOffset(StartPtr, MSI->getDest(), DL);
+      if (!Offset)
         break;
 
-      Ranges.addMemSet(Offset, MSI);
+      Ranges.addMemSet(*Offset, MSI);
     }
   }
 
@@ -470,17 +403,8 @@ Instruction *MemCpyOptPass::tryMergingIntoMemset(Instruction *StartInst,
     // Get the starting pointer of the block.
     StartPtr = Range.StartPtr;
 
-    // Determine alignment
-    unsigned Alignment = Range.Alignment;
-    if (Alignment == 0) {
-      Type *EltType =
-        cast<PointerType>(StartPtr->getType())->getElementType();
-      Alignment = DL.getABITypeAlignment(EltType);
-    }
-
-    AMemSet =
-      Builder.CreateMemSet(StartPtr, ByteVal, Range.End-Range.Start, Alignment);
-
+    AMemSet = Builder.CreateMemSet(StartPtr, ByteVal, Range.End - Range.Start,
+                                   MaybeAlign(Range.Alignment));
     LLVM_DEBUG(dbgs() << "Replace stores:\n"; for (Instruction *SI
                                                    : Range.TheStores) dbgs()
                                               << *SI << '\n';
@@ -498,27 +422,6 @@ Instruction *MemCpyOptPass::tryMergingIntoMemset(Instruction *StartInst,
   }
 
   return AMemSet;
-}
-
-static unsigned findStoreAlignment(const DataLayout &DL, const StoreInst *SI) {
-  unsigned StoreAlign = SI->getAlignment();
-  if (!StoreAlign)
-    StoreAlign = DL.getABITypeAlignment(SI->getOperand(0)->getType());
-  return StoreAlign;
-}
-
-static unsigned findLoadAlignment(const DataLayout &DL, const LoadInst *LI) {
-  unsigned LoadAlign = LI->getAlignment();
-  if (!LoadAlign)
-    LoadAlign = DL.getABITypeAlignment(LI->getType());
-  return LoadAlign;
-}
-
-static unsigned findCommonAlignment(const DataLayout &DL, const StoreInst *SI,
-                                     const LoadInst *LI) {
-  unsigned StoreAlign = findStoreAlignment(DL, SI);
-  unsigned LoadAlign = findLoadAlignment(DL, LI);
-  return MinAlign(StoreAlign, LoadAlign);
 }
 
 // This method try to lift a store instruction before position P.
@@ -597,9 +500,13 @@ static bool moveUp(AliasAnalysis &AA, StoreInst *SI, Instruction *P,
 
     ToLift.push_back(C);
     for (unsigned k = 0, e = C->getNumOperands(); k != e; ++k)
-      if (auto *A = dyn_cast<Instruction>(C->getOperand(k)))
-        if (A->getParent() == SI->getParent())
+      if (auto *A = dyn_cast<Instruction>(C->getOperand(k))) {
+        if (A->getParent() == SI->getParent()) {
+          // Cannot hoist user of P above P
+          if(A == P) return false;
           Args.insert(A);
+        }
+      }
   }
 
   // We made it, we need to lift
@@ -729,7 +636,7 @@ bool MemCpyOptPass::processStore(StoreInst *SI, BasicBlock::iterator &BBI) {
             LI, SI->getPointerOperand()->stripPointerCasts(),
             LI->getPointerOperand()->stripPointerCasts(),
             DL.getTypeStoreSize(SI->getOperand(0)->getType()),
-            findCommonAlignment(DL, SI, LI), C);
+            findCommonAlignment(DL, SI, LI).value(), C);
         if (changed) {
           MD->removeInstruction(SI);
           SI->eraseFromParent();
@@ -749,7 +656,7 @@ bool MemCpyOptPass::processStore(StoreInst *SI, BasicBlock::iterator &BBI) {
   // byte at a time like "0" or "-1" or any width, as well as things like
   // 0xA0A0A0A0 and 0.0.
   auto *V = SI->getOperand(0);
-  if (Value *ByteVal = isBytewiseValue(V)) {
+  if (Value *ByteVal = isBytewiseValue(V, DL)) {
     if (Instruction *I = tryMergingIntoMemset(SI, SI->getPointerOperand(),
                                               ByteVal)) {
       BBI = I->getIterator(); // Don't invalidate iterator.
@@ -762,12 +669,11 @@ bool MemCpyOptPass::processStore(StoreInst *SI, BasicBlock::iterator &BBI) {
     auto *T = V->getType();
     if (T->isAggregateType()) {
       uint64_t Size = DL.getTypeStoreSize(T);
-      unsigned Align = SI->getAlignment();
-      if (!Align)
-        Align = DL.getABITypeAlignment(T);
+      const Align MA =
+          DL.getValueOrABITypeAlignment(MaybeAlign(SI->getAlignment()), T);
       IRBuilder<> Builder(SI);
       auto *M =
-          Builder.CreateMemSet(SI->getPointerOperand(), ByteVal, Size, Align);
+          Builder.CreateMemSet(SI->getPointerOperand(), ByteVal, Size, MA);
 
       LLVM_DEBUG(dbgs() << "Promoting " << *SI << " to " << *M << "\n");
 
@@ -820,10 +726,6 @@ bool MemCpyOptPass::performCallSlotOptzn(Instruction *cpy, Value *cpyDest,
   if (Function *F = C->getCalledFunction())
     if (F->isIntrinsic() && F->getIntrinsicID() == Intrinsic::lifetime_start)
       return false;
-
-  // Deliberately get the source and destination with bitcasts stripped away,
-  // because we'll need to do type comparisons based on the underlying type.
-  CallSite CS(C);
 
   // Require that src be an alloca.  This simplifies the reasoning considerably.
   AllocaInst *srcAlloca = dyn_cast<AllocaInst>(cpySrc);
@@ -924,8 +826,8 @@ bool MemCpyOptPass::performCallSlotOptzn(Instruction *cpy, Value *cpyDest,
 
   // Check that src isn't captured by the called function since the
   // transformation can cause aliasing issues in that case.
-  for (unsigned i = 0, e = CS.arg_size(); i != e; ++i)
-    if (CS.getArgument(i) == cpySrc && !CS.doesNotCapture(i))
+  for (unsigned ArgI = 0, E = C->arg_size(); ArgI != E; ++ArgI)
+    if (C->getArgOperand(ArgI) == cpySrc && !C->doesNotCapture(ArgI))
       return false;
 
   // Since we're changing the parameter to the callsite, we need to make sure
@@ -952,25 +854,26 @@ bool MemCpyOptPass::performCallSlotOptzn(Instruction *cpy, Value *cpyDest,
   if (cpySrc->getType()->getPointerAddressSpace() !=
       cpyDest->getType()->getPointerAddressSpace())
     return false;
-  for (unsigned i = 0; i < CS.arg_size(); ++i)
-    if (CS.getArgument(i)->stripPointerCasts() == cpySrc &&
+  for (unsigned ArgI = 0; ArgI < C->arg_size(); ++ArgI)
+    if (C->getArgOperand(ArgI)->stripPointerCasts() == cpySrc &&
         cpySrc->getType()->getPointerAddressSpace() !=
-        CS.getArgument(i)->getType()->getPointerAddressSpace())
+            C->getArgOperand(ArgI)->getType()->getPointerAddressSpace())
       return false;
 
   // All the checks have passed, so do the transformation.
   bool changedArgument = false;
-  for (unsigned i = 0; i < CS.arg_size(); ++i)
-    if (CS.getArgument(i)->stripPointerCasts() == cpySrc) {
+  for (unsigned ArgI = 0; ArgI < C->arg_size(); ++ArgI)
+    if (C->getArgOperand(ArgI)->stripPointerCasts() == cpySrc) {
       Value *Dest = cpySrc->getType() == cpyDest->getType() ?  cpyDest
         : CastInst::CreatePointerCast(cpyDest, cpySrc->getType(),
                                       cpyDest->getName(), C);
       changedArgument = true;
-      if (CS.getArgument(i)->getType() == Dest->getType())
-        CS.setArgument(i, Dest);
+      if (C->getArgOperand(ArgI)->getType() == Dest->getType())
+        C->setArgOperand(ArgI, Dest);
       else
-        CS.setArgument(i, CastInst::CreatePointerCast(Dest,
-                          CS.getArgument(i)->getType(), Dest->getName(), C));
+        C->setArgOperand(ArgI, CastInst::CreatePointerCast(
+                                   Dest, C->getArgOperand(ArgI)->getType(),
+                                   Dest->getName(), C));
     }
 
   if (!changedArgument)
@@ -979,7 +882,7 @@ bool MemCpyOptPass::performCallSlotOptzn(Instruction *cpy, Value *cpyDest,
   // If the destination wasn't sufficiently aligned then increase its alignment.
   if (!isDestSufficientlyAligned) {
     assert(isa<AllocaInst>(cpyDest) && "Can only increase alloca alignment!");
-    cast<AllocaInst>(cpyDest)->setAlignment(srcAlign);
+    cast<AllocaInst>(cpyDest)->setAlignment(MaybeAlign(srcAlign));
   }
 
   // Drop any cached information about the call, because we may have changed
@@ -1062,12 +965,12 @@ bool MemCpyOptPass::processMemCpyMemCpyDependence(MemCpyInst *M,
   // example we could be moving from movaps -> movq on x86.
   IRBuilder<> Builder(M);
   if (UseMemMove)
-    Builder.CreateMemMove(M->getRawDest(), M->getDestAlignment(),
-                          MDep->getRawSource(), MDep->getSourceAlignment(),
+    Builder.CreateMemMove(M->getRawDest(), M->getDestAlign(),
+                          MDep->getRawSource(), MDep->getSourceAlign(),
                           M->getLength(), M->isVolatile());
   else
-    Builder.CreateMemCpy(M->getRawDest(), M->getDestAlignment(),
-                         MDep->getRawSource(), MDep->getSourceAlignment(),
+    Builder.CreateMemCpy(M->getRawDest(), M->getDestAlign(),
+                         MDep->getRawSource(), MDep->getSourceAlign(),
                          M->getLength(), M->isVolatile());
 
   // Remove the instruction we're replacing.
@@ -1137,7 +1040,7 @@ bool MemCpyOptPass::processMemSetMemCpyDependence(MemCpyInst *MemCpy,
   Builder.CreateMemSet(
       Builder.CreateGEP(Dest->getType()->getPointerElementType(), Dest,
                         SrcSize),
-      MemSet->getOperand(1), MemsetLen, Align);
+      MemSet->getOperand(1), MemsetLen, MaybeAlign(Align));
 
   MD->removeInstruction(MemSet);
   MemSet->eraseFromParent();
@@ -1205,8 +1108,8 @@ bool MemCpyOptPass::performMemCpyToMemSetOptzn(MemCpyInst *MemCpy,
   }
 
   IRBuilder<> Builder(MemCpy);
-  Builder.CreateMemSet(MemCpy->getRawDest(), MemSet->getOperand(1),
-                       CopySize, MemCpy->getDestAlignment());
+  Builder.CreateMemSet(MemCpy->getRawDest(), MemSet->getOperand(1), CopySize,
+                       MaybeAlign(MemCpy->getDestAlignment()));
   return true;
 }
 
@@ -1229,10 +1132,11 @@ bool MemCpyOptPass::processMemCpy(MemCpyInst *M) {
   // If copying from a constant, try to turn the memcpy into a memset.
   if (GlobalVariable *GV = dyn_cast<GlobalVariable>(M->getSource()))
     if (GV->isConstant() && GV->hasDefinitiveInitializer())
-      if (Value *ByteVal = isBytewiseValue(GV->getInitializer())) {
+      if (Value *ByteVal = isBytewiseValue(GV->getInitializer(),
+                                           M->getModule()->getDataLayout())) {
         IRBuilder<> Builder(M);
         Builder.CreateMemSet(M->getRawDest(), ByteVal, M->getLength(),
-                             M->getDestAlignment(), false);
+                             MaybeAlign(M->getDestAlignment()), false);
         MD->removeInstruction(M);
         M->eraseFromParent();
         ++NumCpyToSet;
@@ -1334,15 +1238,15 @@ bool MemCpyOptPass::processMemMove(MemMoveInst *M) {
 }
 
 /// This is called on every byval argument in call sites.
-bool MemCpyOptPass::processByValArgument(CallSite CS, unsigned ArgNo) {
-  const DataLayout &DL = CS.getCaller()->getParent()->getDataLayout();
+bool MemCpyOptPass::processByValArgument(CallBase &CB, unsigned ArgNo) {
+  const DataLayout &DL = CB.getCaller()->getParent()->getDataLayout();
   // Find out what feeds this byval argument.
-  Value *ByValArg = CS.getArgument(ArgNo);
+  Value *ByValArg = CB.getArgOperand(ArgNo);
   Type *ByValTy = cast<PointerType>(ByValArg->getType())->getElementType();
   uint64_t ByValSize = DL.getTypeAllocSize(ByValTy);
   MemDepResult DepInfo = MD->getPointerDependencyFrom(
       MemoryLocation(ByValArg, LocationSize::precise(ByValSize)), true,
-      CS.getInstruction()->getIterator(), CS.getInstruction()->getParent());
+      CB.getIterator(), CB.getParent());
   if (!DepInfo.isClobber())
     return false;
 
@@ -1361,16 +1265,16 @@ bool MemCpyOptPass::processByValArgument(CallSite CS, unsigned ArgNo) {
 
   // Get the alignment of the byval.  If the call doesn't specify the alignment,
   // then it is some target specific value that we can't know.
-  unsigned ByValAlign = CS.getParamAlignment(ArgNo);
-  if (ByValAlign == 0) return false;
+  MaybeAlign ByValAlign = CB.getParamAlign(ArgNo);
+  if (!ByValAlign) return false;
 
   // If it is greater than the memcpy, then we check to see if we can force the
   // source of the memcpy to the alignment we need.  If we fail, we bail out.
   AssumptionCache &AC = LookupAssumptionCache();
   DominatorTree &DT = LookupDomTree();
-  if (MDep->getSourceAlignment() < ByValAlign &&
-      getOrEnforceKnownAlignment(MDep->getSource(), ByValAlign, DL,
-                                 CS.getInstruction(), &AC, &DT) < ByValAlign)
+  if (MDep->getSourceAlign() < ByValAlign &&
+      getOrEnforceKnownAlignment(MDep->getSource(), ByValAlign, DL, &CB, &AC,
+                                 &DT) < ByValAlign)
     return false;
 
   // The address space of the memcpy source must match the byval argument
@@ -1389,21 +1293,25 @@ bool MemCpyOptPass::processByValArgument(CallSite CS, unsigned ArgNo) {
   // not just the defining memcpy.
   MemDepResult SourceDep = MD->getPointerDependencyFrom(
       MemoryLocation::getForSource(MDep), false,
-      CS.getInstruction()->getIterator(), MDep->getParent());
+      CB.getIterator(), MDep->getParent());
   if (!SourceDep.isClobber() || SourceDep.getInst() != MDep)
     return false;
 
   Value *TmpCast = MDep->getSource();
-  if (MDep->getSource()->getType() != ByValArg->getType())
-    TmpCast = new BitCastInst(MDep->getSource(), ByValArg->getType(),
-                              "tmpcast", CS.getInstruction());
+  if (MDep->getSource()->getType() != ByValArg->getType()) {
+    BitCastInst *TmpBitCast = new BitCastInst(MDep->getSource(), ByValArg->getType(),
+                                              "tmpcast", &CB);
+    // Set the tmpcast's DebugLoc to MDep's
+    TmpBitCast->setDebugLoc(MDep->getDebugLoc());
+    TmpCast = TmpBitCast;
+  }
 
   LLVM_DEBUG(dbgs() << "MemCpyOptPass: Forwarding memcpy to byval:\n"
                     << "  " << *MDep << "\n"
-                    << "  " << *CS.getInstruction() << "\n");
+                    << "  " << CB << "\n");
 
   // Otherwise we're good!  Update the byval argument.
-  CS.setArgument(ArgNo, TmpCast);
+  CB.setArgOperand(ArgNo, TmpCast);
   ++NumMemCpyInstr;
   return true;
 }
@@ -1437,10 +1345,10 @@ bool MemCpyOptPass::iterateOnFunction(Function &F) {
         RepeatInstruction = processMemCpy(M);
       else if (MemMoveInst *M = dyn_cast<MemMoveInst>(I))
         RepeatInstruction = processMemMove(M);
-      else if (auto CS = CallSite(I)) {
-        for (unsigned i = 0, e = CS.arg_size(); i != e; ++i)
-          if (CS.isByValArgument(i))
-            MadeChange |= processByValArgument(CS, i);
+      else if (auto *CB = dyn_cast<CallBase>(I)) {
+        for (unsigned i = 0, e = CB->arg_size(); i != e; ++i)
+          if (CB->isByValArgument(i))
+            MadeChange |= processByValArgument(*CB, i);
       }
 
       // Reprocess the instruction if desired.
@@ -1515,7 +1423,7 @@ bool MemCpyOptLegacyPass::runOnFunction(Function &F) {
     return false;
 
   auto *MD = &getAnalysis<MemoryDependenceWrapperPass>().getMemDep();
-  auto *TLI = &getAnalysis<TargetLibraryInfoWrapperPass>().getTLI();
+  auto *TLI = &getAnalysis<TargetLibraryInfoWrapperPass>().getTLI(F);
 
   auto LookupAliasAnalysis = [this]() -> AliasAnalysis & {
     return getAnalysis<AAResultsWrapperPass>().getAAResults();

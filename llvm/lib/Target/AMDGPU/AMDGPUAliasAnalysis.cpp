@@ -56,13 +56,13 @@ void AMDGPUAAWrapperPass::getAnalysisUsage(AnalysisUsage &AU) const {
 // These arrays are indexed by address space value enum elements 0 ... to 7
 static const AliasResult ASAliasRules[8][8] = {
   /*                    Flat       Global    Region    Group     Constant  Private   Constant 32-bit  Buffer Fat Ptr */
-  /* Flat     */        {MayAlias, MayAlias, MayAlias, MayAlias, MayAlias, MayAlias, MayAlias,        MayAlias},
+  /* Flat     */        {MayAlias, MayAlias, NoAlias,  MayAlias, MayAlias, MayAlias, MayAlias,        MayAlias},
   /* Global   */        {MayAlias, MayAlias, NoAlias , NoAlias , MayAlias, NoAlias , MayAlias,        MayAlias},
-  /* Region   */        {MayAlias, NoAlias , NoAlias , NoAlias , MayAlias, NoAlias , MayAlias,        NoAlias},
+  /* Region   */        {NoAlias,  NoAlias , MayAlias, NoAlias , NoAlias,  NoAlias , NoAlias,         NoAlias},
   /* Group    */        {MayAlias, NoAlias , NoAlias , MayAlias, NoAlias , NoAlias , NoAlias ,        NoAlias},
-  /* Constant */        {MayAlias, MayAlias, MayAlias, NoAlias , NoAlias , NoAlias , MayAlias,        MayAlias},
+  /* Constant */        {MayAlias, MayAlias, NoAlias,  NoAlias , NoAlias , NoAlias , MayAlias,        MayAlias},
   /* Private  */        {MayAlias, NoAlias , NoAlias , NoAlias , NoAlias , MayAlias, NoAlias ,        NoAlias},
-  /* Constant 32-bit */ {MayAlias, MayAlias, MayAlias, NoAlias , MayAlias, NoAlias , NoAlias ,        MayAlias},
+  /* Constant 32-bit */ {MayAlias, MayAlias, NoAlias,  NoAlias , MayAlias, NoAlias , NoAlias ,        MayAlias},
   /* Buffer Fat Ptr  */ {MayAlias, MayAlias, NoAlias , NoAlias , MayAlias, NoAlias , MayAlias,        MayAlias}
 };
 
@@ -91,12 +91,16 @@ AliasResult AMDGPUAAResult::alias(const MemoryLocation &LocA,
 
 bool AMDGPUAAResult::pointsToConstantMemory(const MemoryLocation &Loc,
                                             AAQueryInfo &AAQI, bool OrLocal) {
-  const Value *Base = GetUnderlyingObject(Loc.Ptr, DL);
-  unsigned AS = Base->getType()->getPointerAddressSpace();
+  unsigned AS = Loc.Ptr->getType()->getPointerAddressSpace();
   if (AS == AMDGPUAS::CONSTANT_ADDRESS ||
-      AS == AMDGPUAS::CONSTANT_ADDRESS_32BIT) {
+      AS == AMDGPUAS::CONSTANT_ADDRESS_32BIT)
     return true;
-  }
+
+  const Value *Base = GetUnderlyingObject(Loc.Ptr, DL);
+  AS = Base->getType()->getPointerAddressSpace();
+  if (AS == AMDGPUAS::CONSTANT_ADDRESS ||
+      AS == AMDGPUAS::CONSTANT_ADDRESS_32BIT)
+    return true;
 
   if (const GlobalVariable *GV = dyn_cast<GlobalVariable>(Base)) {
     if (GV->isConstant())

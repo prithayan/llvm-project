@@ -1,4 +1,4 @@
-//===-- EmulateInstructionARM64.cpp ------------------------------*- C++-*-===//
+//===-- EmulateInstructionARM64.cpp ---------------------------------------===//
 //
 // Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
 // See https://llvm.org/LICENSE.txt for license information.
@@ -46,6 +46,8 @@
 
 using namespace lldb;
 using namespace lldb_private;
+
+LLDB_PLUGIN_DEFINE_ADV(EmulateInstructionARM64, InstructionARM64)
 
 static bool LLDBTableGetRegisterInfo(uint32_t reg_num, RegisterInfo &reg_info) {
   if (reg_num >= llvm::array_lengthof(g_register_infos_arm64_le))
@@ -149,12 +151,13 @@ EmulateInstructionARM64::CreateInstance(const ArchSpec &arch,
                                         InstructionType inst_type) {
   if (EmulateInstructionARM64::SupportsEmulatingInstructionsOfTypeStatic(
           inst_type)) {
-    if (arch.GetTriple().getArch() == llvm::Triple::aarch64) {
+    if (arch.GetTriple().getArch() == llvm::Triple::aarch64 ||
+        arch.GetTriple().getArch() == llvm::Triple::aarch64_32) {
       return new EmulateInstructionARM64(arch);
     }
   }
 
-  return NULL;
+  return nullptr;
 }
 
 bool EmulateInstructionARM64::SetTargetTriple(const ArchSpec &arch) {
@@ -411,23 +414,15 @@ bool EmulateInstructionARM64::ReadInstruction() {
 bool EmulateInstructionARM64::EvaluateInstruction(uint32_t evaluate_options) {
   const uint32_t opcode = m_opcode.GetOpcode32();
   Opcode *opcode_data = GetOpcodeForInstruction(opcode);
-  if (opcode_data == NULL)
+  if (opcode_data == nullptr)
     return false;
 
-  // printf ("opcode template for 0x%8.8x: %s\n", opcode, opcode_data->name);
   const bool auto_advance_pc =
       evaluate_options & eEmulateInstructionOptionAutoAdvancePC;
   m_ignore_conditions =
       evaluate_options & eEmulateInstructionOptionIgnoreConditions;
 
   bool success = false;
-  //    if (m_opcode_cpsr == 0 || m_ignore_conditions == false)
-  //    {
-  //        m_opcode_cpsr = ReadRegisterUnsigned (eRegisterKindLLDB,
-  //                                              gpr_cpsr_arm64,
-  //                                              0,
-  //                                              &success);
-  //    }
 
   // Only return false if we are unable to read the CPSR if we care about
   // conditions
@@ -479,6 +474,7 @@ bool EmulateInstructionARM64::CreateFunctionEntryUnwind(
   unwind_plan.SetSourceName("EmulateInstructionARM64");
   unwind_plan.SetSourcedFromCompiler(eLazyBoolNo);
   unwind_plan.SetUnwindPlanValidAtAllInstructions(eLazyBoolYes);
+  unwind_plan.SetUnwindPlanForSignalTrap(eLazyBoolNo);
   unwind_plan.SetReturnAddressRegister(gpr_lr_arm64);
   return true;
 }
@@ -657,10 +653,10 @@ bool EmulateInstructionARM64::EmulateADDSUBImm(const uint32_t opcode) {
 
   if (sub_op) {
     operand2 = NOT(operand2);
-    carry_in = 1;
+    carry_in = true;
     imm = -imm; // For the Register plug offset context below
   } else {
-    carry_in = 0;
+    carry_in = false;
   }
 
   ProcState proc_state;
@@ -781,10 +777,6 @@ bool EmulateInstructionARM64::EmulateLDPSTP(const uint32_t opcode) {
 
   RegisterValue data_Rt;
   RegisterValue data_Rt2;
-
-  //    if (vector)
-  //        CheckFPEnabled(false);
-
   RegisterInfo reg_info_base;
   RegisterInfo reg_info_Rt;
   RegisterInfo reg_info_Rt2;

@@ -30,13 +30,17 @@ void tools::PS4cpu::addProfileRTArgs(const ToolChain &TC, const ArgList &Args,
   if ((Args.hasFlag(options::OPT_fprofile_arcs, options::OPT_fno_profile_arcs,
                     false) ||
        Args.hasFlag(options::OPT_fprofile_generate,
-                    options::OPT_fno_profile_instr_generate, false) ||
+                    options::OPT_fno_profile_generate, false) ||
        Args.hasFlag(options::OPT_fprofile_generate_EQ,
-                    options::OPT_fno_profile_instr_generate, false) ||
+                    options::OPT_fno_profile_generate, false) ||
        Args.hasFlag(options::OPT_fprofile_instr_generate,
                     options::OPT_fno_profile_instr_generate, false) ||
        Args.hasFlag(options::OPT_fprofile_instr_generate_EQ,
                     options::OPT_fno_profile_instr_generate, false) ||
+       Args.hasFlag(options::OPT_fcs_profile_generate,
+                    options::OPT_fno_profile_generate, false) ||
+       Args.hasFlag(options::OPT_fcs_profile_generate_EQ,
+                    options::OPT_fno_profile_generate, false) ||
        Args.hasArg(options::OPT_fcreate_profile) ||
        Args.hasArg(options::OPT_coverage)))
     CmdArgs.push_back("--dependent-lib=libclang_rt.profile-x86_64.a");
@@ -62,7 +66,7 @@ void tools::PS4cpu::Assemble::ConstructJob(Compilation &C, const JobAction &JA,
 
   const char *Exec =
       Args.MakeArgString(getToolChain().GetProgramPath("orbis-as"));
-  C.addCommand(llvm::make_unique<Command>(JA, *this, Exec, CmdArgs, Inputs));
+  C.addCommand(std::make_unique<Command>(JA, *this, Exec, CmdArgs, Inputs));
 }
 
 static void AddPS4SanitizerArgs(const ToolChain &TC, ArgStringList &CmdArgs) {
@@ -141,7 +145,7 @@ static void ConstructPS4LinkJob(const Tool &T, Compilation &C,
 
   const char *Exec = Args.MakeArgString(ToolChain.GetProgramPath("orbis-ld"));
 
-  C.addCommand(llvm::make_unique<Command>(JA, T, Exec, CmdArgs, Inputs));
+  C.addCommand(std::make_unique<Command>(JA, T, Exec, CmdArgs, Inputs));
 }
 
 static void ConstructGoldLinkJob(const Tool &T, Compilation &C,
@@ -319,7 +323,7 @@ static void ConstructGoldLinkJob(const Tool &T, Compilation &C,
       Args.MakeArgString(ToolChain.GetProgramPath("orbis-ld"));
 #endif
 
-  C.addCommand(llvm::make_unique<Command>(JA, T, Exec, CmdArgs, Inputs));
+  C.addCommand(std::make_unique<Command>(JA, T, Exec, CmdArgs, Inputs));
 }
 
 void tools::PS4cpu::Link::ConstructJob(Compilation &C, const JobAction &JA,
@@ -382,7 +386,7 @@ toolchains::PS4CPU::PS4CPU(const Driver &D, const llvm::Triple &Triple,
     if (!llvm::sys::fs::exists(PrefixDir))
       getDriver().Diag(clang::diag::warn_missing_sysroot) << PrefixDir;
   } else
-    PrefixDir = PS4SDKDir.str();
+    PrefixDir = std::string(PS4SDKDir.str());
 
   SmallString<512> PS4SDKIncludeDir(PrefixDir);
   llvm::sys::path::append(PS4SDKIncludeDir, "target/include");
@@ -407,7 +411,7 @@ toolchains::PS4CPU::PS4CPU(const Driver &D, const llvm::Triple &Triple,
         << "PS4 system libraries" << PS4SDKLibDir;
     return;
   }
-  getFilePaths().push_back(PS4SDKLibDir.str());
+  getFilePaths().push_back(std::string(PS4SDKLibDir.str()));
 }
 
 Tool *toolchains::PS4CPU::buildAssembler() const {
@@ -429,4 +433,18 @@ SanitizerMask toolchains::PS4CPU::getSupportedSanitizers() const {
   Res |= SanitizerKind::PointerSubtract;
   Res |= SanitizerKind::Vptr;
   return Res;
+}
+
+void toolchains::PS4CPU::addClangTargetOptions(
+      const ArgList &DriverArgs,
+      ArgStringList &CC1Args,
+      Action::OffloadKind DeviceOffloadingKind) const {
+  // PS4 does not use init arrays.
+  if (DriverArgs.hasArg(options::OPT_fuse_init_array)) {
+    Arg *A = DriverArgs.getLastArg(options::OPT_fuse_init_array);
+    getDriver().Diag(clang::diag::err_drv_unsupported_opt_for_target)
+        << A->getAsString(DriverArgs) << getTriple().str();
+  }
+
+  CC1Args.push_back("-fno-use-init-array");
 }

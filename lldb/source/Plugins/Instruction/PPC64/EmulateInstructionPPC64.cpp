@@ -1,4 +1,4 @@
-//===-- EmulateInstructionPPC64.cpp ------------------------------*- C++-*-===//
+//===-- EmulateInstructionPPC64.cpp ---------------------------------------===//
 //
 // Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
 // See https://llvm.org/LICENSE.txt for license information.
@@ -24,6 +24,8 @@
 
 using namespace lldb;
 using namespace lldb_private;
+
+LLDB_PLUGIN_DEFINE_ADV(EmulateInstructionPPC64, InstructionPPC64)
 
 EmulateInstructionPPC64::EmulateInstructionPPC64(const ArchSpec &arch)
     : EmulateInstruction(arch) {}
@@ -55,23 +57,15 @@ EmulateInstruction *
 EmulateInstructionPPC64::CreateInstance(const ArchSpec &arch,
                                         InstructionType inst_type) {
   if (EmulateInstructionPPC64::SupportsEmulatingInstructionsOfTypeStatic(
-          inst_type)) {
-    if (arch.GetTriple().getArch() == llvm::Triple::ppc64 ||
-        arch.GetTriple().getArch() == llvm::Triple::ppc64le) {
+          inst_type))
+    if (arch.GetTriple().isPPC64())
       return new EmulateInstructionPPC64(arch);
-    }
-  }
 
   return nullptr;
 }
 
 bool EmulateInstructionPPC64::SetTargetTriple(const ArchSpec &arch) {
-  if (arch.GetTriple().getArch() == llvm::Triple::ppc64)
-    return true;
-  else if (arch.GetTriple().getArch() == llvm::Triple::ppc64le)
-    return true;
-
-  return false;
+  return arch.GetTriple().isPPC64();
 }
 
 static bool LLDBTableGetRegisterInfo(uint32_t reg_num, RegisterInfo &reg_info) {
@@ -143,6 +137,7 @@ bool EmulateInstructionPPC64::CreateFunctionEntryUnwind(
   unwind_plan.SetSourceName("EmulateInstructionPPC64");
   unwind_plan.SetSourcedFromCompiler(eLazyBoolNo);
   unwind_plan.SetUnwindPlanValidAtAllInstructions(eLazyBoolYes);
+  unwind_plan.SetUnwindPlanForSignalTrap(eLazyBoolNo);
   unwind_plan.SetReturnAddressRegister(gpr_lr_ppc64le);
   return true;
 }

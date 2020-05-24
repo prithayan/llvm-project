@@ -57,7 +57,6 @@ typedef std::map<nub_process_t, MachProcessSP> ProcessMap;
 typedef ProcessMap::iterator ProcessMapIter;
 typedef ProcessMap::const_iterator ProcessMapConstIter;
 
-size_t GetAllInfos(std::vector<struct kinfo_proc> &proc_infos);
 static size_t
 GetAllInfosMatchingName(const char *process_name,
                         std::vector<struct kinfo_proc> &matching_proc_infos);
@@ -141,7 +140,7 @@ void *kqueue_thread(void *arg) {
 #endif
 
   struct kevent death_event;
-  while (1) {
+  while (true) {
     int n_events = kevent(kq_id, NULL, 0, &death_event, 1, NULL);
     if (n_events == -1) {
       if (errno == EINTR)
@@ -267,7 +266,7 @@ static void *waitpid_thread(void *arg) {
 #endif
 #endif
 
-  while (1) {
+  while (true) {
     pid_t child_pid = waitpid(pid, &status, 0);
     DNBLogThreadedIf(LOG_PROCESS, "waitpid_thread (): waitpid (pid = %i, "
                                   "&status, 0) => %i, status = %i, errno = %i",
@@ -422,7 +421,8 @@ nub_process_t DNBProcessAttachByName(const char *name, struct timespec *timeout,
   if (num_matching_proc_infos == 0) {
     DNBLogError("error: no processes match '%s'\n", name);
     return INVALID_NUB_PROCESS;
-  } else if (num_matching_proc_infos > 1) {
+  }
+  if (num_matching_proc_infos > 1) {
     DNBLogError("error: %llu processes match '%s':\n",
                 (uint64_t)num_matching_proc_infos, name);
     size_t i;
@@ -520,7 +520,7 @@ nub_process_t DNBProcessAttach(nub_process_t attach_pid,
   return INVALID_NUB_PROCESS;
 }
 
-size_t GetAllInfos(std::vector<struct kinfo_proc> &proc_infos) {
+size_t DNBGetAllInfos(std::vector<struct kinfo_proc> &proc_infos) {
   size_t size = 0;
   int name[] = {CTL_KERN, KERN_PROC, KERN_PROC_ALL};
   u_int namelen = sizeof(name) / sizeof(int);
@@ -573,7 +573,7 @@ GetAllInfosMatchingName(const char *full_process_name,
 
     const size_t process_name_len = strlen(process_name);
     std::vector<struct kinfo_proc> proc_infos;
-    const size_t num_proc_infos = GetAllInfos(proc_infos);
+    const size_t num_proc_infos = DNBGetAllInfos(proc_infos);
     if (num_proc_infos > 0) {
       uint32_t i;
       for (i = 0; i < num_proc_infos; i++) {
@@ -1695,6 +1695,10 @@ bool DNBGetOSVersionNumbers(uint64_t *major, uint64_t *minor, uint64_t *patch) {
   return MachProcess::GetOSVersionNumbers(major, minor, patch);
 }
 
+std::string DNBGetMacCatalystVersionString() {
+  return MachProcess::GetMacCatalystVersionString();
+}
+
 void DNBInitialize() {
   DNBLogThreadedIf(LOG_PROCESS, "DNBInitialize ()");
 #if defined(__i386__) || defined(__x86_64__)
@@ -1715,6 +1719,11 @@ nub_bool_t DNBSetArchitecture(const char *arch) {
     else if ((strcasecmp(arch, "x86_64") == 0) ||
              (strcasecmp(arch, "x86_64h") == 0))
       return DNBArchProtocol::SetArchitecture(CPU_TYPE_X86_64);
+    else if (strstr(arch, "arm64_32") == arch || 
+             strstr(arch, "aarch64_32") == arch)
+      return DNBArchProtocol::SetArchitecture(CPU_TYPE_ARM64_32);
+    else if (strstr(arch, "arm64e") == arch)
+      return DNBArchProtocol::SetArchitecture(CPU_TYPE_ARM64);
     else if (strstr(arch, "arm64") == arch || strstr(arch, "armv8") == arch ||
              strstr(arch, "aarch64") == arch)
       return DNBArchProtocol::SetArchitecture(CPU_TYPE_ARM64);

@@ -115,6 +115,7 @@ static CXTypeKind GetTypeKind(QualType T) {
     TKCASE(Elaborated);
     TKCASE(Pipe);
     TKCASE(Attributed);
+    TKCASE(Atomic);
     default:
       return CXType_Unexposed;
   }
@@ -616,6 +617,7 @@ CXString clang_getTypeKindSpelling(enum CXTypeKind K) {
     TKIND(OCLEvent);
     TKIND(OCLQueue);
     TKIND(OCLReserveID);
+    TKIND(Atomic);
   }
 #undef TKIND
   return cxstring::createRef(s);
@@ -742,6 +744,8 @@ getExternalExceptionSpecificationKind(ExceptionSpecificationType EST) {
     return CXCursor_ExceptionSpecificationKind_MSAny;
   case EST_BasicNoexcept:
     return CXCursor_ExceptionSpecificationKind_BasicNoexcept;
+  case EST_NoThrow:
+    return CXCursor_ExceptionSpecificationKind_NoThrow;
   case EST_NoexceptFalse:
   case EST_NoexceptTrue:
   case EST_DependentNoexcept:
@@ -1315,4 +1319,14 @@ enum CXTypeNullabilityKind clang_Type_getNullability(CXType CT) {
     }
   }
   return CXTypeNullability_Invalid;
+}
+
+CXType clang_Type_getValueType(CXType CT) {
+  QualType T = GetQualType(CT);
+
+  if (T.isNull() || !T->isAtomicType())
+      return MakeCXType(QualType(), GetTU(CT));
+
+  const auto *AT = T->castAs<AtomicType>();
+  return MakeCXType(AT->getValueType(), GetTU(CT));
 }

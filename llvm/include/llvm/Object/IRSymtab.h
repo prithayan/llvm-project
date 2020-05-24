@@ -28,6 +28,7 @@
 #include "llvm/ADT/iterator_range.h"
 #include "llvm/IR/GlobalValue.h"
 #include "llvm/Object/SymbolicFile.h"
+#include "llvm/Support/Allocator.h"
 #include "llvm/Support/Endian.h"
 #include "llvm/Support/Error.h"
 #include <cassert>
@@ -125,12 +126,13 @@ struct Uncommon {
   Str SectionName;
 };
 
+
 struct Header {
   /// Version number of the symtab format. This number should be incremented
   /// when the format changes, but it does not need to be incremented if a
   /// change to LLVM would cause it to create a different symbol table.
   Word Version;
-  enum { kCurrentVersion = 1 };
+  enum { kCurrentVersion = 2 };
 
   /// The producer's version string (LLVM_VERSION_STRING " " LLVM_REVISION).
   /// Consumers should rebuild the symbol table from IR if the producer's
@@ -147,6 +149,9 @@ struct Header {
 
   /// COFF-specific: linker directives.
   Str COFFLinkerOpts;
+
+  /// Dependent Library Specifiers
+  Range<Str> DependentLibraries;
 };
 
 } // end namespace storage
@@ -231,6 +236,7 @@ class Reader {
   ArrayRef<storage::Comdat> Comdats;
   ArrayRef<storage::Symbol> Symbols;
   ArrayRef<storage::Uncommon> Uncommons;
+  ArrayRef<storage::Str> DependentLibraries;
 
   StringRef str(storage::Str S) const { return S.get(Strtab); }
 
@@ -251,6 +257,7 @@ public:
     Comdats = range(header().Comdats);
     Symbols = range(header().Symbols);
     Uncommons = range(header().Uncommons);
+    DependentLibraries = range(header().DependentLibraries);
   }
 
   using symbol_range = iterator_range<object::content_iterator<SymbolRef>>;
@@ -283,6 +290,16 @@ public:
 
   /// COFF-specific: returns linker options specified in the input file.
   StringRef getCOFFLinkerOpts() const { return str(header().COFFLinkerOpts); }
+
+  /// Returns dependent library specifiers
+  std::vector<StringRef> getDependentLibraries() const {
+    std::vector<StringRef> Specifiers;
+    Specifiers.reserve(DependentLibraries.size());
+    for (auto S : DependentLibraries) {
+      Specifiers.push_back(str(S));
+    }
+    return Specifiers;
+  }
 };
 
 /// Ephemeral symbols produced by Reader::symbols() and

@@ -1,4 +1,4 @@
-//===-- ArchitecturePPC64.cpp -----------------------------------*- C++ -*-===//
+//===-- ArchitecturePPC64.cpp ---------------------------------------------===//
 //
 // Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
 // See https://llvm.org/LICENSE.txt for license information.
@@ -20,6 +20,8 @@
 using namespace lldb_private;
 using namespace lldb;
 
+LLDB_PLUGIN_DEFINE(ArchitecturePPC64)
+
 ConstString ArchitecturePPC64::GetPluginNameStatic() {
   return ConstString("ppc64");
 }
@@ -35,11 +37,10 @@ void ArchitecturePPC64::Terminate() {
 }
 
 std::unique_ptr<Architecture> ArchitecturePPC64::Create(const ArchSpec &arch) {
-  if ((arch.GetMachine() != llvm::Triple::ppc64 &&
-       arch.GetMachine() != llvm::Triple::ppc64le) ||
-      arch.GetTriple().getObjectFormat() != llvm::Triple::ObjectFormatType::ELF)
-    return nullptr;
-  return std::unique_ptr<Architecture>(new ArchitecturePPC64());
+  if (arch.GetTriple().isPPC64() &&
+      arch.GetTriple().getObjectFormat() == llvm::Triple::ObjectFormatType::ELF)
+    return std::unique_ptr<Architecture>(new ArchitecturePPC64());
+  return nullptr;
 }
 
 ConstString ArchitecturePPC64::GetPluginName() { return GetPluginNameStatic(); }

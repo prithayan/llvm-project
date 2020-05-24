@@ -47,12 +47,16 @@ add_pdb_impl_folder(Native
   Native/HashTable.cpp
   Native/InfoStream.cpp
   Native/InfoStreamBuilder.cpp
+  Native/InjectedSourceStream.cpp
   Native/ModuleDebugStream.cpp
   Native/NativeCompilandSymbol.cpp
   Native/NativeEnumGlobals.cpp
+  Native/NativeEnumInjectedSources.cpp
   Native/NativeEnumModules.cpp
   Native/NativeEnumTypes.cpp
   Native/NativeExeSymbol.cpp
+  Native/NativeFunctionSymbol.cpp
+  Native/NativePublicSymbol.cpp
   Native/NativeRawSymbol.cpp
   Native/NativeSymbolEnumerator.cpp
   Native/NativeTypeArray.cpp
@@ -82,7 +86,7 @@ add_pdb_impl_folder(Native
 list(APPEND LIBPDB_ADDITIONAL_HEADER_DIRS "${LLVM_MAIN_INCLUDE_DIR}/llvm/DebugInfo/PDB/Native")
 list(APPEND LIBPDB_ADDITIONAL_HEADER_DIRS "${LLVM_MAIN_INCLUDE_DIR}/llvm/DebugInfo/PDB")
 
-add_llvm_library(LLVMDebugInfoPDB
+add_llvm_component_library(LLVMDebugInfoPDB
   GenericError.cpp
   IPDBSourceFile.cpp
   PDB.cpp

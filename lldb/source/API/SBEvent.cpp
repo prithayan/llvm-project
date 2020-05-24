@@ -1,4 +1,4 @@
-//===-- SBEvent.cpp ---------------------------------------------*- C++ -*-===//
+//===-- SBEvent.cpp -------------------------------------------------------===//
 //
 // Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
 // See https://llvm.org/LICENSE.txt for license information.
@@ -22,7 +22,7 @@
 using namespace lldb;
 using namespace lldb_private;
 
-SBEvent::SBEvent() : m_event_sp(), m_opaque_ptr(NULL) {
+SBEvent::SBEvent() : m_event_sp(), m_opaque_ptr(nullptr) {
   LLDB_RECORD_CONSTRUCTOR_NO_ARGS(SBEvent);
 }
 
@@ -58,7 +58,7 @@ const SBEvent &SBEvent::operator=(const SBEvent &rhs) {
   return LLDB_RECORD_RESULT(*this);
 }
 
-SBEvent::~SBEvent() {}
+SBEvent::~SBEvent() = default;
 
 const char *SBEvent::GetDataFlavor() {
   LLDB_RECORD_METHOD_NO_ARGS(const char *, SBEvent, GetDataFlavor);
@@ -69,7 +69,7 @@ const char *SBEvent::GetDataFlavor() {
     if (event_data)
       return lldb_event->GetData()->GetFlavor().AsCString();
   }
-  return NULL;
+  return nullptr;
 }
 
 uint32_t SBEvent::GetType() const {
@@ -168,14 +168,14 @@ SBEvent::operator bool() const {
 
   // Do NOT use m_opaque_ptr directly!!! Must use the SBEvent::get() accessor.
   // See comments in SBEvent::get()....
-  return SBEvent::get() != NULL;
+  return SBEvent::get() != nullptr;
 }
 
 const char *SBEvent::GetCStringFromEvent(const SBEvent &event) {
   LLDB_RECORD_STATIC_METHOD(const char *, SBEvent, GetCStringFromEvent,
                             (const lldb::SBEvent &), event);
 
-  return reinterpret_cast<const char *>(
+  return static_cast<const char *>(
       EventDataBytes::GetBytesFromEvent(event.get()));
 }
 

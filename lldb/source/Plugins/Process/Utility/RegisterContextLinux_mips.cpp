@@ -1,4 +1,4 @@
-//===-- RegisterContextLinux_mips.cpp ------------------------*- C++ -*-===//
+//===-- RegisterContextLinux_mips.cpp -------------------------------------===//
 //
 // Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
 // See https://llvm.org/LICENSE.txt for license information.
@@ -116,7 +116,7 @@ const RegisterInfo *RegisterContextLinux_mips::GetRegisterInfo() const {
     return g_register_infos_mips;
   default:
     assert(false && "Unhandled target architecture.");
-    return NULL;
+    return nullptr;
   }
 }
 

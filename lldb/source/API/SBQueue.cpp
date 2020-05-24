@@ -1,4 +1,4 @@
-//===-- SBQueue.cpp ---------------------------------------------*- C++ -*-===//
+//===-- SBQueue.cpp -------------------------------------------------------===//
 //
 // Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
 // See https://llvm.org/LICENSE.txt for license information.
@@ -47,9 +47,9 @@ public:
     m_pending_items_fetched = rhs.m_pending_items_fetched;
   }
 
-  ~QueueImpl() {}
+  ~QueueImpl() = default;
 
-  bool IsValid() { return m_queue_wp.lock() != NULL; }
+  bool IsValid() { return m_queue_wp.lock() != nullptr; }
 
   void Clear() {
     m_queue_wp.reset();
@@ -83,7 +83,7 @@ public:
   }
 
   const char *GetName() const {
-    const char *name = NULL;
+    const char *name = nullptr;
     lldb::QueueSP queue_sp = m_queue_wp.lock();
     if (queue_sp.get()) {
       name = queue_sp->GetName();
@@ -243,7 +243,7 @@ const lldb::SBQueue &SBQueue::operator=(const lldb::SBQueue &rhs) {
   return LLDB_RECORD_RESULT(*this);
 }
 
-SBQueue::~SBQueue() {}
+SBQueue::~SBQueue() = default;
 
 bool SBQueue::IsValid() const {
   LLDB_RECORD_METHOD_CONST_NO_ARGS(bool, SBQueue, IsValid);

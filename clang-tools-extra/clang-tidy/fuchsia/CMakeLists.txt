@@ -1,11 +1,14 @@
-set(LLVM_LINK_COMPONENTS support)
+set(LLVM_LINK_COMPONENTS
+  FrontendOpenMP
+  Support
+  )
 
 add_clang_library(clangTidyFuchsiaModule
-  DefaultArgumentsCheck.cpp
+  DefaultArgumentsCallsCheck.cpp
+  DefaultArgumentsDeclarationsCheck.cpp
   FuchsiaTidyModule.cpp
   MultipleInheritanceCheck.cpp
   OverloadedOperatorCheck.cpp
-  RestrictSystemIncludesCheck.cpp
   StaticallyConstructedObjectsCheck.cpp
   TrailingReturnCheck.cpp
   VirtualInheritanceCheck.cpp

@@ -90,8 +90,8 @@ protected:
               // This is a conditional branch to the return. Replace the branch
               // with a bclr.
               BuildMI(**PI, J, J->getDebugLoc(), TII->get(PPC::BCCLR))
-                  .addImm(J->getOperand(0).getImm())
-                  .addReg(J->getOperand(1).getReg())
+                  .add(J->getOperand(0))
+                  .add(J->getOperand(1))
                   .copyImplicitOps(*I);
               MachineBasicBlock::iterator K = J--;
               K->eraseFromParent();
@@ -106,7 +106,7 @@ protected:
               BuildMI(
                   **PI, J, J->getDebugLoc(),
                   TII->get(J->getOpcode() == PPC::BC ? PPC::BCLR : PPC::BCLRn))
-                  .addReg(J->getOperand(0).getReg())
+                  .add(J->getOperand(0))
                   .copyImplicitOps(*I);
               MachineBasicBlock::iterator K = J--;
               K->eraseFromParent();
@@ -179,11 +179,11 @@ public:
       // nothing to do.
       if (MF.size() < 2)
         return Changed;
-
-      for (MachineFunction::iterator I = MF.begin(); I != MF.end();) {
+      
+      // We can't use a range-based for loop due to clobbering the iterator.
+      for (MachineFunction::iterator I = MF.begin(), E = MF.end(); I != E;) {
         MachineBasicBlock &B = *I++;
-        if (processBlock(B))
-          Changed = true;
+        Changed |= processBlock(B);
       }
 
       return Changed;

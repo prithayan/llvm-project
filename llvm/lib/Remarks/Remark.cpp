@@ -11,8 +11,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "llvm/Remarks/Remark.h"
-#include "llvm-c/Remarks.h"
-#include "llvm/Support/CBindingWrapping.h"
+#include "llvm/ADT/ArrayRef.h"
 #include "llvm/Support/raw_ostream.h"
 
 using namespace llvm;
@@ -64,6 +63,10 @@ LLVMRemarkArgGetDebugLoc(LLVMRemarkArgRef Arg) {
   if (const Optional<RemarkLocation> &Loc = unwrap(Arg)->Loc)
     return wrap(&*Loc);
   return nullptr;
+}
+
+extern "C" void LLVMRemarkEntryDispose(LLVMRemarkEntryRef Remark) {
+  delete unwrap(Remark);
 }
 
 extern "C" LLVMRemarkType LLVMRemarkEntryGetType(LLVMRemarkEntryRef Remark) {

@@ -1,4 +1,4 @@
-//===-- NativeRegisterContextLinux_mips64.cpp ---------------*- C++ -*-===//
+//===-- NativeRegisterContextLinux_mips64.cpp -----------------------------===//
 //
 // Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
 // See https://llvm.org/LICENSE.txt for license information.
@@ -79,7 +79,7 @@ using namespace lldb_private::process_linux;
 std::unique_ptr<NativeRegisterContextLinux>
 NativeRegisterContextLinux::CreateHostNativeRegisterContextLinux(
     const ArchSpec &target_arch, NativeThreadProtocol &native_thread) {
-  return llvm::make_unique<NativeRegisterContextLinux_mips64>(target_arch,
+  return std::make_unique<NativeRegisterContextLinux_mips64>(target_arch,
                                                               native_thread);
 }
 
@@ -381,13 +381,6 @@ Status NativeRegisterContextLinux_mips64::ReadAllRegisterValues(
   Status error;
 
   data_sp.reset(new DataBufferHeap(REG_CONTEXT_SIZE, 0));
-  if (!data_sp) {
-    error.SetErrorStringWithFormat(
-        "failed to allocate DataBufferHeap instance of size %" PRIu64,
-        REG_CONTEXT_SIZE);
-    return error;
-  }
-
   error = ReadGPR();
   if (!error.Success()) {
     error.SetErrorString("ReadGPR() failed");
@@ -401,13 +394,6 @@ Status NativeRegisterContextLinux_mips64::ReadAllRegisterValues(
   }
 
   uint8_t *dst = data_sp->GetBytes();
-  if (dst == nullptr) {
-    error.SetErrorStringWithFormat("DataBufferHeap instance of size %" PRIu64
-                                   " returned a null pointer",
-                                   REG_CONTEXT_SIZE);
-    return error;
-  }
-
   ::memcpy(dst, &m_gpr, GetRegisterInfoInterface().GetGPRSize());
   dst += GetRegisterInfoInterface().GetGPRSize();
 
@@ -693,7 +679,7 @@ static int GetVacantWatchIndex(struct pt_watch_regs *regs, lldb::addr_t addr,
     }
 
     if (vacant_watches > 1) {
-      // Split this watchpoint accross several registers
+      // Split this watchpoint across several registers
       struct pt_watch_regs regs_copy;
       regs_copy = *regs;
       lldb::addr_t break_addr;

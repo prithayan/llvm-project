@@ -1,5 +1,4 @@
-//===-- RegisterContextPOSIX_powerpc.cpp -------------------------*- C++
-//-*-===//
+//===-- RegisterContextPOSIX_powerpc.cpp ----------------------------------===//
 //
 // Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
 // See https://llvm.org/LICENSE.txt for license information.
@@ -133,7 +132,7 @@ RegisterContextPOSIX_powerpc::GetRegisterInfoAtIndex(size_t reg) {
   if (reg < k_num_registers_powerpc)
     return &GetRegisterInfo()[reg];
   else
-    return NULL;
+    return nullptr;
 }
 
 size_t RegisterContextPOSIX_powerpc::GetRegisterSetCount() {
@@ -150,7 +149,7 @@ const RegisterSet *RegisterContextPOSIX_powerpc::GetRegisterSet(size_t set) {
   if (IsRegisterSetAvailable(set))
     return &g_reg_sets_powerpc[set];
   else
-    return NULL;
+    return nullptr;
 }
 
 const char *RegisterContextPOSIX_powerpc::GetRegisterName(unsigned reg) {

@@ -25,7 +25,7 @@ class DWARFDebugPubTable {
 public:
   struct Entry {
     /// Section offset from the beginning of the compilation unit.
-    uint32_t SecOffset;
+    uint64_t SecOffset;
 
     /// An entry of the various gnu_pub* debug sections.
     dwarf::PubIndexEntryDescriptor Descriptor;
@@ -42,7 +42,7 @@ public:
   struct Set {
     /// The total length of the entries for that set, not including the length
     /// field itself.
-    uint32_t Length;
+    uint64_t Length;
 
     /// This number is specific to the name lookup table and is independent of
     /// the DWARF version number.
@@ -50,11 +50,11 @@ public:
 
     /// The offset from the beginning of the .debug_info section of the
     /// compilation unit header referenced by the set.
-    uint32_t Offset;
+    uint64_t Offset;
 
     /// The size in bytes of the contents of the .debug_info section generated
     /// to represent that compilation unit.
-    uint32_t Size;
+    uint64_t Size;
 
     std::vector<Entry> Entries;
   };

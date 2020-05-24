@@ -1,4 +1,4 @@
-//===-- SOPInstructions.td - SOP Instruction Defintions -------------------===//
+//===-- SOPInstructions.td - SOP Instruction Definitions ------------------===//
 //
 // Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
 // See https://llvm.org/LICENSE.txt for license information.
@@ -85,12 +85,28 @@ class SOP1_32 <string opName, list<dag> pattern=[], bit tied_in = 0> : SOP1_Pseu
   let Constraints = !if(tied_in, "$sdst = $sdst_in", "");
 }
 
+// Only register input allowed.
+class SOP1_32R <string opName, list<dag> pattern=[]> : SOP1_Pseudo <
+  opName, (outs SReg_32:$sdst), (ins SReg_32:$src0),
+  "$sdst, $src0", pattern>;
+
 // 32-bit input, no output.
 class SOP1_0_32 <string opName, list<dag> pattern = []> : SOP1_Pseudo <
   opName, (outs), (ins SSrc_b32:$src0),
   "$src0", pattern> {
   let has_sdst = 0;
 }
+
+// Special case for movreld where sdst is treated as a use operand.
+class SOP1_32_movreld <string opName, list<dag> pattern=[]> : SOP1_Pseudo <
+  opName, (outs), (ins SReg_32:$sdst, SSrc_b32:$src0),
+  "$sdst, $src0", pattern>;
+
+// Special case for movreld where sdst is treated as a use operand.
+class SOP1_64_movreld <string opName, list<dag> pattern=[]> : SOP1_Pseudo <
+  opName, (outs), (ins SReg_64:$sdst, SSrc_b64:$src0),
+  "$sdst, $src0", pattern
+>;
 
 class SOP1_0_32R <string opName, list<dag> pattern = []> : SOP1_Pseudo <
   opName, (outs), (ins SReg_32:$src0),
@@ -100,6 +116,12 @@ class SOP1_0_32R <string opName, list<dag> pattern = []> : SOP1_Pseudo <
 
 class SOP1_64 <string opName, list<dag> pattern=[]> : SOP1_Pseudo <
   opName, (outs SReg_64:$sdst), (ins SSrc_b64:$src0),
+  "$sdst, $src0", pattern
+>;
+
+// Only register input allowed.
+class SOP1_64R <string opName, list<dag> pattern=[]> : SOP1_Pseudo <
+  opName, (outs SReg_64:$sdst), (ins SReg_64:$src0),
   "$sdst, $src0", pattern
 >;
 
@@ -125,8 +147,8 @@ class SOP1_64_0 <string opName, list<dag> pattern=[]> : SOP1_Pseudo <
 }
 
 // 64-bit input, no output
-class SOP1_1 <string opName, list<dag> pattern=[]> : SOP1_Pseudo <
-  opName, (outs), (ins SReg_64:$src0), "$src0", pattern> {
+class SOP1_1 <string opName, RegisterClass rc = SReg_64, list<dag> pattern=[]> : SOP1_Pseudo <
+  opName, (outs), (ins rc:$src0), "$src0", pattern> {
   let has_sdst = 0;
 }
 
@@ -152,11 +174,23 @@ let Defs = [SCC] in {
     [(set i64:$sdst, (not i64:$src0))]
   >;
   def S_WQM_B32 : SOP1_32 <"s_wqm_b32">;
-  def S_WQM_B64 : SOP1_64 <"s_wqm_b64",
-    [(set i1:$sdst, (int_amdgcn_wqm_vote i1:$src0))]
-  >;
+  def S_WQM_B64 : SOP1_64 <"s_wqm_b64">;
 } // End Defs = [SCC]
 
+
+let WaveSizePredicate = isWave32 in {
+def : GCNPat <
+  (int_amdgcn_wqm_vote i1:$src0),
+  (S_WQM_B32 SSrc_b32:$src0)
+>;
+}
+
+let WaveSizePredicate = isWave64 in {
+def : GCNPat <
+  (int_amdgcn_wqm_vote i1:$src0),
+  (S_WQM_B64 SSrc_b64:$src0)
+>;
+}
 
 def S_BREV_B32 : SOP1_32 <"s_brev_b32",
   [(set i32:$sdst, (bitreverse i32:$src0))]
@@ -169,12 +203,16 @@ def S_BCNT0_I32_B64 : SOP1_32_64 <"s_bcnt0_i32_b64">;
 def S_BCNT1_I32_B32 : SOP1_32 <"s_bcnt1_i32_b32",
   [(set i32:$sdst, (ctpop i32:$src0))]
 >;
-def S_BCNT1_I32_B64 : SOP1_32_64 <"s_bcnt1_i32_b64">;
+def S_BCNT1_I32_B64 : SOP1_32_64 <"s_bcnt1_i32_b64",
+  [(set i32:$sdst, (ctpop i64:$src0))]
+>;
 } // End Defs = [SCC]
 
 def S_FF0_I32_B32 : SOP1_32 <"s_ff0_i32_b32">;
 def S_FF0_I32_B64 : SOP1_32_64 <"s_ff0_i32_b64">;
-def S_FF1_I32_B64 : SOP1_32_64 <"s_ff1_i32_b64">;
+def S_FF1_I32_B64 : SOP1_32_64 <"s_ff1_i32_b64",
+  [(set i32:$sdst, (AMDGPUffbl_b32 i64:$src0))]
+>;
 
 def S_FF1_I32_B32 : SOP1_32 <"s_ff1_i32_b32",
   [(set i32:$sdst, (AMDGPUffbl_b32 i32:$src0))]
@@ -184,7 +222,9 @@ def S_FLBIT_I32_B32 : SOP1_32 <"s_flbit_i32_b32",
   [(set i32:$sdst, (AMDGPUffbh_u32 i32:$src0))]
 >;
 
-def S_FLBIT_I32_B64 : SOP1_32_64 <"s_flbit_i32_b64">;
+def S_FLBIT_I32_B64 : SOP1_32_64 <"s_flbit_i32_b64",
+  [(set i32:$sdst, (AMDGPUffbh_u32 i64:$src0))]
+>;
 def S_FLBIT_I32 : SOP1_32 <"s_flbit_i32",
   [(set i32:$sdst, (AMDGPUffbh_i32 i32:$src0))]
 >;
@@ -212,7 +252,7 @@ def S_SETPC_B64 : SOP1_1  <"s_setpc_b64">;
 
 let isReturn = 1 in {
 // Define variant marked as return rather than branch.
-def S_SETPC_B64_return : SOP1_1<"", [(AMDGPUret_flag i64:$src0)]>;
+def S_SETPC_B64_return : SOP1_1<"", CCR_SGPR_64, [(AMDGPUret_flag i64:$src0)]>;
 }
 } // End isTerminator = 1, isBarrier = 1
 
@@ -240,10 +280,10 @@ def S_QUADMASK_B32 : SOP1_32 <"s_quadmask_b32">;
 def S_QUADMASK_B64 : SOP1_64 <"s_quadmask_b64">;
 
 let Uses = [M0] in {
-def S_MOVRELS_B32 : SOP1_32 <"s_movrels_b32">;
-def S_MOVRELS_B64 : SOP1_64 <"s_movrels_b64">;
-def S_MOVRELD_B32 : SOP1_32 <"s_movreld_b32">;
-def S_MOVRELD_B64 : SOP1_64 <"s_movreld_b64">;
+def S_MOVRELS_B32 : SOP1_32R <"s_movrels_b32">;
+def S_MOVRELS_B64 : SOP1_64R <"s_movrels_b64">;
+def S_MOVRELD_B32 : SOP1_32_movreld <"s_movreld_b32">;
+def S_MOVRELD_B64 : SOP1_64_movreld <"s_movreld_b64">;
 } // End Uses = [M0]
 
 let SubtargetPredicate = isGFX6GFX7GFX8GFX9 in {
@@ -275,6 +315,21 @@ let SubtargetPredicate = isGFX9Plus in {
 } // End SubtargetPredicate = isGFX9Plus
 
 let SubtargetPredicate = isGFX10Plus in {
+  let hasSideEffects = 1, Defs = [EXEC, SCC], Uses = [EXEC] in {
+    def S_AND_SAVEEXEC_B32   : SOP1_32<"s_and_saveexec_b32">;
+    def S_OR_SAVEEXEC_B32    : SOP1_32<"s_or_saveexec_b32">;
+    def S_XOR_SAVEEXEC_B32   : SOP1_32<"s_xor_saveexec_b32">;
+    def S_ANDN2_SAVEEXEC_B32 : SOP1_32<"s_andn2_saveexec_b32">;
+    def S_ORN2_SAVEEXEC_B32  : SOP1_32<"s_orn2_saveexec_b32">;
+    def S_NAND_SAVEEXEC_B32  : SOP1_32<"s_nand_saveexec_b32">;
+    def S_NOR_SAVEEXEC_B32   : SOP1_32<"s_nor_saveexec_b32">;
+    def S_XNOR_SAVEEXEC_B32  : SOP1_32<"s_xnor_saveexec_b32">;
+    def S_ANDN1_SAVEEXEC_B32 : SOP1_32<"s_andn1_saveexec_b32">;
+    def S_ORN1_SAVEEXEC_B32  : SOP1_32<"s_orn1_saveexec_b32">;
+    def S_ANDN1_WREXEC_B32   : SOP1_32<"s_andn1_wrexec_b32">;
+    def S_ANDN2_WREXEC_B32   : SOP1_32<"s_andn2_wrexec_b32">;
+  } // End hasSideEffects = 1, Defs = [EXEC, SCC], Uses = [EXEC]
+
   let Uses = [M0] in {
     def S_MOVRELSD_2_B32 : SOP1_32<"s_movrelsd_2_b32">;
   } // End Uses = [M0]
@@ -361,8 +416,14 @@ class UniformUnaryFrag<SDPatternOperator Op> : PatFrag <
 class UniformBinFrag<SDPatternOperator Op> : PatFrag <
   (ops node:$src0, node:$src1),
   (Op $src0, $src1),
-  [{ return !N->isDivergent(); }]
->;
+  [{ return !N->isDivergent(); }]> {
+  // This check is unnecessary as it's captured by the result register
+  // bank constraint.
+  //
+  // FIXME: Should add a way for the emitter to recognize this is a
+  // trivially true predicate to eliminate the check.
+  let GISelPredicateCode = [{return true;}];
+}
 
 let Defs = [SCC] in { // Carry out goes to SCC
 let isCommutable = 1 in {
@@ -390,16 +451,16 @@ def S_SUBB_U32 : SOP2_32 <"s_subb_u32",
 
 let isCommutable = 1 in {
 def S_MIN_I32 : SOP2_32 <"s_min_i32",
-  [(set i32:$sdst, (UniformBinFrag<smin> i32:$src0, i32:$src1))]
+  [(set i32:$sdst, (smin i32:$src0, i32:$src1))]
 >;
 def S_MIN_U32 : SOP2_32 <"s_min_u32",
-  [(set i32:$sdst, (UniformBinFrag<umin> i32:$src0, i32:$src1))]
+  [(set i32:$sdst, (umin i32:$src0, i32:$src1))]
 >;
 def S_MAX_I32 : SOP2_32 <"s_max_i32",
-  [(set i32:$sdst, (UniformBinFrag<smax> i32:$src0, i32:$src1))]
+  [(set i32:$sdst, (smax i32:$src0, i32:$src1))]
 >;
 def S_MAX_U32 : SOP2_32 <"s_max_u32",
-  [(set i32:$sdst, (UniformBinFrag<umax> i32:$src0, i32:$src1))]
+  [(set i32:$sdst, (umax i32:$src0, i32:$src1))]
 >;
 } // End isCommutable = 1
 } // End Defs = [SCC]
@@ -484,22 +545,22 @@ let AddedComplexity = 1 in {
 let Defs = [SCC] in {
 // TODO: b64 versions require VOP3 change since v_lshlrev_b64 is VOP3
 def S_LSHL_B32 : SOP2_32 <"s_lshl_b32",
-  [(set i32:$sdst, (UniformBinFrag<shl> i32:$src0, i32:$src1))]
+  [(set SReg_32:$sdst, (UniformBinFrag<shl> (i32 SSrc_b32:$src0), (i32 SSrc_b32:$src1)))]
 >;
 def S_LSHL_B64 : SOP2_64_32 <"s_lshl_b64",
-  [(set i64:$sdst, (UniformBinFrag<shl> i64:$src0, i32:$src1))]
+  [(set SReg_64:$sdst, (UniformBinFrag<shl> (i64 SSrc_b64:$src0), (i32 SSrc_b32:$src1)))]
 >;
 def S_LSHR_B32 : SOP2_32 <"s_lshr_b32",
-  [(set i32:$sdst, (UniformBinFrag<srl> i32:$src0, i32:$src1))]
+  [(set SReg_32:$sdst, (UniformBinFrag<srl> (i32 SSrc_b32:$src0), (i32 SSrc_b32:$src1)))]
 >;
 def S_LSHR_B64 : SOP2_64_32 <"s_lshr_b64",
-  [(set i64:$sdst, (UniformBinFrag<srl> i64:$src0, i32:$src1))]
+  [(set SReg_64:$sdst, (UniformBinFrag<srl> (i64 SSrc_b64:$src0), (i32 SSrc_b32:$src1)))]
 >;
 def S_ASHR_I32 : SOP2_32 <"s_ashr_i32",
-  [(set i32:$sdst, (UniformBinFrag<sra> i32:$src0, i32:$src1))]
+  [(set SReg_32:$sdst, (UniformBinFrag<sra> (i32 SSrc_b32:$src0), (i32 SSrc_b32:$src1)))]
 >;
 def S_ASHR_I64 : SOP2_64_32 <"s_ashr_i64",
-  [(set i64:$sdst, (UniformBinFrag<sra> i64:$src0, i32:$src1))]
+  [(set SReg_64:$sdst, (UniformBinFrag<sra> (i64 SSrc_b64:$src0), (i32 SSrc_b32:$src1)))]
 >;
 } // End Defs = [SCC]
 
@@ -552,10 +613,18 @@ let SubtargetPredicate = isGFX9Plus in {
   def S_PACK_HH_B32_B16 : SOP2_32<"s_pack_hh_b32_b16">;
 
   let Defs = [SCC] in {
-    def S_LSHL1_ADD_U32 : SOP2_32<"s_lshl1_add_u32">;
-    def S_LSHL2_ADD_U32 : SOP2_32<"s_lshl2_add_u32">;
-    def S_LSHL3_ADD_U32 : SOP2_32<"s_lshl3_add_u32">;
-    def S_LSHL4_ADD_U32 : SOP2_32<"s_lshl4_add_u32">;
+    def S_LSHL1_ADD_U32 : SOP2_32<"s_lshl1_add_u32",
+      [(set i32:$sdst, (shl1_add SSrc_b32:$src0, SSrc_b32:$src1))]
+    >;
+    def S_LSHL2_ADD_U32 : SOP2_32<"s_lshl2_add_u32",
+      [(set i32:$sdst, (shl2_add SSrc_b32:$src0, SSrc_b32:$src1))]
+    >;
+    def S_LSHL3_ADD_U32 : SOP2_32<"s_lshl3_add_u32",
+      [(set i32:$sdst, (shl3_add SSrc_b32:$src0, SSrc_b32:$src1))]
+    >;
+    def S_LSHL4_ADD_U32 : SOP2_32<"s_lshl4_add_u32",
+      [(set i32:$sdst, (shl4_add SSrc_b32:$src0, SSrc_b32:$src1))]
+    >;
   } // End Defs = [SCC]
 
   let isCommutable = 1 in {
@@ -720,7 +789,7 @@ let Defs = [SCC], isCommutable = 1, DisableEncoding = "$src0",
 let SubtargetPredicate = isGFX6GFX7GFX8GFX9 in
 def S_CBRANCH_I_FORK : SOPK_Pseudo <
   "s_cbranch_i_fork",
-  (outs), (ins SReg_64:$sdst, s16imm:$simm16),
+  (outs), (ins SReg_64:$sdst, sopp_brtarget:$simm16),
   "$sdst, $simm16"
 >;
 
@@ -771,7 +840,7 @@ let SubtargetPredicate = isGFX9Plus in {
   def S_CALL_B64 : SOPK_Pseudo<
       "s_call_b64",
       (outs SReg_64:$sdst),
-      (ins s16imm:$simm16),
+      (ins sopp_brtarget:$simm16),
       "$sdst, $simm16"> {
     let isCall = 1;
   }
@@ -785,6 +854,9 @@ let SubtargetPredicate = isGFX10Plus in {
       "$simm16"> {
     let has_sdst = 0;
   }
+
+  def S_SUBVECTOR_LOOP_BEGIN : SOPK_32_BR<"s_subvector_loop_begin">;
+  def S_SUBVECTOR_LOOP_END   : SOPK_32_BR<"s_subvector_loop_end">;
 
   def S_WAITCNT_VSCNT   : SOPK_WAITCNT<"s_waitcnt_vscnt">;
   def S_WAITCNT_VMCNT   : SOPK_WAITCNT<"s_waitcnt_vmcnt">;
@@ -827,13 +899,13 @@ class SOPC_Base <bits<7> op, RegisterOperand rc0, RegisterOperand rc1,
   let Defs = [SCC];
 }
 class SOPC_Helper <bits<7> op, RegisterOperand rc, ValueType vt,
-                    string opName, PatLeaf cond> : SOPC_Base <
+                    string opName, SDPatternOperator cond> : SOPC_Base <
   op, rc, rc, opName,
   [(set SCC, (si_setcc_uniform vt:$src0, vt:$src1, cond))] > {
 }
 
 class SOPC_CMP_32<bits<7> op, string opName,
-                  PatLeaf cond = COND_NULL, string revOp = opName>
+                  SDPatternOperator cond = COND_NULL, string revOp = opName>
   : SOPC_Helper<op, SSrc_b32, i32, opName, cond>,
     Commutable_REV<revOp, !eq(revOp, opName)>,
     SOPKInstTable<0, opName> {
@@ -842,7 +914,7 @@ class SOPC_CMP_32<bits<7> op, string opName,
 }
 
 class SOPC_CMP_64<bits<7> op, string opName,
-                  PatLeaf cond = COND_NULL, string revOp = opName>
+                  SDPatternOperator cond = COND_NULL, string revOp = opName>
   : SOPC_Helper<op, SSrc_b64, i64, opName, cond>,
     Commutable_REV<revOp, !eq(revOp, opName)> {
   let isCompare = 1;
@@ -896,6 +968,10 @@ def S_SET_GPR_IDX_ON : SOPC <0x11,
 // SOPP Instructions
 //===----------------------------------------------------------------------===//
 
+class Base_SOPP <string asm> {
+  string AsmString = asm;
+}
+
 class SOPPe <bits<7> op> : Enc32 {
   bits <16> simm16;
 
@@ -905,7 +981,7 @@ class SOPPe <bits<7> op> : Enc32 {
 }
 
 class SOPP <bits<7> op, dag ins, string asm, list<dag> pattern = []> :
-  InstSI <(outs), ins, asm, pattern >, SOPPe <op> {
+  InstSI <(outs), ins, asm, pattern >, SOPPe <op>, Base_SOPP <asm> {
 
   let mayLoad = 0;
   let mayStore = 0;
@@ -918,12 +994,41 @@ class SOPP <bits<7> op, dag ins, string asm, list<dag> pattern = []> :
   let UseNamedOperandTable = 1;
 }
 
-
 def S_NOP : SOPP <0x00000000, (ins i16imm:$simm16), "s_nop $simm16">;
+
+class SOPP_w_nop_e <bits<7> op> : Enc64 {
+  bits <16> simm16;
+
+  let Inst{15-0} = simm16;
+  let Inst{22-16} = op;
+  let Inst{31-23} = 0x17f; // encoding
+  let Inst{47-32} = 0x0;
+  let Inst{54-48} = S_NOP.Inst{22-16}; // opcode
+  let Inst{63-55} = S_NOP.Inst{31-23}; // encoding
+}
+
+class SOPP_w_nop <bits<7> op, dag ins, string asm, list<dag> pattern = []> :
+  InstSI <(outs), ins, asm, pattern >, SOPP_w_nop_e <op>, Base_SOPP <asm> {
+
+  let mayLoad = 0;
+  let mayStore = 0;
+  let hasSideEffects = 0;
+  let SALU = 1;
+  let SOPP = 1;
+  let Size = 8;
+  let SchedRW = [WriteSALU];
+
+  let UseNamedOperandTable = 1;
+}
+
+multiclass SOPP_With_Relaxation <bits<7> op, dag ins, string asm, list<dag> pattern = []> {
+  def "" : SOPP <op, ins, asm, pattern>;
+  def _pad_s_nop : SOPP_w_nop <op, ins, asm, pattern>;
+}
 
 let isTerminator = 1 in {
 
-def S_ENDPGM : SOPP <0x00000001, (ins EndpgmImm:$simm16), "s_endpgm $simm16"> {
+def S_ENDPGM : SOPP <0x00000001, (ins EndpgmImm:$simm16), "s_endpgm$simm16"> {
   let isBarrier = 1;
   let isReturn = 1;
 }
@@ -950,61 +1055,61 @@ let SubtargetPredicate = isGFX10Plus in {
 } // End SubtargetPredicate = isGFX10Plus
 
 let isBranch = 1, SchedRW = [WriteBranch] in {
-def S_BRANCH : SOPP <
+let isBarrier = 1 in {
+defm S_BRANCH : SOPP_With_Relaxation <
   0x00000002, (ins sopp_brtarget:$simm16), "s_branch $simm16",
-  [(br bb:$simm16)]> {
-  let isBarrier = 1;
+  [(br bb:$simm16)]>;
 }
 
 let Uses = [SCC] in {
-def S_CBRANCH_SCC0 : SOPP <
+defm S_CBRANCH_SCC0 : SOPP_With_Relaxation <
   0x00000004, (ins sopp_brtarget:$simm16),
   "s_cbranch_scc0 $simm16"
 >;
-def S_CBRANCH_SCC1 : SOPP <
+defm S_CBRANCH_SCC1 : SOPP_With_Relaxation <
   0x00000005, (ins sopp_brtarget:$simm16),
   "s_cbranch_scc1 $simm16"
 >;
 } // End Uses = [SCC]
 
 let Uses = [VCC] in {
-def S_CBRANCH_VCCZ : SOPP <
+defm S_CBRANCH_VCCZ : SOPP_With_Relaxation <
   0x00000006, (ins sopp_brtarget:$simm16),
   "s_cbranch_vccz $simm16"
 >;
-def S_CBRANCH_VCCNZ : SOPP <
+defm S_CBRANCH_VCCNZ : SOPP_With_Relaxation <
   0x00000007, (ins sopp_brtarget:$simm16),
   "s_cbranch_vccnz $simm16"
 >;
 } // End Uses = [VCC]
 
 let Uses = [EXEC] in {
-def S_CBRANCH_EXECZ : SOPP <
+defm S_CBRANCH_EXECZ : SOPP_With_Relaxation <
   0x00000008, (ins sopp_brtarget:$simm16),
   "s_cbranch_execz $simm16"
 >;
-def S_CBRANCH_EXECNZ : SOPP <
+defm S_CBRANCH_EXECNZ : SOPP_With_Relaxation <
   0x00000009, (ins sopp_brtarget:$simm16),
   "s_cbranch_execnz $simm16"
 >;
 } // End Uses = [EXEC]
 
-def S_CBRANCH_CDBGSYS : SOPP <
+defm S_CBRANCH_CDBGSYS : SOPP_With_Relaxation <
   0x00000017, (ins sopp_brtarget:$simm16),
   "s_cbranch_cdbgsys $simm16"
 >;
 
-def S_CBRANCH_CDBGSYS_AND_USER : SOPP <
+defm S_CBRANCH_CDBGSYS_AND_USER : SOPP_With_Relaxation <
   0x0000001A, (ins sopp_brtarget:$simm16),
   "s_cbranch_cdbgsys_and_user $simm16"
 >;
 
-def S_CBRANCH_CDBGSYS_OR_USER : SOPP <
+defm S_CBRANCH_CDBGSYS_OR_USER : SOPP_With_Relaxation <
   0x00000019, (ins sopp_brtarget:$simm16),
   "s_cbranch_cdbgsys_or_user $simm16"
 >;
 
-def S_CBRANCH_CDBGUSER : SOPP <
+defm S_CBRANCH_CDBGUSER : SOPP_With_Relaxation <
   0x00000018, (ins sopp_brtarget:$simm16),
   "s_cbranch_cdbguser $simm16"
 >;
@@ -1017,8 +1122,6 @@ def S_BARRIER : SOPP <0x0000000a, (ins), "s_barrier",
   [(int_amdgcn_s_barrier)]> {
   let SchedRW = [WriteBarrier];
   let simm16 = 0;
-  let mayLoad = 1;
-  let mayStore = 1;
   let isConvergent = 1;
 }
 
@@ -1030,7 +1133,8 @@ def S_WAKEUP : SOPP <0x00000003, (ins), "s_wakeup"> {
 }
 
 let mayLoad = 1, mayStore = 1, hasSideEffects = 1 in
-def S_WAITCNT : SOPP <0x0000000c, (ins WAIT_FLAG:$simm16), "s_waitcnt $simm16">;
+def S_WAITCNT : SOPP <0x0000000c, (ins WAIT_FLAG:$simm16), "s_waitcnt $simm16",
+    [(int_amdgcn_s_waitcnt timm:$simm16)]>;
 def S_SETHALT : SOPP <0x0000000d, (ins i16imm:$simm16), "s_sethalt $simm16">;
 def S_SETKILL : SOPP <0x0000000b, (ins i16imm:$simm16), "s_setkill $simm16">;
 
@@ -1039,7 +1143,7 @@ def S_SETKILL : SOPP <0x0000000b, (ins i16imm:$simm16), "s_setkill $simm16">;
 // maximum reported is 960 cycles, so 960 / 64 = 15 max, so is the
 // maximum really 15 on VI?
 def S_SLEEP : SOPP <0x0000000e, (ins i32imm:$simm16),
-  "s_sleep $simm16", [(int_amdgcn_s_sleep SIMM16bit:$simm16)]> {
+  "s_sleep $simm16", [(int_amdgcn_s_sleep timm:$simm16)]> {
   let hasSideEffects = 1;
   let mayLoad = 1;
   let mayStore = 1;
@@ -1050,26 +1154,28 @@ def S_SETPRIO : SOPP <0x0000000f, (ins i16imm:$simm16), "s_setprio $simm16">;
 let Uses = [EXEC, M0] in {
 // FIXME: Should this be mayLoad+mayStore?
 def S_SENDMSG : SOPP <0x00000010, (ins SendMsgImm:$simm16), "s_sendmsg $simm16",
-  [(AMDGPUsendmsg (i32 imm:$simm16))]
->;
+  [(int_amdgcn_s_sendmsg (i32 timm:$simm16), M0)]>;
 
 def S_SENDMSGHALT : SOPP <0x00000011, (ins SendMsgImm:$simm16), "s_sendmsghalt $simm16",
-  [(AMDGPUsendmsghalt (i32 imm:$simm16))]
->;
+  [(int_amdgcn_s_sendmsghalt (i32 timm:$simm16), M0)]>;
+
 } // End Uses = [EXEC, M0]
 
-def S_TRAP : SOPP <0x00000012, (ins i16imm:$simm16), "s_trap $simm16">;
+def S_TRAP : SOPP <0x00000012, (ins i16imm:$simm16), "s_trap $simm16"> {
+  let isTrap = 1;
+}
+
 def S_ICACHE_INV : SOPP <0x00000013, (ins), "s_icache_inv"> {
   let simm16 = 0;
 }
 def S_INCPERFLEVEL : SOPP <0x00000014, (ins i32imm:$simm16), "s_incperflevel $simm16",
-  [(int_amdgcn_s_incperflevel SIMM16bit:$simm16)]> {
+  [(int_amdgcn_s_incperflevel timm:$simm16)]> {
   let hasSideEffects = 1;
   let mayLoad = 1;
   let mayStore = 1;
 }
 def S_DECPERFLEVEL : SOPP <0x00000015, (ins i32imm:$simm16), "s_decperflevel $simm16",
-  [(int_amdgcn_s_decperflevel SIMM16bit:$simm16)]> {
+  [(int_amdgcn_s_decperflevel timm:$simm16)]> {
   let hasSideEffects = 1;
   let mayLoad = 1;
   let mayStore = 1;
@@ -1106,7 +1212,10 @@ let SubtargetPredicate = isGFX10Plus in {
   def S_ROUND_MODE :
     SOPP<0x024, (ins s16imm:$simm16), "s_round_mode $simm16">;
   def S_DENORM_MODE :
-    SOPP<0x025, (ins s16imm:$simm16), "s_denorm_mode $simm16">;
+    SOPP<0x025, (ins i32imm:$simm16), "s_denorm_mode $simm16",
+    [(SIdenorm_mode (i32 timm:$simm16))]> {
+      let hasSideEffects = 1;
+    }
   def S_TTRACEDATA_IMM :
     SOPP<0x028, (ins s16imm:$simm16), "s_ttracedata_imm $simm16">;
 } // End SubtargetPredicate = isGFX10Plus
@@ -1115,7 +1224,7 @@ let SubtargetPredicate = isGFX10Plus in {
 // S_GETREG_B32 Intrinsic Pattern.
 //===----------------------------------------------------------------------===//
 def : GCNPat <
-  (int_amdgcn_s_getreg imm:$simm16),
+  (int_amdgcn_s_getreg timm:$simm16),
   (S_GETREG_B32 (as_i16imm $simm16))
 >;
 
@@ -1137,7 +1246,7 @@ def : GCNPat <
 
 def : GCNPat <
   (i32 (smax i32:$x, (i32 (ineg i32:$x)))),
-  (S_ABS_I32 $x)
+  (S_ABS_I32 SReg_32:$x)
 >;
 
 def : GCNPat <
@@ -1147,7 +1256,7 @@ def : GCNPat <
 
 // Same as a 32-bit inreg
 def : GCNPat<
-  (i32 (sext i16:$src)),
+  (i32 (UniformUnaryFrag<sext> i16:$src)),
   (S_SEXT_I32_I16 $src)
 >;
 
@@ -1174,7 +1283,7 @@ def : GCNPat<
 >;
 
 def : GCNPat <
-  (i64 (sext i16:$src)),
+  (i64 (UniformUnaryFrag<sext> i16:$src)),
     (REG_SEQUENCE SReg_64, (i32 (S_SEXT_I32_I16 $src)), sub0,
     (i32 (COPY_TO_REGCLASS (S_ASHR_I32 (i32 (S_SEXT_I32_I16 $src)), (S_MOV_B32 (i32 31))), SGPR_32)), sub1)
 >;
@@ -1182,17 +1291,6 @@ def : GCNPat <
 def : GCNPat<
   (i32 (zext i16:$src)),
   (S_AND_B32 (S_MOV_B32 (i32 0xffff)), $src)
->;
-
-
-
-//===----------------------------------------------------------------------===//
-// SOPP Patterns
-//===----------------------------------------------------------------------===//
-
-def : GCNPat <
-  (int_amdgcn_s_waitcnt i32:$simm16),
-  (S_WAITCNT (as_i16imm $simm16))
 >;
 
 
@@ -1219,6 +1317,18 @@ defm S_ORN1_SAVEEXEC_B64    : SOP1_Real_gfx10<0x038>;
 defm S_ANDN1_WREXEC_B64     : SOP1_Real_gfx10<0x039>;
 defm S_ANDN2_WREXEC_B64     : SOP1_Real_gfx10<0x03a>;
 defm S_BITREPLICATE_B64_B32 : SOP1_Real_gfx10<0x03b>;
+defm S_AND_SAVEEXEC_B32     : SOP1_Real_gfx10<0x03c>;
+defm S_OR_SAVEEXEC_B32      : SOP1_Real_gfx10<0x03d>;
+defm S_XOR_SAVEEXEC_B32     : SOP1_Real_gfx10<0x03e>;
+defm S_ANDN2_SAVEEXEC_B32   : SOP1_Real_gfx10<0x03f>;
+defm S_ORN2_SAVEEXEC_B32    : SOP1_Real_gfx10<0x040>;
+defm S_NAND_SAVEEXEC_B32    : SOP1_Real_gfx10<0x041>;
+defm S_NOR_SAVEEXEC_B32     : SOP1_Real_gfx10<0x042>;
+defm S_XNOR_SAVEEXEC_B32    : SOP1_Real_gfx10<0x043>;
+defm S_ANDN1_SAVEEXEC_B32   : SOP1_Real_gfx10<0x044>;
+defm S_ORN1_SAVEEXEC_B32    : SOP1_Real_gfx10<0x045>;
+defm S_ANDN1_WREXEC_B32     : SOP1_Real_gfx10<0x046>;
+defm S_ANDN2_WREXEC_B32     : SOP1_Real_gfx10<0x047>;
 defm S_MOVRELSD_2_B32       : SOP1_Real_gfx10<0x049>;
 
 //===----------------------------------------------------------------------===//
@@ -1386,6 +1496,8 @@ defm S_WAITCNT_VSCNT        : SOPK_Real32_gfx10<0x017>;
 defm S_WAITCNT_VMCNT        : SOPK_Real32_gfx10<0x018>;
 defm S_WAITCNT_EXPCNT       : SOPK_Real32_gfx10<0x019>;
 defm S_WAITCNT_LGKMCNT      : SOPK_Real32_gfx10<0x01a>;
+defm S_SUBVECTOR_LOOP_BEGIN : SOPK_Real32_gfx10<0x01b>;
+defm S_SUBVECTOR_LOOP_END   : SOPK_Real32_gfx10<0x01c>;
 
 //===----------------------------------------------------------------------===//
 // SOPK - GFX6, GFX7.
@@ -1435,7 +1547,7 @@ defm S_SETREG_IMM32_B32 : SOPK_Real64_gfx6_gfx7_gfx10<0x015>;
 
 class Select_vi<string opName> :
   SIMCInstr<opName, SIEncodingFamily.VI> {
-  list<Predicate> AssemblerPredicates = [isGFX8GFX9];
+  Predicate AssemblerPredicate = isGFX8GFX9;
   string DecoderNamespace = "GFX8";
 }
 

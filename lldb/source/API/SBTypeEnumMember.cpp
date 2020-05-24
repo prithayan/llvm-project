@@ -1,4 +1,4 @@
-//===-- SBTypeEnumMember.cpp ---------------------------------- -*- C++ -*-===//
+//===-- SBTypeEnumMember.cpp ----------------------------------------------===//
 //
 // Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
 // See https://llvm.org/LICENSE.txt for license information.
@@ -25,7 +25,7 @@ SBTypeEnumMember::SBTypeEnumMember() : m_opaque_sp() {
   LLDB_RECORD_CONSTRUCTOR_NO_ARGS(SBTypeEnumMember);
 }
 
-SBTypeEnumMember::~SBTypeEnumMember() {}
+SBTypeEnumMember::~SBTypeEnumMember() = default;
 
 SBTypeEnumMember::SBTypeEnumMember(
     const lldb::TypeEnumMemberImplSP &enum_member_sp)
@@ -64,7 +64,7 @@ const char *SBTypeEnumMember::GetName() {
 
   if (m_opaque_sp.get())
     return m_opaque_sp->GetName().GetCString();
-  return NULL;
+  return nullptr;
 }
 
 int64_t SBTypeEnumMember::GetValueAsSigned() {
@@ -98,7 +98,7 @@ void SBTypeEnumMember::reset(TypeEnumMemberImpl *type_member_impl) {
 }
 
 TypeEnumMemberImpl &SBTypeEnumMember::ref() {
-  if (m_opaque_sp.get() == NULL)
+  if (m_opaque_sp.get() == nullptr)
     m_opaque_sp = std::make_shared<TypeEnumMemberImpl>();
   return *m_opaque_sp.get();
 }
@@ -130,7 +130,7 @@ bool SBTypeEnumMemberList::IsValid() {
 SBTypeEnumMemberList::operator bool() const {
   LLDB_RECORD_METHOD_CONST_NO_ARGS(bool, SBTypeEnumMemberList, operator bool);
 
-  return (m_opaque_up != NULL);
+  return (m_opaque_up != nullptr);
 }
 
 SBTypeEnumMemberList &SBTypeEnumMemberList::
@@ -176,7 +176,7 @@ uint32_t SBTypeEnumMemberList::GetSize() {
   return m_opaque_up->GetSize();
 }
 
-SBTypeEnumMemberList::~SBTypeEnumMemberList() {}
+SBTypeEnumMemberList::~SBTypeEnumMemberList() = default;
 
 bool SBTypeEnumMember::GetDescription(
     lldb::SBStream &description, lldb::DescriptionLevel description_level) {

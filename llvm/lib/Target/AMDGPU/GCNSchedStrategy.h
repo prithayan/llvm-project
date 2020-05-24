@@ -40,6 +40,9 @@ class GCNMaxOccupancySchedStrategy final : public GenericScheduler {
                      const SIRegisterInfo *SRI,
                      unsigned SGPRPressure, unsigned VGPRPressure);
 
+  std::vector<unsigned> Pressure;
+  std::vector<unsigned> MaxPressure;
+
   unsigned SGPRExcessLimit;
   unsigned VGPRExcessLimit;
   unsigned SGPRCriticalLimit;
@@ -61,6 +64,14 @@ public:
 
 class GCNScheduleDAGMILive final : public ScheduleDAGMILive {
 
+  enum : unsigned {
+    Collect,
+    InitialSchedule,
+    UnclusteredReschedule,
+    ClusteredLowOccupancyReschedule,
+    LastStage = ClusteredLowOccupancyReschedule
+  };
+
   const GCNSubtarget &ST;
 
   SIMachineFunctionInfo &MFI;
@@ -81,6 +92,10 @@ class GCNScheduleDAGMILive final : public ScheduleDAGMILive {
   SmallVector<std::pair<MachineBasicBlock::iterator,
                         MachineBasicBlock::iterator>, 32> Regions;
 
+  // Records if a region is not yet scheduled, or schedule has been reverted,
+  // or we generally desire to reschedule it.
+  BitVector RescheduleRegions;
+
   // Region live-in cache.
   SmallVector<GCNRPTracker::LiveRegSet, 32> LiveIns;
 
@@ -89,6 +104,9 @@ class GCNScheduleDAGMILive final : public ScheduleDAGMILive {
 
   // Temporary basic block live-in cache.
   DenseMap<const MachineBasicBlock*, GCNRPTracker::LiveRegSet> MBBLiveIns;
+
+  DenseMap<MachineInstr *, GCNRPTracker::LiveRegSet> BBLiveInMap;
+  DenseMap<MachineInstr *, GCNRPTracker::LiveRegSet> getBBLiveInMap() const;
 
   // Return current region pressure.
   GCNRegPressure getRealRegPressure() const;

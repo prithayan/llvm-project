@@ -17,11 +17,13 @@
 #include <memory>
 #include <cassert>
 
+#include "test_macros.h"
+
 namespace ex = std::experimental::pmr;
 
 int main(int, char**)
 {
-    typedef ex::resource_adaptor<std::allocator<void>> R;
+    typedef ex::resource_adaptor<std::allocator<int>> R;
     typedef ex::resource_adaptor<std::allocator<long>> R2;
     static_assert(std::is_same<R, R2>::value, "");
     {

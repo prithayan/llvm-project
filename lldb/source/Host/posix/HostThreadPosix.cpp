@@ -1,4 +1,4 @@
-//===-- HostThreadPosix.cpp -------------------------------------*- C++ -*-===//
+//===-- HostThreadPosix.cpp -----------------------------------------------===//
 //
 // Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
 // See https://llvm.org/LICENSE.txt for license information.
@@ -29,7 +29,7 @@ Status HostThreadPosix::Join(lldb::thread_result_t *result) {
     error.SetError(err, lldb::eErrorTypePOSIX);
   } else {
     if (result)
-      *result = NULL;
+      *result = nullptr;
     error.SetError(EINVAL, eErrorTypePOSIX);
   }
 

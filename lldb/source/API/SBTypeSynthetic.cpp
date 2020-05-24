@@ -1,5 +1,4 @@
-//===-- SBTypeSynthetic.cpp -----------------------------------------*- C++
-//-*-===//
+//===-- SBTypeSynthetic.cpp -----------------------------------------------===//
 //
 // Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
 // See https://llvm.org/LICENSE.txt for license information.
@@ -51,7 +50,7 @@ SBTypeSynthetic::SBTypeSynthetic(const lldb::SBTypeSynthetic &rhs)
                           rhs);
 }
 
-SBTypeSynthetic::~SBTypeSynthetic() {}
+SBTypeSynthetic::~SBTypeSynthetic() = default;
 
 bool SBTypeSynthetic::IsValid() const {
   LLDB_RECORD_METHOD_CONST_NO_ARGS(bool, SBTypeSynthetic, IsValid);
@@ -60,7 +59,7 @@ bool SBTypeSynthetic::IsValid() const {
 SBTypeSynthetic::operator bool() const {
   LLDB_RECORD_METHOD_CONST_NO_ARGS(bool, SBTypeSynthetic, operator bool);
 
-  return m_opaque_sp.get() != NULL;
+  return m_opaque_sp.get() != nullptr;
 }
 
 bool SBTypeSynthetic::IsClassCode() {
@@ -84,7 +83,7 @@ const char *SBTypeSynthetic::GetData() {
   LLDB_RECORD_METHOD_NO_ARGS(const char *, SBTypeSynthetic, GetData);
 
   if (!IsValid())
-    return NULL;
+    return nullptr;
   if (IsClassCode())
     return m_opaque_sp->GetPythonCode();
   else

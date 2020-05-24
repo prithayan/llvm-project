@@ -1,5 +1,4 @@
-//===-- SBTypeFilter.cpp ------------------------------------------*- C++
-//-*-===//
+//===-- SBTypeFilter.cpp --------------------------------------------------===//
 //
 // Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
 // See https://llvm.org/LICENSE.txt for license information.
@@ -31,7 +30,7 @@ SBTypeFilter::SBTypeFilter(const lldb::SBTypeFilter &rhs)
   LLDB_RECORD_CONSTRUCTOR(SBTypeFilter, (const lldb::SBTypeFilter &), rhs);
 }
 
-SBTypeFilter::~SBTypeFilter() {}
+SBTypeFilter::~SBTypeFilter() = default;
 
 bool SBTypeFilter::IsValid() const {
   LLDB_RECORD_METHOD_CONST_NO_ARGS(bool, SBTypeFilter, IsValid);
@@ -40,7 +39,7 @@ bool SBTypeFilter::IsValid() const {
 SBTypeFilter::operator bool() const {
   LLDB_RECORD_METHOD_CONST_NO_ARGS(bool, SBTypeFilter, operator bool);
 
-  return m_opaque_sp.get() != NULL;
+  return m_opaque_sp.get() != nullptr;
 }
 
 uint32_t SBTypeFilter::GetOptions() {
@@ -98,7 +97,7 @@ const char *SBTypeFilter::GetExpressionPathAtIndex(uint32_t i) {
       item++;
     return item;
   }
-  return NULL;
+  return nullptr;
 }
 
 bool SBTypeFilter::ReplaceExpressionPathAtIndex(uint32_t i, const char *item) {

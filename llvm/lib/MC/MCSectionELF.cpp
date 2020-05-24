@@ -53,8 +53,8 @@ static void printName(raw_ostream &OS, StringRef Name) {
 void MCSectionELF::PrintSwitchToSection(const MCAsmInfo &MAI, const Triple &T,
                                         raw_ostream &OS,
                                         const MCExpr *Subsection) const {
-  if (ShouldOmitSectionDirective(SectionName, MAI)) {
-    OS << '\t' << getSectionName();
+  if (ShouldOmitSectionDirective(getName(), MAI)) {
+    OS << '\t' << getName();
     if (Subsection) {
       OS << '\t';
       Subsection->print(OS, &MAI);
@@ -64,7 +64,7 @@ void MCSectionELF::PrintSwitchToSection(const MCAsmInfo &MAI, const Triple &T,
   }
 
   OS << "\t.section\t";
-  printName(OS, getSectionName());
+  printName(OS, getName());
 
   // Handle the weird solaris syntax if desired.
   if (MAI.usesSunStyleELFSectionSwitchSyntax() &&
@@ -152,9 +152,13 @@ void MCSectionELF::PrintSwitchToSection(const MCAsmInfo &MAI, const Triple &T,
     OS << "llvm_linker_options";
   else if (Type == ELF::SHT_LLVM_CALL_GRAPH_PROFILE)
     OS << "llvm_call_graph_profile";
+  else if (Type == ELF::SHT_LLVM_DEPENDENT_LIBRARIES)
+    OS << "llvm_dependent_libraries";
+  else if (Type == ELF::SHT_LLVM_SYMPART)
+    OS << "llvm_sympart";
   else
     report_fatal_error("unsupported type 0x" + Twine::utohexstr(Type) +
-                       " for section " + getSectionName());
+                       " for section " + getName());
 
   if (EntrySize) {
     assert(Flags & ELF::SHF_MERGE);
@@ -168,9 +172,9 @@ void MCSectionELF::PrintSwitchToSection(const MCAsmInfo &MAI, const Triple &T,
   }
 
   if (Flags & ELF::SHF_LINK_ORDER) {
-    assert(AssociatedSymbol);
+    assert(LinkedToSym);
     OS << ",";
-    printName(OS, AssociatedSymbol->getName());
+    printName(OS, LinkedToSym->getName());
   }
 
   if (isUnique())
@@ -192,3 +196,5 @@ bool MCSectionELF::UseCodeAlign() const {
 bool MCSectionELF::isVirtualSection() const {
   return getType() == ELF::SHT_NOBITS;
 }
+
+StringRef MCSectionELF::getVirtualSectionKind() const { return "SHT_NOBITS"; }

@@ -138,12 +138,15 @@ static const unsigned UninitializedAddressSpace =
 namespace {
 
 using ValueToAddrSpaceMapTy = DenseMap<const Value *, unsigned>;
+using PostorderStackTy = llvm::SmallVector<PointerIntPair<Value *, 1, bool>, 4>;
 
 /// InferAddressSpaces
 class InferAddressSpaces : public FunctionPass {
+  const TargetTransformInfo *TTI = nullptr;
+
   /// Target specific address space which uses of should be replaced if
   /// possible.
-  unsigned FlatAddrSpace;
+  unsigned FlatAddrSpace = 0;
 
 public:
   static char ID;
@@ -180,15 +183,14 @@ private:
       const ValueToAddrSpaceMapTy &InferredAddrSpace, Function *F) const;
 
   void appendsFlatAddressExpressionToPostorderStack(
-    Value *V, std::vector<std::pair<Value *, bool>> &PostorderStack,
-    DenseSet<Value *> &Visited) const;
+      Value *V, PostorderStackTy &PostorderStack,
+      DenseSet<Value *> &Visited) const;
 
   bool rewriteIntrinsicOperands(IntrinsicInst *II,
                                 Value *OldV, Value *NewV) const;
-  void collectRewritableIntrinsicOperands(
-    IntrinsicInst *II,
-    std::vector<std::pair<Value *, bool>> &PostorderStack,
-    DenseSet<Value *> &Visited) const;
+  void collectRewritableIntrinsicOperands(IntrinsicInst *II,
+                                          PostorderStackTy &PostorderStack,
+                                          DenseSet<Value *> &Visited) const;
 
   std::vector<WeakTrackingVH> collectFlatAddressExpressions(Function &F) const;
 
@@ -264,17 +266,6 @@ bool InferAddressSpaces::rewriteIntrinsicOperands(IntrinsicInst *II,
   Module *M = II->getParent()->getParent()->getParent();
 
   switch (II->getIntrinsicID()) {
-  case Intrinsic::amdgcn_atomic_inc:
-  case Intrinsic::amdgcn_atomic_dec:
-  case Intrinsic::amdgcn_ds_fadd:
-  case Intrinsic::amdgcn_ds_fmin:
-  case Intrinsic::amdgcn_ds_fmax: {
-    const ConstantInt *IsVolatile = dyn_cast<ConstantInt>(II->getArgOperand(4));
-    if (!IsVolatile || !IsVolatile->isZero())
-      return false;
-
-    LLVM_FALLTHROUGH;
-  }
   case Intrinsic::objectsize: {
     Type *DestTy = II->getType();
     Type *SrcTy = NewV->getType();
@@ -285,25 +276,27 @@ bool InferAddressSpaces::rewriteIntrinsicOperands(IntrinsicInst *II,
     return true;
   }
   default:
-    return false;
+    return TTI->rewriteIntrinsicWithAddressSpace(II, OldV, NewV);
   }
 }
 
-// TODO: Move logic to TTI?
 void InferAddressSpaces::collectRewritableIntrinsicOperands(
-    IntrinsicInst *II, std::vector<std::pair<Value *, bool>> &PostorderStack,
+    IntrinsicInst *II, PostorderStackTy &PostorderStack,
     DenseSet<Value *> &Visited) const {
-  switch (II->getIntrinsicID()) {
+  auto IID = II->getIntrinsicID();
+  switch (IID) {
   case Intrinsic::objectsize:
-  case Intrinsic::amdgcn_atomic_inc:
-  case Intrinsic::amdgcn_atomic_dec:
-  case Intrinsic::amdgcn_ds_fadd:
-  case Intrinsic::amdgcn_ds_fmin:
-  case Intrinsic::amdgcn_ds_fmax:
     appendsFlatAddressExpressionToPostorderStack(II->getArgOperand(0),
                                                  PostorderStack, Visited);
     break;
   default:
+    SmallVector<int, 2> OpIndexes;
+    if (TTI->collectFlatAddressOperands(OpIndexes, IID)) {
+      for (int Idx : OpIndexes) {
+        appendsFlatAddressExpressionToPostorderStack(II->getArgOperand(Idx),
+                                                     PostorderStack, Visited);
+      }
+    }
     break;
   }
 }
@@ -312,7 +305,7 @@ void InferAddressSpaces::collectRewritableIntrinsicOperands(
 // If V is an unvisited flat address expression, appends V to PostorderStack
 // and marks it as visited.
 void InferAddressSpaces::appendsFlatAddressExpressionToPostorderStack(
-    Value *V, std::vector<std::pair<Value *, bool>> &PostorderStack,
+    Value *V, PostorderStackTy &PostorderStack,
     DenseSet<Value *> &Visited) const {
   assert(V->getType()->isPointerTy());
 
@@ -321,7 +314,7 @@ void InferAddressSpaces::appendsFlatAddressExpressionToPostorderStack(
   if (ConstantExpr *CE = dyn_cast<ConstantExpr>(V)) {
     // TODO: Look in non-address parts, like icmp operands.
     if (isAddressExpression(*CE) && Visited.insert(CE).second)
-      PostorderStack.push_back(std::make_pair(CE, false));
+      PostorderStack.emplace_back(CE, false);
 
     return;
   }
@@ -329,7 +322,7 @@ void InferAddressSpaces::appendsFlatAddressExpressionToPostorderStack(
   if (isAddressExpression(*V) &&
       V->getType()->getPointerAddressSpace() == FlatAddrSpace) {
     if (Visited.insert(V).second) {
-      PostorderStack.push_back(std::make_pair(V, false));
+      PostorderStack.emplace_back(V, false);
 
       Operator *Op = cast<Operator>(V);
       for (unsigned I = 0, E = Op->getNumOperands(); I != E; ++I) {
@@ -348,7 +341,7 @@ std::vector<WeakTrackingVH>
 InferAddressSpaces::collectFlatAddressExpressions(Function &F) const {
   // This function implements a non-recursive postorder traversal of a partial
   // use-def graph of function F.
-  std::vector<std::pair<Value *, bool>> PostorderStack;
+  PostorderStackTy PostorderStack;
   // The set of visited expressions.
   DenseSet<Value *> Visited;
 
@@ -395,17 +388,17 @@ InferAddressSpaces::collectFlatAddressExpressions(Function &F) const {
 
   std::vector<WeakTrackingVH> Postorder; // The resultant postorder.
   while (!PostorderStack.empty()) {
-    Value *TopVal = PostorderStack.back().first;
+    Value *TopVal = PostorderStack.back().getPointer();
     // If the operands of the expression on the top are already explored,
     // adds that expression to the resultant postorder.
-    if (PostorderStack.back().second) {
+    if (PostorderStack.back().getInt()) {
       if (TopVal->getType()->getPointerAddressSpace() == FlatAddrSpace)
         Postorder.push_back(TopVal);
       PostorderStack.pop_back();
       continue;
     }
     // Otherwise, adds its operands to the stack and explores them.
-    PostorderStack.back().second = true;
+    PostorderStack.back().setInt(true);
     for (Value *PtrOperand : getPointerOperands(*TopVal)) {
       appendsFlatAddressExpressionToPostorderStack(PtrOperand, PostorderStack,
                                                    Visited);
@@ -631,11 +624,10 @@ bool InferAddressSpaces::runOnFunction(Function &F) {
   if (skipFunction(F))
     return false;
 
-  const TargetTransformInfo &TTI =
-      getAnalysis<TargetTransformInfoWrapperPass>().getTTI(F);
+  TTI = &getAnalysis<TargetTransformInfoWrapperPass>().getTTI(F);
 
   if (FlatAddrSpace == UninitializedAddressSpace) {
-    FlatAddrSpace = TTI.getFlatAddressSpace();
+    FlatAddrSpace = TTI->getFlatAddressSpace();
     if (FlatAddrSpace == UninitializedAddressSpace)
       return false;
   }
@@ -650,7 +642,7 @@ bool InferAddressSpaces::runOnFunction(Function &F) {
 
   // Changes the address spaces of the flat address expressions who are inferred
   // to point to a specific address space.
-  return rewriteWithNewAddressSpaces(TTI, Postorder, InferredAddrSpace, &F);
+  return rewriteWithNewAddressSpaces(*TTI, Postorder, InferredAddrSpace, &F);
 }
 
 // Constants need to be tracked through RAUW to handle cases with nested
@@ -799,8 +791,8 @@ static bool handleMemIntrinsicPtrUse(MemIntrinsic *MI, Value *OldV,
   MDNode *NoAliasMD = MI->getMetadata(LLVMContext::MD_noalias);
 
   if (auto *MSI = dyn_cast<MemSetInst>(MI)) {
-    B.CreateMemSet(NewV, MSI->getValue(),
-                   MSI->getLength(), MSI->getDestAlignment(),
+    B.CreateMemSet(NewV, MSI->getValue(), MSI->getLength(),
+                   MaybeAlign(MSI->getDestAlignment()),
                    false, // isVolatile
                    TBAA, ScopeMD, NoAliasMD);
   } else if (auto *MTI = dyn_cast<MemTransferInst>(MI)) {
@@ -816,15 +808,13 @@ static bool handleMemIntrinsicPtrUse(MemIntrinsic *MI, Value *OldV,
 
     if (isa<MemCpyInst>(MTI)) {
       MDNode *TBAAStruct = MTI->getMetadata(LLVMContext::MD_tbaa_struct);
-      B.CreateMemCpy(Dest, MTI->getDestAlignment(),
-                     Src, MTI->getSourceAlignment(),
+      B.CreateMemCpy(Dest, MTI->getDestAlign(), Src, MTI->getSourceAlign(),
                      MTI->getLength(),
                      false, // isVolatile
                      TBAA, TBAAStruct, ScopeMD, NoAliasMD);
     } else {
       assert(isa<MemMoveInst>(MTI));
-      B.CreateMemMove(Dest, MTI->getDestAlignment(),
-                      Src, MTI->getSourceAlignment(),
+      B.CreateMemMove(Dest, MTI->getDestAlign(), Src, MTI->getSourceAlign(),
                       MTI->getLength(),
                       false, // isVolatile
                       TBAA, ScopeMD, NoAliasMD);
@@ -1006,8 +996,12 @@ bool InferAddressSpaces::rewriteWithNewAddressSpaces(
         }
 
         // Otherwise, replaces the use with flat(NewV).
-        if (Instruction *I = dyn_cast<Instruction>(V)) {
-          BasicBlock::iterator InsertPos = std::next(I->getIterator());
+        if (Instruction *Inst = dyn_cast<Instruction>(V)) {
+          // Don't create a copy of the original addrspacecast.
+          if (U == V && isa<AddrSpaceCastInst>(V))
+            continue;
+
+          BasicBlock::iterator InsertPos = std::next(Inst->getIterator());
           while (isa<PHINode>(InsertPos))
             ++InsertPos;
           U.set(new AddrSpaceCastInst(NewV, V->getType(), "", &*InsertPos));

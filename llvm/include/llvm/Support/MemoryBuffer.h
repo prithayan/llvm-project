@@ -19,7 +19,6 @@
 #include "llvm/ADT/Twine.h"
 #include "llvm/Support/CBindingWrapping.h"
 #include "llvm/Support/ErrorOr.h"
-#include "llvm/Support/FileSystem.h"
 #include <cstddef>
 #include <cstdint>
 #include <memory>
@@ -27,6 +26,18 @@
 namespace llvm {
 
 class MemoryBufferRef;
+
+namespace sys {
+namespace fs {
+// Duplicated from FileSystem.h to avoid a dependency.
+#if defined(_WIN32)
+// A Win32 HANDLE is a typedef of void*
+using file_t = void *;
+#else
+using file_t = int;
+#endif
+} // namespace fs
+} // namespace sys
 
 /// This interface provides simple read-only access to a block of memory, and
 /// provides simple methods for reading files and standard input into a memory
@@ -47,9 +58,6 @@ protected:
 
   void init(const char *BufStart, const char *BufEnd,
             bool RequiresNullTerminator);
-
-  static constexpr sys::fs::mapped_file_region::mapmode Mapmode =
-      sys::fs::mapped_file_region::readonly;
 
 public:
   MemoryBuffer(const MemoryBuffer &) = delete;
@@ -90,7 +98,7 @@ public:
   /// MemoryBuffer. The slice is specified by an \p Offset and \p MapSize.
   /// Since this is in the middle of a file, the buffer is not null terminated.
   static ErrorOr<std::unique_ptr<MemoryBuffer>>
-  getOpenFileSlice(int FD, const Twine &Filename, uint64_t MapSize,
+  getOpenFileSlice(sys::fs::file_t FD, const Twine &Filename, uint64_t MapSize,
                    int64_t Offset, bool IsVolatile = false);
 
   /// Given an already-open file descriptor, read the file and return a
@@ -100,7 +108,7 @@ public:
   /// can change outside the user's control, e.g. when libclang tries to parse
   /// while the user is editing/updating the file or if the file is on an NFS.
   static ErrorOr<std::unique_ptr<MemoryBuffer>>
-  getOpenFile(int FD, const Twine &Filename, uint64_t FileSize,
+  getOpenFile(sys::fs::file_t FD, const Twine &Filename, uint64_t FileSize,
               bool RequiresNullTerminator = true, bool IsVolatile = false);
 
   /// Open the specified memory range as a MemoryBuffer. Note that InputData
@@ -155,9 +163,6 @@ public:
 class WritableMemoryBuffer : public MemoryBuffer {
 protected:
   WritableMemoryBuffer() = default;
-
-  static constexpr sys::fs::mapped_file_region::mapmode Mapmode =
-      sys::fs::mapped_file_region::priv;
 
 public:
   using MemoryBuffer::getBuffer;
@@ -217,9 +222,6 @@ private:
 class WriteThroughMemoryBuffer : public MemoryBuffer {
 protected:
   WriteThroughMemoryBuffer() = default;
-
-  static constexpr sys::fs::mapped_file_region::mapmode Mapmode =
-      sys::fs::mapped_file_region::readwrite;
 
 public:
   using MemoryBuffer::getBuffer;

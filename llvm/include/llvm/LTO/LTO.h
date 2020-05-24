@@ -17,27 +17,24 @@
 
 #include "llvm/ADT/MapVector.h"
 #include "llvm/ADT/StringMap.h"
-#include "llvm/ADT/StringSet.h"
-#include "llvm/IR/DiagnosticInfo.h"
 #include "llvm/IR/ModuleSummaryIndex.h"
 #include "llvm/LTO/Config.h"
-#include "llvm/Linker/IRMover.h"
 #include "llvm/Object/IRSymtab.h"
 #include "llvm/Support/Error.h"
-#include "llvm/Support/ToolOutputFile.h"
 #include "llvm/Support/thread.h"
-#include "llvm/Target/TargetOptions.h"
 #include "llvm/Transforms/IPO/FunctionImport.h"
 
 namespace llvm {
 
 class BitcodeModule;
 class Error;
+class IRMover;
 class LLVMContext;
 class MemoryBufferRef;
 class Module;
-class Target;
 class raw_pwrite_stream;
+class Target;
+class ToolOutputFile;
 
 /// Resolve linkage for prevailing symbols in the \p Index. Linkage changes
 /// recorded in the index and the ThinLTO backends must apply the changes to
@@ -58,7 +55,9 @@ void thinLTOResolvePrevailingInIndex(
 /// must apply the changes to the Module via thinLTOInternalizeModule.
 void thinLTOInternalizeAndPromoteInIndex(
     ModuleSummaryIndex &Index,
-    function_ref<bool(StringRef, GlobalValue::GUID)> isExported);
+    function_ref<bool(StringRef, ValueInfo)> isExported,
+    function_ref<bool(GlobalValue::GUID, const GlobalValueSummary *)>
+        isPrevailing);
 
 /// Computes a unique hash for the Module considering the current list of
 /// export/import and other global analysis results.
@@ -84,9 +83,9 @@ std::string getThinLTOOutputFile(const std::string &Path,
 
 /// Setup optimization remarks.
 Expected<std::unique_ptr<ToolOutputFile>>
-setupOptimizationRemarks(LLVMContext &Context, StringRef LTORemarksFilename,
-                         StringRef LTORemarksPasses,
-                         bool LTOPassRemarksWithHotness, int Count = -1);
+setupLLVMOptimizationRemarks(LLVMContext &Context, StringRef RemarksFilename,
+                             StringRef RemarksPasses, StringRef RemarksFormat,
+                             bool RemarksWithHotness, int Count = -1);
 
 /// Setups the output file for saving statistics.
 Expected<std::unique_ptr<ToolOutputFile>>
@@ -115,6 +114,7 @@ private:
   std::vector<std::pair<size_t, size_t>> ModuleSymIndices;
 
   StringRef TargetTriple, SourceFileName, COFFLinkerOpts;
+  std::vector<StringRef> DependentLibraries;
   std::vector<StringRef> ComdatTable;
 
 public:
@@ -154,6 +154,9 @@ public:
 
   /// Returns linker options specified in the input file.
   StringRef getCOFFLinkerOpts() const { return COFFLinkerOpts; }
+
+  /// Returns dependent library specifiers from the input file.
+  ArrayRef<StringRef> getDependentLibraries() const { return DependentLibraries; }
 
   /// Returns the path to the InputFile.
   StringRef getName() const;
@@ -215,12 +218,13 @@ using NativeObjectCache =
 /// The details of this type definition aren't important; clients can only
 /// create a ThinBackend using one of the create*ThinBackend() functions below.
 using ThinBackend = std::function<std::unique_ptr<ThinBackendProc>(
-    Config &C, ModuleSummaryIndex &CombinedIndex,
+    const Config &C, ModuleSummaryIndex &CombinedIndex,
     StringMap<GVSummaryMapTy> &ModuleToDefinedGVSummaries,
     AddStreamFn AddStream, NativeObjectCache Cache)>;
 
 /// This ThinBackend runs the individual backend jobs in-process.
-ThinBackend createInProcessThinBackend(unsigned ParallelismLevel);
+/// The default value means to use one job per hardware core (not hyper-thread).
+ThinBackend createInProcessThinBackend(ThreadPoolStrategy Parallelism);
 
 /// This ThinBackend writes individual module indexes to files, instead of
 /// running the individual backend jobs. This backend is for distributed builds
@@ -291,14 +295,19 @@ public:
   /// Cache) for each task identifier.
   Error run(AddStreamFn AddStream, NativeObjectCache Cache = nullptr);
 
+  /// Static method that returns a list of libcall symbols that can be generated
+  /// by LTO but might not be visible from bitcode symbol table.
+  static ArrayRef<const char*> getRuntimeLibcallSymbols();
+
 private:
   Config Conf;
 
   struct RegularLTOState {
-    RegularLTOState(unsigned ParallelCodeGenParallelismLevel, Config &Conf);
+    RegularLTOState(unsigned ParallelCodeGenParallelismLevel,
+                    const Config &Conf);
     struct CommonResolution {
       uint64_t Size = 0;
-      unsigned Align = 0;
+      MaybeAlign Align;
       /// Record if at least one instance of the common was marked as prevailing
       bool Prevailing = false;
     };
@@ -318,6 +327,7 @@ private:
       std::vector<GlobalValue *> Keep;
     };
     std::vector<AddedModule> ModsWithSummaries;
+    bool EmptyCombinedModule = true;
   } RegularLTO;
 
   struct ThinLTOState {

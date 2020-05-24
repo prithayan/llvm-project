@@ -10,11 +10,12 @@
 #include "llvm/AsmParser/Parser.h"
 #include "llvm/IR/Function.h"
 #include "llvm/IR/InstIterator.h"
+#include "llvm/IR/Instructions.h"
 #include "llvm/IR/LLVMContext.h"
 #include "llvm/IR/Module.h"
 #include "llvm/Support/ErrorHandling.h"
-#include "llvm/Support/SourceMgr.h"
 #include "llvm/Support/KnownBits.h"
+#include "llvm/Support/SourceMgr.h"
 #include "gtest/gtest.h"
 
 using namespace llvm;
@@ -23,21 +24,26 @@ namespace {
 
 class ValueTrackingTest : public testing::Test {
 protected:
-  void parseAssembly(const char *Assembly) {
+  std::unique_ptr<Module> parseModule(StringRef Assembly) {
     SMDiagnostic Error;
-    M = parseAssemblyString(Assembly, Error, Context);
+    std::unique_ptr<Module> M = parseAssemblyString(Assembly, Error, Context);
 
     std::string errMsg;
     raw_string_ostream os(errMsg);
     Error.print("", os);
+    EXPECT_TRUE(M) << os.str();
 
-    // A failure here means that the test itself is buggy.
-    if (!M)
-      report_fatal_error(os.str());
+    return M;
+  }
+
+  void parseAssembly(StringRef Assembly) {
+    M = parseModule(Assembly);
+    ASSERT_TRUE(M);
 
     Function *F = M->getFunction("test");
-    if (F == nullptr)
-      report_fatal_error("Test must have a function named @test");
+    ASSERT_TRUE(F) << "Test must have a function @test";
+    if (!F)
+      return;
 
     A = nullptr;
     for (inst_iterator I = inst_begin(F), E = inst_end(F); I != E; ++I) {
@@ -46,13 +52,12 @@ protected:
           A = &*I;
       }
     }
-    if (A == nullptr)
-      report_fatal_error("@test must have an instruction %A");
+    ASSERT_TRUE(A) << "@test must have an instruction %A";
   }
 
   LLVMContext Context;
   std::unique_ptr<Module> M;
-  Instruction *A;
+  Instruction *A = nullptr;
 };
 
 class MatchSelectPatternTest : public ValueTrackingTest {
@@ -458,12 +463,133 @@ TEST_F(MatchSelectPatternTest, DoubleCastBad) {
   expectPattern({SPF_UNKNOWN, SPNB_NA, false});
 }
 
+TEST_F(MatchSelectPatternTest, NotNotSMin) {
+  parseAssembly(
+      "define i8 @test(i8 %a, i8 %b) {\n"
+      "  %cmp = icmp sgt i8 %a, %b\n"
+      "  %an = xor i8 %a, -1\n"
+      "  %bn = xor i8 %b, -1\n"
+      "  %A = select i1 %cmp, i8 %an, i8 %bn\n"
+      "  ret i8 %A\n"
+      "}\n");
+  expectPattern({SPF_SMIN, SPNB_NA, false});
+}
+
+TEST_F(MatchSelectPatternTest, NotNotSMinSwap) {
+  parseAssembly(
+      "define <2 x i8> @test(<2 x i8> %a, <2 x i8> %b) {\n"
+      "  %cmp = icmp slt <2 x i8> %a, %b\n"
+      "  %an = xor <2 x i8> %a, <i8 -1, i8-1>\n"
+      "  %bn = xor <2 x i8> %b, <i8 -1, i8-1>\n"
+      "  %A = select <2 x i1> %cmp, <2 x i8> %bn, <2 x i8> %an\n"
+      "  ret <2 x i8> %A\n"
+      "}\n");
+  expectPattern({SPF_SMIN, SPNB_NA, false});
+}
+
+TEST_F(MatchSelectPatternTest, NotNotSMax) {
+  parseAssembly(
+      "define i8 @test(i8 %a, i8 %b) {\n"
+      "  %cmp = icmp slt i8 %a, %b\n"
+      "  %an = xor i8 %a, -1\n"
+      "  %bn = xor i8 %b, -1\n"
+      "  %A = select i1 %cmp, i8 %an, i8 %bn\n"
+      "  ret i8 %A\n"
+      "}\n");
+  expectPattern({SPF_SMAX, SPNB_NA, false});
+}
+
+TEST_F(MatchSelectPatternTest, NotNotSMaxSwap) {
+  parseAssembly(
+      "define <2 x i8> @test(<2 x i8> %a, <2 x i8> %b) {\n"
+      "  %cmp = icmp sgt <2 x i8> %a, %b\n"
+      "  %an = xor <2 x i8> %a, <i8 -1, i8-1>\n"
+      "  %bn = xor <2 x i8> %b, <i8 -1, i8-1>\n"
+      "  %A = select <2 x i1> %cmp, <2 x i8> %bn, <2 x i8> %an\n"
+      "  ret <2 x i8> %A\n"
+      "}\n");
+  expectPattern({SPF_SMAX, SPNB_NA, false});
+}
+
+TEST_F(MatchSelectPatternTest, NotNotUMin) {
+  parseAssembly(
+      "define <2 x i8> @test(<2 x i8> %a, <2 x i8> %b) {\n"
+      "  %cmp = icmp ugt <2 x i8> %a, %b\n"
+      "  %an = xor <2 x i8> %a, <i8 -1, i8-1>\n"
+      "  %bn = xor <2 x i8> %b, <i8 -1, i8-1>\n"
+      "  %A = select <2 x i1> %cmp, <2 x i8> %an, <2 x i8> %bn\n"
+      "  ret <2 x i8> %A\n"
+      "}\n");
+  expectPattern({SPF_UMIN, SPNB_NA, false});
+}
+
+TEST_F(MatchSelectPatternTest, NotNotUMinSwap) {
+  parseAssembly(
+      "define i8 @test(i8 %a, i8 %b) {\n"
+      "  %cmp = icmp ult i8 %a, %b\n"
+      "  %an = xor i8 %a, -1\n"
+      "  %bn = xor i8 %b, -1\n"
+      "  %A = select i1 %cmp, i8 %bn, i8 %an\n"
+      "  ret i8 %A\n"
+      "}\n");
+  expectPattern({SPF_UMIN, SPNB_NA, false});
+}
+
+TEST_F(MatchSelectPatternTest, NotNotUMax) {
+  parseAssembly(
+      "define <2 x i8> @test(<2 x i8> %a, <2 x i8> %b) {\n"
+      "  %cmp = icmp ult <2 x i8> %a, %b\n"
+      "  %an = xor <2 x i8> %a, <i8 -1, i8-1>\n"
+      "  %bn = xor <2 x i8> %b, <i8 -1, i8-1>\n"
+      "  %A = select <2 x i1> %cmp, <2 x i8> %an, <2 x i8> %bn\n"
+      "  ret <2 x i8> %A\n"
+      "}\n");
+  expectPattern({SPF_UMAX, SPNB_NA, false});
+}
+
+TEST_F(MatchSelectPatternTest, NotNotUMaxSwap) {
+  parseAssembly(
+      "define i8 @test(i8 %a, i8 %b) {\n"
+      "  %cmp = icmp ugt i8 %a, %b\n"
+      "  %an = xor i8 %a, -1\n"
+      "  %bn = xor i8 %b, -1\n"
+      "  %A = select i1 %cmp, i8 %bn, i8 %an\n"
+      "  ret i8 %A\n"
+      "}\n");
+  expectPattern({SPF_UMAX, SPNB_NA, false});
+}
+
+TEST_F(MatchSelectPatternTest, NotNotEq) {
+  parseAssembly(
+      "define i8 @test(i8 %a, i8 %b) {\n"
+      "  %cmp = icmp eq i8 %a, %b\n"
+      "  %an = xor i8 %a, -1\n"
+      "  %bn = xor i8 %b, -1\n"
+      "  %A = select i1 %cmp, i8 %bn, i8 %an\n"
+      "  ret i8 %A\n"
+      "}\n");
+  expectPattern({SPF_UNKNOWN, SPNB_NA, false});
+}
+
+TEST_F(MatchSelectPatternTest, NotNotNe) {
+  parseAssembly(
+      "define i8 @test(i8 %a, i8 %b) {\n"
+      "  %cmp = icmp ne i8 %a, %b\n"
+      "  %an = xor i8 %a, -1\n"
+      "  %bn = xor i8 %b, -1\n"
+      "  %A = select i1 %cmp, i8 %bn, i8 %an\n"
+      "  ret i8 %A\n"
+      "}\n");
+  expectPattern({SPF_UNKNOWN, SPNB_NA, false});
+}
+
 TEST(ValueTracking, GuaranteedToTransferExecutionToSuccessor) {
   StringRef Assembly =
       "declare void @nounwind_readonly(i32*) nounwind readonly "
       "declare void @nounwind_argmemonly(i32*) nounwind argmemonly "
       "declare void @throws_but_readonly(i32*) readonly "
       "declare void @throws_but_argmemonly(i32*) argmemonly "
+      "declare void @nounwind_willreturn(i32*) nounwind willreturn"
       " "
       "declare void @unknown(i32*) "
       " "
@@ -476,6 +602,7 @@ TEST(ValueTracking, GuaranteedToTransferExecutionToSuccessor) {
       "  call void @unknown(i32* %p) nounwind argmemonly "
       "  call void @unknown(i32* %p) readonly "
       "  call void @unknown(i32* %p) argmemonly "
+      "  call void @nounwind_willreturn(i32* %p)"
       "  ret void "
       "} ";
 
@@ -497,6 +624,7 @@ TEST(ValueTracking, GuaranteedToTransferExecutionToSuccessor) {
       true,  // call void @unknown(i32* %p) nounwind argmemonly
       false, // call void @unknown(i32* %p) readonly
       false, // call void @unknown(i32* %p) argmemonly
+      true,  // call void @nounwind_willreturn(i32* %p)
       false, // ret void
   };
 
@@ -518,7 +646,7 @@ TEST_F(ValueTrackingTest, ComputeNumSignBits_PR32045) {
   EXPECT_EQ(ComputeNumSignBits(A, M->getDataLayout()), 1u);
 }
 
-// No guarantees for canonical IR in this analysis, so this just bails out. 
+// No guarantees for canonical IR in this analysis, so this just bails out.
 TEST_F(ValueTrackingTest, ComputeNumSignBits_Shuffle) {
   parseAssembly(
       "define <2 x i32> @test() {\n"
@@ -529,7 +657,7 @@ TEST_F(ValueTrackingTest, ComputeNumSignBits_Shuffle) {
 }
 
 // No guarantees for canonical IR in this analysis, so a shuffle element that
-// references an undef value means this can't return any extra information. 
+// references an undef value means this can't return any extra information.
 TEST_F(ValueTrackingTest, ComputeNumSignBits_Shuffle2) {
   parseAssembly(
       "define <2 x i32> @test(<2 x i1> %x) {\n"
@@ -538,6 +666,132 @@ TEST_F(ValueTrackingTest, ComputeNumSignBits_Shuffle2) {
       "  ret <2 x i32> %A\n"
       "}\n");
   EXPECT_EQ(ComputeNumSignBits(A, M->getDataLayout()), 1u);
+}
+
+TEST(ValueTracking, propagatesPoison) {
+  std::string AsmHead = "declare i32 @g(i32)\n"
+                        "define void @f(i32 %x, i32 %y, float %fx, float %fy, "
+                        "i1 %cond, i8* %p) {\n";
+  std::string AsmTail = "  ret void\n}";
+  // (propagates poison?, IR instruction)
+  SmallVector<std::pair<bool, std::string>, 32> Data = {
+      {true, "add i32 %x, %y"},
+      {true, "add nsw nuw i32 %x, %y"},
+      {true, "ashr i32 %x, %y"},
+      {true, "lshr exact i32 %x, 31"},
+      {true, "fcmp oeq float %fx, %fy"},
+      {true, "icmp eq i32 %x, %y"},
+      {true, "getelementptr i8, i8* %p, i32 %x"},
+      {true, "getelementptr inbounds i8, i8* %p, i32 %x"},
+      {true, "bitcast float %fx to i32"},
+      {false, "select i1 %cond, i32 %x, i32 %y"},
+      {false, "freeze i32 %x"},
+      {true, "udiv i32 %x, %y"},
+      {true, "urem i32 %x, %y"},
+      {true, "sdiv exact i32 %x, %y"},
+      {true, "srem i32 %x, %y"},
+      {false, "call i32 @g(i32 %x)"}};
+
+  std::string AssemblyStr = AsmHead;
+  for (auto &Itm : Data)
+    AssemblyStr += Itm.second + "\n";
+  AssemblyStr += AsmTail;
+
+  LLVMContext Context;
+  SMDiagnostic Error;
+  auto M = parseAssemblyString(AssemblyStr, Error, Context);
+  assert(M && "Bad assembly?");
+
+  auto *F = M->getFunction("f");
+  assert(F && "Bad assembly?");
+
+  auto &BB = F->getEntryBlock();
+
+  int Index = 0;
+  for (auto &I : BB) {
+    if (isa<ReturnInst>(&I))
+      break;
+    EXPECT_EQ(propagatesPoison(&I), Data[Index].first)
+        << "Incorrect answer at instruction " << Index << " = " << I;
+    Index++;
+  }
+}
+
+TEST(ValueTracking, canCreatePoison) {
+  std::string AsmHead =
+      "declare i32 @g(i32)\n"
+      "define void @f(i32 %x, i32 %y, float %fx, float %fy, i1 %cond, "
+      "<4 x i32> %vx, <4 x i32> %vx2, <vscale x 4 x i32> %svx, i8* %p) {\n";
+  std::string AsmTail = "  ret void\n}";
+  // (can create poison?, IR instruction)
+  SmallVector<std::pair<bool, std::string>, 32> Data = {
+      {false, "add i32 %x, %y"},
+      {true, "add nsw nuw i32 %x, %y"},
+      {true, "shl i32 %x, %y"},
+      {true, "shl <4 x i32> %vx, %vx2"},
+      {true, "shl nsw i32 %x, %y"},
+      {true, "shl nsw <4 x i32> %vx, <i32 0, i32 1, i32 2, i32 3>"},
+      {false, "shl i32 %x, 31"},
+      {true, "shl i32 %x, 32"},
+      {false, "shl <4 x i32> %vx, <i32 0, i32 1, i32 2, i32 3>"},
+      {true, "shl <4 x i32> %vx, <i32 0, i32 1, i32 2, i32 32>"},
+      {true, "ashr i32 %x, %y"},
+      {true, "ashr exact i32 %x, %y"},
+      {false, "ashr i32 %x, 31"},
+      {true, "ashr exact i32 %x, 31"},
+      {false, "ashr <4 x i32> %vx, <i32 0, i32 1, i32 2, i32 3>"},
+      {true, "ashr <4 x i32> %vx, <i32 0, i32 1, i32 2, i32 32>"},
+      {true, "ashr exact <4 x i32> %vx, <i32 0, i32 1, i32 2, i32 3>"},
+      {true, "lshr i32 %x, %y"},
+      {true, "lshr exact i32 %x, 31"},
+      {false, "udiv i32 %x, %y"},
+      {true, "udiv exact i32 %x, %y"},
+      {false, "getelementptr i8, i8* %p, i32 %x"},
+      {true, "getelementptr inbounds i8, i8* %p, i32 %x"},
+      {true, "fneg nnan float %fx"},
+      {false, "fneg float %fx"},
+      {false, "fadd float %fx, %fy"},
+      {true, "fadd nnan float %fx, %fy"},
+      {false, "urem i32 %x, %y"},
+      {true, "fptoui float %fx to i32"},
+      {true, "fptosi float %fx to i32"},
+      {false, "bitcast float %fx to i32"},
+      {false, "select i1 %cond, i32 %x, i32 %y"},
+      {true, "select nnan i1 %cond, float %fx, float %fy"},
+      {true, "extractelement <4 x i32> %vx, i32 %x"},
+      {false, "extractelement <4 x i32> %vx, i32 3"},
+      {true, "extractelement <vscale x 4 x i32> %svx, i32 4"},
+      {true, "insertelement <4 x i32> %vx, i32 %x, i32 %y"},
+      {false, "insertelement <4 x i32> %vx, i32 %x, i32 3"},
+      {true, "insertelement <vscale x 4 x i32> %svx, i32 %x, i32 4"},
+      {false, "freeze i32 %x"},
+      {true, "call i32 @g(i32 %x)"},
+      {true, "fcmp nnan oeq float %fx, %fy"},
+      {false, "fcmp oeq float %fx, %fy"}};
+
+  std::string AssemblyStr = AsmHead;
+  for (auto &Itm : Data)
+    AssemblyStr += Itm.second + "\n";
+  AssemblyStr += AsmTail;
+
+  LLVMContext Context;
+  SMDiagnostic Error;
+  auto M = parseAssemblyString(AssemblyStr, Error, Context);
+  assert(M && "Bad assembly?");
+
+  auto *F = M->getFunction("f");
+  assert(F && "Bad assembly?");
+
+  auto &BB = F->getEntryBlock();
+
+  int Index = 0;
+  for (auto &I : BB) {
+    if (isa<ReturnInst>(&I))
+      break;
+    EXPECT_EQ(canCreatePoison(&I), Data[Index].first)
+        << "Incorrect answer at instruction " << Index << " = " << I;
+    Index++;
+  }
 }
 
 TEST_F(ComputeKnownBitsTest, ComputeKnownBits) {
@@ -566,6 +820,19 @@ TEST_F(ComputeKnownBitsTest, ComputeKnownMulBits) {
       "  ret i32 %A\n"
       "}\n");
   expectKnownBits(/*zero*/ 95u, /*one*/ 32u);
+}
+
+TEST_F(ComputeKnownBitsTest, KnownNonZeroShift) {
+  // %q is known nonzero without known bits.
+  // Because %q is nonzero, %A[0] is known to be zero.
+  parseAssembly(
+      "define i8 @test(i8 %p, i8* %pq) {\n"
+      "  %q = load i8, i8* %pq, !range !0\n"
+      "  %A = shl i8 %p, %q\n"
+      "  ret i8 %A\n"
+      "}\n"
+      "!0 = !{ i8 1, i8 5 }\n");
+  expectKnownBits(/*zero*/ 1u, /*one*/ 0u);
 }
 
 TEST_F(ComputeKnownBitsTest, ComputeKnownFshl) {
@@ -685,4 +952,257 @@ TEST_F(ComputeKnownBitsTest, ComputeKnownUSubSatZerosPreserved) {
       "}\n"
       "declare i8 @llvm.usub.sat.i8(i8, i8)\n");
   expectKnownBits(/*zero*/ 2u, /*one*/ 0u);
+}
+
+class IsBytewiseValueTest : public ValueTrackingTest,
+                            public ::testing::WithParamInterface<
+                                std::pair<const char *, const char *>> {
+protected:
+};
+
+const std::pair<const char *, const char *> IsBytewiseValueTests[] = {
+    {
+        "i8 0",
+        "i48* null",
+    },
+    {
+        "i8 undef",
+        "i48* undef",
+    },
+    {
+        "i8 0",
+        "i8 zeroinitializer",
+    },
+    {
+        "i8 0",
+        "i8 0",
+    },
+    {
+        "i8 -86",
+        "i8 -86",
+    },
+    {
+        "i8 -1",
+        "i8 -1",
+    },
+    {
+        "i8 undef",
+        "i16 undef",
+    },
+    {
+        "i8 0",
+        "i16 0",
+    },
+    {
+        "",
+        "i16 7",
+    },
+    {
+        "i8 -86",
+        "i16 -21846",
+    },
+    {
+        "i8 -1",
+        "i16 -1",
+    },
+    {
+        "i8 0",
+        "i48 0",
+    },
+    {
+        "i8 -1",
+        "i48 -1",
+    },
+    {
+        "i8 0",
+        "i49 0",
+    },
+    {
+        "",
+        "i49 -1",
+    },
+    {
+        "i8 0",
+        "half 0xH0000",
+    },
+    {
+        "i8 -85",
+        "half 0xHABAB",
+    },
+    {
+        "i8 0",
+        "float 0.0",
+    },
+    {
+        "i8 -1",
+        "float 0xFFFFFFFFE0000000",
+    },
+    {
+        "i8 0",
+        "double 0.0",
+    },
+    {
+        "i8 -15",
+        "double 0xF1F1F1F1F1F1F1F1",
+    },
+    {
+        "i8 undef",
+        "i16* undef",
+    },
+    {
+        "i8 0",
+        "i16* inttoptr (i64 0 to i16*)",
+    },
+    {
+        "i8 -1",
+        "i16* inttoptr (i64 -1 to i16*)",
+    },
+    {
+        "i8 -86",
+        "i16* inttoptr (i64 -6148914691236517206 to i16*)",
+    },
+    {
+        "",
+        "i16* inttoptr (i48 -1 to i16*)",
+    },
+    {
+        "i8 -1",
+        "i16* inttoptr (i96 -1 to i16*)",
+    },
+    {
+        "i8 undef",
+        "[0 x i8] zeroinitializer",
+    },
+    {
+        "i8 undef",
+        "[0 x i8] undef",
+    },
+    {
+        "i8 undef",
+        "[5 x [0 x i8]] zeroinitializer",
+    },
+    {
+        "i8 undef",
+        "[5 x [0 x i8]] undef",
+    },
+    {
+        "i8 0",
+        "[6 x i8] zeroinitializer",
+    },
+    {
+        "i8 undef",
+        "[6 x i8] undef",
+    },
+    {
+        "i8 1",
+        "[5 x i8] [i8 1, i8 1, i8 1, i8 1, i8 1]",
+    },
+    {
+        "",
+        "[5 x i64] [i64 1, i64 1, i64 1, i64 1, i64 1]",
+    },
+    {
+        "i8 -1",
+        "[5 x i64] [i64 -1, i64 -1, i64 -1, i64 -1, i64 -1]",
+    },
+    {
+        "",
+        "[4 x i8] [i8 1, i8 2, i8 1, i8 1]",
+    },
+    {
+        "i8 1",
+        "[4 x i8] [i8 1, i8 undef, i8 1, i8 1]",
+    },
+    {
+        "i8 0",
+        "<6 x i8> zeroinitializer",
+    },
+    {
+        "i8 undef",
+        "<6 x i8> undef",
+    },
+    {
+        "i8 1",
+        "<5 x i8> <i8 1, i8 1, i8 1, i8 1, i8 1>",
+    },
+    {
+        "",
+        "<5 x i64> <i64 1, i64 1, i64 1, i64 1, i64 1>",
+    },
+    {
+        "i8 -1",
+        "<5 x i64> <i64 -1, i64 -1, i64 -1, i64 -1, i64 -1>",
+    },
+    {
+        "",
+        "<4 x i8> <i8 1, i8 1, i8 2, i8 1>",
+    },
+    {
+        "i8 5",
+        "<2 x i8> < i8 5, i8 undef >",
+    },
+    {
+        "i8 0",
+        "[2 x [2 x i16]] zeroinitializer",
+    },
+    {
+        "i8 undef",
+        "[2 x [2 x i16]] undef",
+    },
+    {
+        "i8 -86",
+        "[2 x [2 x i16]] [[2 x i16] [i16 -21846, i16 -21846], "
+        "[2 x i16] [i16 -21846, i16 -21846]]",
+    },
+    {
+        "",
+        "[2 x [2 x i16]] [[2 x i16] [i16 -21846, i16 -21846], "
+        "[2 x i16] [i16 -21836, i16 -21846]]",
+    },
+    {
+        "i8 undef",
+        "{ } zeroinitializer",
+    },
+    {
+        "i8 undef",
+        "{ } undef",
+    },
+    {
+        "i8 undef",
+        "{ {}, {} } zeroinitializer",
+    },
+    {
+        "i8 undef",
+        "{ {}, {} } undef",
+    },
+    {
+        "i8 0",
+        "{i8, i64, i16*} zeroinitializer",
+    },
+    {
+        "i8 undef",
+        "{i8, i64, i16*} undef",
+    },
+    {
+        "i8 -86",
+        "{i8, i64, i16*} {i8 -86, i64 -6148914691236517206, i16* undef}",
+    },
+    {
+        "",
+        "{i8, i64, i16*} {i8 86, i64 -6148914691236517206, i16* undef}",
+    },
+};
+
+INSTANTIATE_TEST_CASE_P(IsBytewiseValueParamTests, IsBytewiseValueTest,
+                        ::testing::ValuesIn(IsBytewiseValueTests),);
+
+TEST_P(IsBytewiseValueTest, IsBytewiseValue) {
+  auto M = parseModule(std::string("@test = global ") + GetParam().second);
+  GlobalVariable *GV = dyn_cast<GlobalVariable>(M->getNamedValue("test"));
+  Value *Actual = isBytewiseValue(GV->getInitializer(), M->getDataLayout());
+  std::string Buff;
+  raw_string_ostream S(Buff);
+  if (Actual)
+    S << *Actual;
+  EXPECT_EQ(GetParam().first, S.str());
 }

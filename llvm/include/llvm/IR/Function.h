@@ -43,7 +43,7 @@
 namespace llvm {
 
 namespace Intrinsic {
-enum ID : unsigned;
+typedef unsigned ID;
 }
 
 class AssemblyAnnotationWriter;
@@ -55,6 +55,8 @@ template <typename T> class Optional;
 class raw_ostream;
 class Type;
 class User;
+class BranchProbabilityInfo;
+class BlockFrequencyInfo;
 
 class Function : public GlobalObject, public ilist_node<Function> {
 public:
@@ -196,6 +198,11 @@ public:
   /// It's possible for this function to return true while getIntrinsicID()
   /// returns Intrinsic::not_intrinsic!
   bool isIntrinsic() const { return HasLLVMReservedName; }
+
+  /// Returns true if the function is one of the "Constrained Floating-Point
+  /// Intrinsics". Returns false if not, and returns false when
+  /// getIntrinsicID() returns Intrinsic::not_intrinsic.
+  bool isConstrainedFPIntrinsic() const;
 
   static Intrinsic::ID lookupIntrinsicID(StringRef Name);
 
@@ -343,6 +350,16 @@ public:
   unsigned getFnStackAlignment() const {
     if (!hasFnAttribute(Attribute::StackAlignment))
       return 0;
+    if (const auto MA =
+            AttributeSets.getStackAlignment(AttributeList::FunctionIndex))
+      return MA->value();
+    return 0;
+  }
+
+  /// Return the stack alignment for the function.
+  MaybeAlign getFnStackAlign() const {
+    if (!hasFnAttribute(Attribute::StackAlignment))
+      return None;
     return AttributeSets.getStackAlignment(AttributeList::FunctionIndex);
   }
 
@@ -401,6 +418,11 @@ public:
     return getAttributes().hasParamAttribute(ArgNo, Kind);
   }
 
+  /// gets the specified attribute from the list of attributes.
+  Attribute getParamAttribute(unsigned ArgNo, Attribute::AttrKind Kind) const {
+    return getAttributes().getParamAttr(ArgNo, Kind);
+  }
+
   /// gets the attribute from the list of attributes.
   Attribute getAttribute(unsigned i, Attribute::AttrKind Kind) const {
     return AttributeSets.getAttribute(i, Kind);
@@ -427,8 +449,22 @@ public:
   void addDereferenceableOrNullParamAttr(unsigned ArgNo, uint64_t Bytes);
 
   /// Extract the alignment for a call or parameter (0=unknown).
+  /// FIXME: Remove this function once transition to Align is over.
+  /// Use getParamAlign() instead.
   unsigned getParamAlignment(unsigned ArgNo) const {
+    if (const auto MA = getParamAlign(ArgNo))
+      return MA->value();
+    return 0;
+  }
+
+  MaybeAlign getParamAlign(unsigned ArgNo) const {
     return AttributeSets.getParamAlignment(ArgNo);
+  }
+
+  /// Extract the byval type for a parameter.
+  Type *getParamByValType(unsigned ArgNo) const {
+    Type *Ty = AttributeSets.getParamByValType(ArgNo);
+    return Ty ? Ty : (arg_begin() + ArgNo)->getType()->getPointerElementType();
   }
 
   /// Extract the number of dereferenceable bytes for a call or
@@ -551,6 +587,14 @@ public:
   }
   void setSpeculatable() {
     addFnAttr(Attribute::Speculatable);
+  }
+
+  /// Determine if the call might deallocate memory.
+  bool doesNotFreeMemory() const {
+    return onlyReadsMemory() || hasFnAttribute(Attribute::NoFree);
+  }
+  void setDoesNotFreeMemory() {
+    addFnAttr(Attribute::NoFree);
   }
 
   /// Determine if the function is known not to recurse, directly or
@@ -691,6 +735,12 @@ public:
     return Arguments + NumArgs;
   }
 
+  Argument* getArg(unsigned i) const {
+    assert (i < NumArgs && "getArg() out of range!");
+    CheckLazyArguments();
+    return Arguments + i;
+  }
+
   iterator_range<arg_iterator> args() {
     return make_range(arg_begin(), arg_end());
   }
@@ -744,12 +794,20 @@ public:
   ///
   void viewCFG() const;
 
+  /// Extended form to print edge weights.
+  void viewCFG(bool ViewCFGOnly, const BlockFrequencyInfo *BFI,
+               const BranchProbabilityInfo *BPI) const;
+
   /// viewCFGOnly - This function is meant for use from the debugger.  It works
   /// just like viewCFG, but it does not include the contents of basic blocks
   /// into the nodes, just the label.  If you are only interested in the CFG
   /// this can make the graph smaller.
   ///
   void viewCFGOnly() const;
+
+  /// Extended form to print edge weights.
+  void viewCFGOnly(const BlockFrequencyInfo *BFI,
+                   const BranchProbabilityInfo *BPI) const;
 
   /// Methods for support type inquiry through isa, cast, and dyn_cast:
   static bool classof(const Value *V) {

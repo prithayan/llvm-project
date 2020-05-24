@@ -30,7 +30,6 @@ endif:
 ; GCN: v_cmp_neq_f32_e32 vcc, 1.0, [[VAL]]
 ; GCN-DAG: v_add_f32_e32 [[ADD:v[0-9]+]], [[VAL]], [[VAL]]
 ; GCN-DAG: v_mul_f32_e32 [[MUL:v[0-9]+]], [[VAL]], [[VAL]]
-; GCN: v_cndmask_b32_e32 [[RESULT:v[0-9]+]], [[ADD]], [[MUL]], vcc
 ; GCN: buffer_store_dword [[RESULT]]
 define amdgpu_kernel void @test_vccnz_ifcvt_diamond(float addrspace(1)* %out, float addrspace(1)* %in) #0 {
 entry:
@@ -65,7 +64,7 @@ entry:
   br i1 %cc, label %if, label %endif
 
 if:
-  call void asm "; clobber $0", "~{VCC}"() #0
+  call void asm "; clobber $0", "~{vcc}"() #0
   %u = add i32 %v, %v
   br label %endif
 

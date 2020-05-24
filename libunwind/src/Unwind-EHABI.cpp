@@ -31,7 +31,11 @@ namespace {
 // signinficant byte.
 uint8_t getByte(const uint32_t* data, size_t offset) {
   const uint8_t* byteData = reinterpret_cast<const uint8_t*>(data);
+#ifdef __LITTLE_ENDIAN__
   return byteData[(offset & ~(size_t)0x03) + (3 - (offset & (size_t)0x03))];
+#else
+  return byteData[offset];
+#endif
 }
 
 const char* getNextWord(const char* data, uint32_t* out) {
@@ -477,8 +481,8 @@ unwind_phase1(unw_context_t *uc, unw_cursor_t *cursor, _Unwind_Exception *except
     // If there is a personality routine, ask it if it will want to stop at
     // this frame.
     if (frameInfo.handler != 0) {
-      __personality_routine p =
-          (__personality_routine)(long)(frameInfo.handler);
+      _Unwind_Personality_Fn p =
+          (_Unwind_Personality_Fn)(long)(frameInfo.handler);
       _LIBUNWIND_TRACE_UNWINDING(
           "unwind_phase1(ex_ojb=%p): calling personality function %p",
           static_cast<void *>(exception_object),
@@ -593,8 +597,8 @@ static _Unwind_Reason_Code unwind_phase2(unw_context_t *uc, unw_cursor_t *cursor
 
     // If there is a personality routine, tell it we are unwinding.
     if (frameInfo.handler != 0) {
-      __personality_routine p =
-          (__personality_routine)(long)(frameInfo.handler);
+      _Unwind_Personality_Fn p =
+          (_Unwind_Personality_Fn)(long)(frameInfo.handler);
       struct _Unwind_Context *context = (struct _Unwind_Context *)(cursor);
       // EHABI #7.2
       exception_object->pr_cache.fnstart = frameInfo.start_ip;
@@ -937,8 +941,13 @@ _Unwind_VRS_Pop(_Unwind_Context *context, _Unwind_VRS_RegClass regclass,
       // format 1", which is equivalent to FSTMD + a padding word.
       for (uint32_t i = first; i < end; ++i) {
         // SP is only 32-bit aligned so don't copy 64-bit at a time.
-        uint64_t value = *sp++;
-        value |= ((uint64_t)(*sp++)) << 32;
+        uint64_t w0 = *sp++;
+        uint64_t w1 = *sp++;
+#ifdef __LITTLE_ENDIAN__
+        uint64_t value = (w1 << 32) | w0;
+#else
+        uint64_t value = (w0 << 32) | w1;
+#endif
         if (_Unwind_VRS_Set(context, regclass, i, representation, &value) !=
             _UVRSR_OK)
           return _UVRSR_FAILED;

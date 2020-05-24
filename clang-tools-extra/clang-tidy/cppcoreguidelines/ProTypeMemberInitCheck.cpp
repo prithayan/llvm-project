@@ -31,7 +31,7 @@ AST_MATCHER(CXXRecordDecl, hasDefaultConstructor) {
 }
 
 // Iterate over all the fields in a record type, both direct and indirect (e.g.
-// if the record contains an anonmyous struct).
+// if the record contains an anonymous struct).
 template <typename T, typename Func>
 void forEachField(const RecordDecl &Record, const T &Fields, Func &&Fn) {
   for (const FieldDecl *F : Fields) {
@@ -189,7 +189,7 @@ computeInsertions(const CXXConstructorDecl::init_const_range &Inits,
               ? static_cast<const NamedDecl *>(Init->getAnyMember())
               : Init->getBaseClass()->getAsCXXRecordDecl();
 
-      // Add all fields between current field up until the next intializer.
+      // Add all fields between current field up until the next initializer.
       for (; Decl != std::end(OrderedDecls) && *Decl != InitDecl; ++Decl) {
         if (const auto *D = dyn_cast<T>(*Decl)) {
           if (DeclsToInit.count(D) > 0)
@@ -250,12 +250,10 @@ void fixInitializerList(const ASTContext &Context, DiagnosticBuilder &Diag,
 ProTypeMemberInitCheck::ProTypeMemberInitCheck(StringRef Name,
                                                ClangTidyContext *Context)
     : ClangTidyCheck(Name, Context),
-      IgnoreArrays(Options.get("IgnoreArrays", false)) {}
+      IgnoreArrays(Options.get("IgnoreArrays", false)),
+      UseAssignment(Options.getLocalOrGlobal("UseAssignment", false)) {}
 
 void ProTypeMemberInitCheck::registerMatchers(MatchFinder *Finder) {
-  if (!getLangOpts().CPlusPlus)
-    return;
-
   auto IsUserProvidedNonDelegatingConstructor =
       allOf(isUserProvided(),
             unless(anyOf(isInstantiated(), isDelegatingConstructor())));
@@ -314,6 +312,7 @@ void ProTypeMemberInitCheck::check(const MatchFinder::MatchResult &Result) {
 
 void ProTypeMemberInitCheck::storeOptions(ClangTidyOptions::OptionMap &Opts) {
   Options.store(Opts, "IgnoreArrays", IgnoreArrays);
+  Options.store(Opts, "UseAssignment", UseAssignment);
 }
 
 // FIXME: Copied from clang/lib/Sema/SemaDeclCXX.cpp.
@@ -336,6 +335,56 @@ static bool isEmpty(ASTContext &Context, const QualType &Type) {
     return ClassDecl->isEmpty();
   }
   return isIncompleteOrZeroLengthArrayType(Context, Type);
+}
+
+static const char *getInitializer(QualType QT, bool UseAssignment) {
+  const char *DefaultInitializer = "{}";
+  if (!UseAssignment)
+    return DefaultInitializer;
+
+  if (QT->isPointerType())
+    return " = nullptr";
+
+  const BuiltinType *BT =
+      dyn_cast<BuiltinType>(QT.getCanonicalType().getTypePtr());
+  if (!BT)
+    return DefaultInitializer;
+
+  switch (BT->getKind()) {
+  case BuiltinType::Bool:
+    return " = false";
+  case BuiltinType::Float:
+    return " = 0.0F";
+  case BuiltinType::Double:
+    return " = 0.0";
+  case BuiltinType::LongDouble:
+    return " = 0.0L";
+  case BuiltinType::SChar:
+  case BuiltinType::Char_S:
+  case BuiltinType::WChar_S:
+  case BuiltinType::Char16:
+  case BuiltinType::Char32:
+  case BuiltinType::Short:
+  case BuiltinType::Int:
+    return " = 0";
+  case BuiltinType::UChar:
+  case BuiltinType::Char_U:
+  case BuiltinType::WChar_U:
+  case BuiltinType::UShort:
+  case BuiltinType::UInt:
+    return " = 0U";
+  case BuiltinType::Long:
+    return " = 0L";
+  case BuiltinType::ULong:
+    return " = 0UL";
+  case BuiltinType::LongLong:
+    return " = 0LL";
+  case BuiltinType::ULongLong:
+    return " = 0ULL";
+
+  default:
+    return DefaultInitializer;
+  }
 }
 
 void ProTypeMemberInitCheck::checkMissingMemberInitializer(
@@ -372,7 +421,7 @@ void ProTypeMemberInitCheck::checkMissingMemberInitializer(
   }
 
   // Collect all fields in order, both direct fields and indirect fields from
-  // anonmyous record types.
+  // anonymous record types.
   SmallVector<const FieldDecl *, 16> OrderedFields;
   forEachField(ClassDecl, ClassDecl.fields(),
                [&](const FieldDecl *F) { OrderedFields.push_back(F); });
@@ -407,7 +456,7 @@ void ProTypeMemberInitCheck::checkMissingMemberInitializer(
     // Don't suggest fixes for bitfields because in-class initialization is not
     // possible until C++2a.
     if (F->getType()->isEnumeralType() ||
-        (!getLangOpts().CPlusPlus2a && F->isBitField()))
+        (!getLangOpts().CPlusPlus20 && F->isBitField()))
       return;
     if (!F->getParent()->isUnion() || UnionsSeen.insert(F->getParent()).second)
       FieldsToFix.insert(F);
@@ -420,7 +469,7 @@ void ProTypeMemberInitCheck::checkMissingMemberInitializer(
     for (const FieldDecl *Field : FieldsToFix) {
       Diag << FixItHint::CreateInsertion(
           getLocationForEndOfToken(Context, Field->getSourceRange().getEnd()),
-          "{}");
+          getInitializer(Field->getType(), UseAssignment));
     }
   } else if (Ctor) {
     // Otherwise, rewrite the constructor's initializer list.

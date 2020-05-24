@@ -124,11 +124,15 @@ ELF_RELOC(R_AARCH64_COPY,                            0x400)
 ELF_RELOC(R_AARCH64_GLOB_DAT,                        0x401)
 ELF_RELOC(R_AARCH64_JUMP_SLOT,                       0x402)
 ELF_RELOC(R_AARCH64_RELATIVE,                        0x403)
-ELF_RELOC(R_AARCH64_TLS_DTPREL64,                    0x404)
-ELF_RELOC(R_AARCH64_TLS_DTPMOD64,                    0x405)
+// 0x404 and 0x405 are now R_AARCH64_TLS_IMPDEF1 and R_AARCH64_TLS_IMPDEF2
+// We follow GNU and define TLS_IMPDEF1 as TLS_DTPMOD64 and TLS_IMPDEF2 as
+// TLS_DTPREL64
+ELF_RELOC(R_AARCH64_TLS_DTPMOD64,                    0x404)
+ELF_RELOC(R_AARCH64_TLS_DTPREL64,                    0x405)
 ELF_RELOC(R_AARCH64_TLS_TPREL64,                     0x406)
 ELF_RELOC(R_AARCH64_TLSDESC,                         0x407)
 ELF_RELOC(R_AARCH64_IRELATIVE,                       0x408)
+ELF_RELOC(R_AARCH64_PLT32,                           0x409)
 
 // ELF_RELOC(R_AARCH64_P32_NONE,                         0)
 ELF_RELOC(R_AARCH64_P32_ABS32,                       0x001)
@@ -216,3 +220,4 @@ ELF_RELOC(R_AARCH64_P32_TLS_DTPMOD,                  0x0b9)
 ELF_RELOC(R_AARCH64_P32_TLS_TPREL,                   0x0ba)
 ELF_RELOC(R_AARCH64_P32_TLSDESC,                     0x0bb)
 ELF_RELOC(R_AARCH64_P32_IRELATIVE,                   0x0bc)
+ELF_RELOC(R_AARCH64_P32_PLT32,                       0x0bd)

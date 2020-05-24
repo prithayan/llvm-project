@@ -6,34 +6,42 @@
 //
 //===----------------------------------------------------------------------===//
 #include "Annotations.h"
-#include "ClangdUnit.h"
 #include "Compiler.h"
 #include "Matchers.h"
+#include "ParsedAST.h"
+#include "Protocol.h"
+#include "SourceCode.h"
 #include "SyncAPI.h"
 #include "TestFS.h"
+#include "TestIndex.h"
 #include "TestTU.h"
 #include "XRefs.h"
 #include "index/FileIndex.h"
+#include "index/MemIndex.h"
 #include "index/SymbolCollector.h"
+#include "clang/AST/Decl.h"
+#include "clang/Basic/SourceLocation.h"
 #include "clang/Index/IndexingAction.h"
+#include "llvm/ADT/None.h"
+#include "llvm/ADT/StringRef.h"
+#include "llvm/Support/Casting.h"
+#include "llvm/Support/Error.h"
 #include "llvm/Support/Path.h"
 #include "llvm/Support/ScopedPrinter.h"
 #include "gmock/gmock.h"
 #include "gtest/gtest.h"
+#include <string>
+#include <vector>
 
 namespace clang {
 namespace clangd {
 namespace {
 
 using ::testing::ElementsAre;
+using ::testing::Eq;
 using ::testing::IsEmpty;
 using ::testing::Matcher;
 using ::testing::UnorderedElementsAreArray;
-
-class IgnoreDiagnostics : public DiagnosticsConsumer {
-  void onDiagnosticsReady(PathRef File,
-                          std::vector<Diag> Diagnostics) override {}
-};
 
 MATCHER_P2(FileRange, File, Range, "") {
   return Location{URIForFile::canonicalize(File, testRoot()), Range} == arg;
@@ -90,6 +98,15 @@ TEST(HighlightsTest, All) {
       R"cpp(// Function parameter in decl
         void foo(int [[^bar]]);
       )cpp",
+      R"cpp(// Not touching any identifiers.
+        struct Foo {
+          [[~]]Foo() {};
+        };
+        void foo() {
+          Foo f;
+          f.[[^~]]Foo();
+        }
+      )cpp",
   };
   for (const char *Test : Tests) {
     Annotations T(Test);
@@ -142,8 +159,8 @@ TEST(LocateSymbol, WithIndex) {
     )cpp");
 
   TestTU TU;
-  TU.Code = SymbolCpp.code();
-  TU.HeaderCode = SymbolHeader.code();
+  TU.Code = std::string(SymbolCpp.code());
+  TU.HeaderCode = std::string(SymbolHeader.code());
   auto Index = TU.index();
   auto LocateWithIndex = [&Index](const Annotations &Main) {
     auto AST = TestTU::withCode(Main.code()).build();
@@ -175,7 +192,7 @@ TEST(LocateSymbol, WithIndex) {
   EXPECT_THAT(LocateWithIndex(Test),
               ElementsAre(Sym("Foo", Test.range(), SymbolHeader.range("foo"))));
 
-  Test = Annotations(R"cpp(// defintion in AST.
+  Test = Annotations(R"cpp(// definition in AST.
         class [[Forward]] {};
         F^orward create();
       )cpp");
@@ -190,7 +207,7 @@ TEST(LocateSymbol, WithIndexPreferredLocation) {
         void $f[[func]]() {};
       )cpp");
   TestTU TU;
-  TU.HeaderCode = SymbolHeader.code();
+  TU.HeaderCode = std::string(SymbolHeader.code());
   TU.HeaderFilename = "x.proto"; // Prefer locations in codegen files.
   auto Index = TU.index();
 
@@ -241,7 +258,7 @@ TEST(LocateSymbol, All) {
       )cpp",
 
       R"cpp(// Function definition via pointer
-        int [[foo]](int) {}
+        void [[foo]](int) {}
         int main() {
           auto *X = &^foo;
         }
@@ -258,7 +275,7 @@ TEST(LocateSymbol, All) {
         struct Foo { int [[x]]; };
         int main() {
           Foo bar;
-          bar.^x;
+          (void)bar.^x;
         }
       )cpp",
 
@@ -267,13 +284,6 @@ TEST(LocateSymbol, All) {
           int [[x]];
           Foo() : ^x(0) {}
         };
-      )cpp",
-
-      R"cpp(// Field, GNU old-style field designator
-        struct Foo { int [[x]]; };
-        int main() {
-          Foo bar = { ^x : 1 };
-        }
       )cpp",
 
       R"cpp(// Field, field designator
@@ -310,17 +320,9 @@ TEST(LocateSymbol, All) {
 
       R"cpp(// Namespace
         namespace $decl[[ns]] {
-        struct Foo { static void bar(); }
+        struct Foo { static void bar(); };
         } // namespace ns
         int main() { ^ns::Foo::bar(); }
-      )cpp",
-
-      R"cpp(// Macro
-        #define MACRO 0
-        #define [[MACRO]] 1
-        int main() { return ^MACRO; }
-        #define MACRO 2
-        #undef macro
       )cpp",
 
       R"cpp(// Macro
@@ -337,23 +339,34 @@ TEST(LocateSymbol, All) {
        #define ADDRESSOF(X) &X;
        int *j = ADDRESSOF(^i);
       )cpp",
-
+      R"cpp(// Macro argument appearing multiple times in expansion
+        #define VALIDATE_TYPE(x) (void)x;
+        #define ASSERT(expr)       \
+          do {                     \
+            VALIDATE_TYPE(expr);   \
+            if (!expr);            \
+          } while (false)
+        bool [[waldo]]() { return true; }
+        void foo() {
+          ASSERT(wa^ldo());
+        }
+      )cpp",
       R"cpp(// Symbol concatenated inside macro (not supported)
        int *pi;
-       #define POINTER(X) p # X;
-       int i = *POINTER(^i);
+       #define POINTER(X) p ## X;
+       int x = *POINTER(^i);
       )cpp",
 
       R"cpp(// Forward class declaration
-        class Foo;
-        class [[Foo]] {};
+        class $decl[[Foo]];
+        class $def[[Foo]] {};
         F^oo* foo();
       )cpp",
 
       R"cpp(// Function declaration
-        void foo();
+        void $decl[[foo]]();
         void g() { f^oo(); }
-        void [[foo]]() {}
+        void $def[[foo]]() {}
       )cpp",
 
       R"cpp(
@@ -421,15 +434,110 @@ TEST(LocateSymbol, All) {
       )cpp",
 
       R"cpp(// No implicit constructors
-        class X {
+        struct X {
           X(X&& x) = default;
         };
-        X [[makeX]]() {}
+        X $decl[[makeX]]();
         void foo() {
           auto x = m^akeX();
         }
       )cpp",
-  };
+
+      R"cpp(
+        struct X {
+          X& $decl[[operator]]++();
+        };
+        void foo(X& x) {
+          +^+x;
+        }
+      )cpp",
+
+      R"cpp(
+        struct S1 { void f(); };
+        struct S2 { S1 * $decl[[operator]]->(); };
+        void test(S2 s2) {
+          s2-^>f();
+        }
+      )cpp",
+
+      R"cpp(// Declaration of explicit template specialization
+        template <typename T>
+        struct $decl[[Foo]] {};
+
+        template <>
+        struct Fo^o<int> {};
+      )cpp",
+
+      R"cpp(// Declaration of partial template specialization
+        template <typename T>
+        struct $decl[[Foo]] {};
+
+        template <typename T>
+        struct Fo^o<T*> {};
+      )cpp",
+
+      R"cpp(// Override specifier jumps to overridden method
+        class Y { virtual void $decl[[a]]() = 0; };
+        class X : Y { void a() ^override {} };
+      )cpp",
+
+      R"cpp(// Final specifier jumps to overridden method
+        class Y { virtual void $decl[[a]]() = 0; };
+        class X : Y { void a() ^final {} };
+      )cpp",
+
+      R"cpp(// Heuristic resolution of dependent method
+        template <typename T>
+        struct S {
+          void [[bar]]() {}
+        };
+
+        template <typename T>
+        void foo(S<T> arg) {
+          arg.ba^r();
+        }
+      )cpp",
+
+      R"cpp(// Heuristic resolution of dependent method via this->
+        template <typename T>
+        struct S {
+          void [[foo]]() {
+            this->fo^o();
+          }
+        };
+      )cpp",
+
+      R"cpp(// Heuristic resolution of dependent static method
+        template <typename T>
+        struct S {
+          static void [[bar]]() {}
+        };
+
+        template <typename T>
+        void foo() {
+          S<T>::ba^r();
+        }
+      )cpp",
+
+      R"cpp(// Heuristic resolution of dependent method
+            // invoked via smart pointer
+        template <typename> struct S { void [[foo]]() {} };
+        template <typename T> struct unique_ptr {
+          T* operator->();
+        };
+        template <typename T>
+        void test(unique_ptr<S<T>>& V) {
+          V->fo^o();
+        }
+      )cpp",
+
+      R"cpp(// Heuristic resolution of dependent enumerator
+        template <typename T>
+        struct Foo {
+          enum class E { [[A]], B };
+          E e = E::A^;
+        };
+      )cpp"};
   for (const char *Test : Tests) {
     Annotations T(Test);
     llvm::Optional<Range> WantDecl;
@@ -441,7 +549,14 @@ TEST(LocateSymbol, All) {
     if (!T.ranges("def").empty())
       WantDef = T.range("def");
 
-    auto AST = TestTU::withCode(T.code()).build();
+    TestTU TU;
+    TU.Code = std::string(T.code());
+
+    // FIXME: Auto-completion in a template requires disabling delayed template
+    // parsing.
+    TU.ExtraArgs.push_back("-fno-delayed-template-parsing");
+
+    auto AST = TU.build();
     auto Results = locateSymbolAt(AST, T.point());
 
     if (!WantDecl) {
@@ -457,12 +572,134 @@ TEST(LocateSymbol, All) {
   }
 }
 
+// LocateSymbol test cases that produce warnings.
+// These are separated out from All so that in All we can assert
+// that there are no diagnostics.
+TEST(LocateSymbol, Warnings) {
+  const char *Tests[] = {
+      R"cpp(// Field, GNU old-style field designator
+        struct Foo { int [[x]]; };
+        int main() {
+          Foo bar = { ^x : 1 };
+        }
+      )cpp",
+
+      R"cpp(// Macro
+        #define MACRO 0
+        #define [[MACRO]] 1
+        int main() { return ^MACRO; }
+        #define MACRO 2
+        #undef macro
+      )cpp",
+  };
+
+  for (const char *Test : Tests) {
+    Annotations T(Test);
+    llvm::Optional<Range> WantDecl;
+    llvm::Optional<Range> WantDef;
+    if (!T.ranges().empty())
+      WantDecl = WantDef = T.range();
+    if (!T.ranges("decl").empty())
+      WantDecl = T.range("decl");
+    if (!T.ranges("def").empty())
+      WantDef = T.range("def");
+
+    TestTU TU;
+    TU.Code = std::string(T.code());
+
+    auto AST = TU.build();
+    auto Results = locateSymbolAt(AST, T.point());
+
+    if (!WantDecl) {
+      EXPECT_THAT(Results, IsEmpty()) << Test;
+    } else {
+      ASSERT_THAT(Results, ::testing::SizeIs(1)) << Test;
+      EXPECT_EQ(Results[0].PreferredDeclaration.range, *WantDecl) << Test;
+      llvm::Optional<Range> GotDef;
+      if (Results[0].Definition)
+        GotDef = Results[0].Definition->range;
+      EXPECT_EQ(WantDef, GotDef) << Test;
+    }
+  }
+}
+
+TEST(LocateSymbol, TextualSmoke) {
+  auto T = Annotations(
+      R"cpp(
+        struct [[MyClass]] {};
+        // Comment mentioning M^yClass
+      )cpp");
+
+  auto TU = TestTU::withCode(T.code());
+  auto AST = TU.build();
+  auto Index = TU.index();
+  EXPECT_THAT(locateSymbolAt(AST, T.point(), Index.get()),
+              ElementsAre(Sym("MyClass", T.range())));
+}
+
+TEST(LocateSymbol, Textual) {
+  const char *Tests[] = {
+      R"cpp(// Comment
+        struct [[MyClass]] {};
+        // Comment mentioning M^yClass
+      )cpp",
+      R"cpp(// String
+        struct MyClass {};
+        // Not triggered for string literal tokens.
+        const char* s = "String literal mentioning M^yClass";
+      )cpp",
+      R"cpp(// Ifdef'ed out code
+        struct [[MyClass]] {};
+        #ifdef WALDO
+          M^yClass var;
+        #endif
+      )cpp",
+      R"cpp(// Macro definition
+        struct [[MyClass]] {};
+        #define DECLARE_MYCLASS_OBJ(name) M^yClass name;
+      )cpp",
+      R"cpp(// Invalid code
+        /*error-ok*/
+        int myFunction(int);
+        // Not triggered for token which survived preprocessing.
+        int var = m^yFunction();
+      )cpp"};
+
+  for (const char *Test : Tests) {
+    Annotations T(Test);
+    llvm::Optional<Range> WantDecl;
+    if (!T.ranges().empty())
+      WantDecl = T.range();
+
+    auto TU = TestTU::withCode(T.code());
+
+    auto AST = TU.build();
+    auto Index = TU.index();
+    auto Word = SpelledWord::touching(
+        cantFail(sourceLocationInMainFile(AST.getSourceManager(), T.point())),
+        AST.getTokens(), AST.getLangOpts());
+    if (!Word) {
+      ADD_FAILURE() << "No word touching point!" << Test;
+      continue;
+    }
+    auto Results = locateSymbolTextually(*Word, AST, Index.get(),
+                                         testPath(TU.Filename), ASTNodeKind());
+
+    if (!WantDecl) {
+      EXPECT_THAT(Results, IsEmpty()) << Test;
+    } else {
+      ASSERT_THAT(Results, ::testing::SizeIs(1)) << Test;
+      EXPECT_EQ(Results[0].PreferredDeclaration.range, *WantDecl) << Test;
+    }
+  }
+} // namespace
+
 TEST(LocateSymbol, Ambiguous) {
   auto T = Annotations(R"cpp(
     struct Foo {
       Foo();
       Foo(Foo&&);
-      Foo(const char*);
+      $ConstructorLoc[[Foo]](const char*);
     };
 
     Foo f();
@@ -479,9 +716,30 @@ TEST(LocateSymbol, Ambiguous) {
       Foo ab$7^c;
       Foo ab$8^cd("asdf");
       Foo foox = Fo$9^o("asdf");
+      Foo abcde$10^("asdf");
+      Foo foox2 = Foo$11^("asdf");
+    }
+
+    template <typename T>
+    struct S {
+      void $NonstaticOverload1[[bar]](int);
+      void $NonstaticOverload2[[bar]](float);
+
+      static void $StaticOverload1[[baz]](int);
+      static void $StaticOverload2[[baz]](float);
+    };
+
+    template <typename T, typename U>
+    void dependent_call(S<T> s, U u) {
+      s.ba$12^r(u);
+      S<T>::ba$13^z(u);
     }
   )cpp");
-  auto AST = TestTU::withCode(T.code()).build();
+  auto TU = TestTU::withCode(T.code());
+  // FIXME: Go-to-definition in a template requires disabling delayed template
+  // parsing.
+  TU.ExtraArgs.push_back("-fno-delayed-template-parsing");
+  auto AST = TU.build();
   // Ordered assertions are deliberate: we expect a predictable order.
   EXPECT_THAT(locateSymbolAt(AST, T.point("1")), ElementsAre(Sym("str")));
   EXPECT_THAT(locateSymbolAt(AST, T.point("2")), ElementsAre(Sym("str")));
@@ -489,12 +747,68 @@ TEST(LocateSymbol, Ambiguous) {
   EXPECT_THAT(locateSymbolAt(AST, T.point("4")), ElementsAre(Sym("g")));
   EXPECT_THAT(locateSymbolAt(AST, T.point("5")), ElementsAre(Sym("f")));
   EXPECT_THAT(locateSymbolAt(AST, T.point("6")), ElementsAre(Sym("str")));
+  // FIXME: Target the constructor as well.
   EXPECT_THAT(locateSymbolAt(AST, T.point("7")), ElementsAre(Sym("abc")));
-  EXPECT_THAT(locateSymbolAt(AST, T.point("8")),
-              ElementsAre(Sym("Foo"), Sym("abcd")));
-  EXPECT_THAT(locateSymbolAt(AST, T.point("9")),
-              // First one is class definition, second is the constructor.
-              ElementsAre(Sym("Foo"), Sym("Foo")));
+  // FIXME: Target the constructor as well.
+  EXPECT_THAT(locateSymbolAt(AST, T.point("8")), ElementsAre(Sym("abcd")));
+  // FIXME: Target the constructor as well.
+  EXPECT_THAT(locateSymbolAt(AST, T.point("9")), ElementsAre(Sym("Foo")));
+  EXPECT_THAT(locateSymbolAt(AST, T.point("10")),
+              ElementsAre(Sym("Foo", T.range("ConstructorLoc"))));
+  EXPECT_THAT(locateSymbolAt(AST, T.point("11")),
+              ElementsAre(Sym("Foo", T.range("ConstructorLoc"))));
+  // These assertions are unordered because the order comes from
+  // CXXRecordDecl::lookupDependentName() which doesn't appear to provide
+  // an order guarantee.
+  EXPECT_THAT(locateSymbolAt(AST, T.point("12")),
+              UnorderedElementsAre(Sym("bar", T.range("NonstaticOverload1")),
+                                   Sym("bar", T.range("NonstaticOverload2"))));
+  EXPECT_THAT(locateSymbolAt(AST, T.point("13")),
+              UnorderedElementsAre(Sym("baz", T.range("StaticOverload1")),
+                                   Sym("baz", T.range("StaticOverload2"))));
+}
+
+TEST(LocateSymbol, TextualDependent) {
+  // Put the declarations in the header to make sure we are
+  // finding them via the index heuristic and not the
+  // nearby-ident heuristic.
+  Annotations Header(R"cpp(
+        struct Foo {
+          void $FooLoc[[uniqueMethodName]]();
+        };
+        struct Bar {
+          void $BarLoc[[uniqueMethodName]]();
+        };
+        )cpp");
+  Annotations Source(R"cpp(
+        template <typename T>
+        void f(T t) {
+          t.u^niqueMethodName();
+        }
+      )cpp");
+  TestTU TU;
+  TU.Code = std::string(Source.code());
+  TU.HeaderCode = std::string(Header.code());
+  auto AST = TU.build();
+  auto Index = TU.index();
+  // Need to use locateSymbolAt() since we are testing an
+  // interaction between locateASTReferent() and
+  // locateSymbolNamedTextuallyAt().
+  auto Results = locateSymbolAt(AST, Source.point(), Index.get());
+  EXPECT_THAT(Results, UnorderedElementsAre(
+                           Sym("uniqueMethodName", Header.range("FooLoc")),
+                           Sym("uniqueMethodName", Header.range("BarLoc"))));
+}
+
+TEST(LocateSymbol, TemplateTypedefs) {
+  auto T = Annotations(R"cpp(
+    template <class T> struct function {};
+    template <class T> using callback = function<T()>;
+
+    c^allback<int> foo;
+  )cpp");
+  auto AST = TestTU::withCode(T.code()).build();
+  EXPECT_THAT(locateSymbolAt(AST, T.point()), ElementsAre(Sym("callback")));
 }
 
 TEST(LocateSymbol, RelPathsInCompileCommand) {
@@ -523,17 +837,17 @@ int [[bar_not_preamble]];
   std::string BuildDir = testPath("build");
   MockCompilationDatabase CDB(BuildDir, RelPathPrefix);
 
-  IgnoreDiagnostics DiagConsumer;
   MockFSProvider FS;
-  ClangdServer Server(CDB, FS, DiagConsumer, ClangdServer::optsForTest());
+  ClangdServer Server(CDB, FS, ClangdServer::optsForTest());
 
   // Fill the filesystem.
   auto FooCpp = testPath("src/foo.cpp");
   FS.Files[FooCpp] = "";
   auto HeaderInPreambleH = testPath("src/header_in_preamble.h");
-  FS.Files[HeaderInPreambleH] = HeaderInPreambleAnnotations.code();
+  FS.Files[HeaderInPreambleH] = std::string(HeaderInPreambleAnnotations.code());
   auto HeaderNotInPreambleH = testPath("src/header_not_in_preamble.h");
-  FS.Files[HeaderNotInPreambleH] = HeaderNotInPreambleAnnotations.code();
+  FS.Files[HeaderNotInPreambleH] =
+      std::string(HeaderNotInPreambleAnnotations.code());
 
   runAddDocument(Server, FooCpp, SourceAnnotations.code());
 
@@ -558,644 +872,10 @@ int [[bar_not_preamble]];
                               HeaderNotInPreambleAnnotations.range())));
 }
 
-TEST(Hover, All) {
-  struct OneTest {
-    StringRef Input;
-    StringRef ExpectedHover;
-  };
-
-  OneTest Tests[] = {
-      {
-          R"cpp(// No hover
-            ^int main() {
-            }
-          )cpp",
-          "",
-      },
-      {
-          R"cpp(// Local variable
-            int main() {
-              int bonjour;
-              ^bonjour = 2;
-              int test1 = bonjour;
-            }
-          )cpp",
-          "Declared in function main\n\nint bonjour",
-      },
-      {
-          R"cpp(// Local variable in method
-            struct s {
-              void method() {
-                int bonjour;
-                ^bonjour = 2;
-              }
-            };
-          )cpp",
-          "Declared in function s::method\n\nint bonjour",
-      },
-      {
-          R"cpp(// Struct
-            namespace ns1 {
-              struct MyClass {};
-            } // namespace ns1
-            int main() {
-              ns1::My^Class* Params;
-            }
-          )cpp",
-          "Declared in namespace ns1\n\nstruct MyClass {}",
-      },
-      {
-          R"cpp(// Class
-            namespace ns1 {
-              class MyClass {};
-            } // namespace ns1
-            int main() {
-              ns1::My^Class* Params;
-            }
-          )cpp",
-          "Declared in namespace ns1\n\nclass MyClass {}",
-      },
-      {
-          R"cpp(// Union
-            namespace ns1 {
-              union MyUnion { int x; int y; };
-            } // namespace ns1
-            int main() {
-              ns1::My^Union Params;
-            }
-          )cpp",
-          "Declared in namespace ns1\n\nunion MyUnion {}",
-      },
-      {
-          R"cpp(// Function definition via pointer
-            int foo(int) {}
-            int main() {
-              auto *X = &^foo;
-            }
-          )cpp",
-          "Declared in global namespace\n\nint foo(int)",
-      },
-      {
-          R"cpp(// Function declaration via call
-            int foo(int);
-            int main() {
-              return ^foo(42);
-            }
-          )cpp",
-          "Declared in global namespace\n\nint foo(int)",
-      },
-      {
-          R"cpp(// Field
-            struct Foo { int x; };
-            int main() {
-              Foo bar;
-              bar.^x;
-            }
-          )cpp",
-          "Declared in struct Foo\n\nint x",
-      },
-      {
-          R"cpp(// Field with initialization
-            struct Foo { int x = 5; };
-            int main() {
-              Foo bar;
-              bar.^x;
-            }
-          )cpp",
-          "Declared in struct Foo\n\nint x = 5",
-      },
-      {
-          R"cpp(// Static field
-            struct Foo { static int x; };
-            int main() {
-              Foo::^x;
-            }
-          )cpp",
-          "Declared in struct Foo\n\nstatic int x",
-      },
-      {
-          R"cpp(// Field, member initializer
-            struct Foo {
-              int x;
-              Foo() : ^x(0) {}
-            };
-          )cpp",
-          "Declared in struct Foo\n\nint x",
-      },
-      {
-          R"cpp(// Field, GNU old-style field designator
-            struct Foo { int x; };
-            int main() {
-              Foo bar = { ^x : 1 };
-            }
-          )cpp",
-          "Declared in struct Foo\n\nint x",
-      },
-      {
-          R"cpp(// Field, field designator
-            struct Foo { int x; };
-            int main() {
-              Foo bar = { .^x = 2 };
-            }
-          )cpp",
-          "Declared in struct Foo\n\nint x",
-      },
-      {
-          R"cpp(// Method call
-            struct Foo { int x(); };
-            int main() {
-              Foo bar;
-              bar.^x();
-            }
-          )cpp",
-          "Declared in struct Foo\n\nint x()",
-      },
-      {
-          R"cpp(// Static method call
-            struct Foo { static int x(); };
-            int main() {
-              Foo::^x();
-            }
-          )cpp",
-          "Declared in struct Foo\n\nstatic int x()",
-      },
-      {
-          R"cpp(// Typedef
-            typedef int Foo;
-            int main() {
-              ^Foo bar;
-            }
-          )cpp",
-          "Declared in global namespace\n\ntypedef int Foo",
-      },
-      {
-          R"cpp(// Namespace
-            namespace ns {
-            struct Foo { static void bar(); }
-            } // namespace ns
-            int main() { ^ns::Foo::bar(); }
-          )cpp",
-          "Declared in global namespace\n\nnamespace ns {\n}",
-      },
-      {
-          R"cpp(// Anonymous namespace
-            namespace ns {
-              namespace {
-                int foo;
-              } // anonymous namespace
-            } // namespace ns
-            int main() { ns::f^oo++; }
-          )cpp",
-          "Declared in namespace ns::(anonymous)\n\nint foo",
-      },
-      {
-          R"cpp(// Macro
-            #define MACRO 0
-            #define MACRO 1
-            int main() { return ^MACRO; }
-            #define MACRO 2
-            #undef macro
-          )cpp",
-          "#define MACRO 1",
-      },
-      {
-          R"cpp(// Macro
-            #define MACRO 0
-            #define MACRO2 ^MACRO
-          )cpp",
-          "#define MACRO 0",
-      },
-      {
-          R"cpp(// Macro
-            #define MACRO {\
-              return 0;\
-            }
-            int main() ^MACRO
-          )cpp",
-          R"cpp(#define MACRO {\
-              return 0;\
-            })cpp",
-      },
-      {
-          R"cpp(// Forward class declaration
-            class Foo;
-            class Foo {};
-            F^oo* foo();
-          )cpp",
-          "Declared in global namespace\n\nclass Foo {}",
-      },
-      {
-          R"cpp(// Function declaration
-            void foo();
-            void g() { f^oo(); }
-            void foo() {}
-          )cpp",
-          "Declared in global namespace\n\nvoid foo()",
-      },
-      {
-          R"cpp(// Enum declaration
-            enum Hello {
-              ONE, TWO, THREE,
-            };
-            void foo() {
-              Hel^lo hello = ONE;
-            }
-          )cpp",
-          "Declared in global namespace\n\nenum Hello {\n}",
-      },
-      {
-          R"cpp(// Enumerator
-            enum Hello {
-              ONE, TWO, THREE,
-            };
-            void foo() {
-              Hello hello = O^NE;
-            }
-          )cpp",
-          "Declared in enum Hello\n\nONE",
-      },
-      {
-          R"cpp(// Enumerator in anonymous enum
-            enum {
-              ONE, TWO, THREE,
-            };
-            void foo() {
-              int hello = O^NE;
-            }
-          )cpp",
-          "Declared in enum (anonymous)\n\nONE",
-      },
-      {
-          R"cpp(// Global variable
-            static int hey = 10;
-            void foo() {
-              he^y++;
-            }
-          )cpp",
-          "Declared in global namespace\n\nstatic int hey = 10",
-      },
-      {
-          R"cpp(// Global variable in namespace
-            namespace ns1 {
-              static int hey = 10;
-            }
-            void foo() {
-              ns1::he^y++;
-            }
-          )cpp",
-          "Declared in namespace ns1\n\nstatic int hey = 10",
-      },
-      {
-          R"cpp(// Field in anonymous struct
-            static struct {
-              int hello;
-            } s;
-            void foo() {
-              s.he^llo++;
-            }
-          )cpp",
-          "Declared in struct (anonymous)\n\nint hello",
-      },
-      {
-          R"cpp(// Templated function
-            template <typename T>
-            T foo() {
-              return 17;
-            }
-            void g() { auto x = f^oo<int>(); }
-          )cpp",
-          "Declared in global namespace\n\ntemplate <typename T> T foo()",
-      },
-      {
-          R"cpp(// Anonymous union
-            struct outer {
-              union {
-                int abc, def;
-              } v;
-            };
-            void g() { struct outer o; o.v.d^ef++; }
-          )cpp",
-          "Declared in union outer::(anonymous)\n\nint def",
-      },
-      {
-          R"cpp(// Nothing
-            void foo() {
-              ^
-            }
-          )cpp",
-          "",
-      },
-      {
-          R"cpp(// Simple initialization with auto
-            void foo() {
-              ^auto i = 1;
-            }
-          )cpp",
-          "int",
-      },
-      {
-          R"cpp(// Simple initialization with const auto
-            void foo() {
-              const ^auto i = 1;
-            }
-          )cpp",
-          "int",
-      },
-      {
-          R"cpp(// Simple initialization with const auto&
-            void foo() {
-              const ^auto& i = 1;
-            }
-          )cpp",
-          "int",
-      },
-      {
-          R"cpp(// Simple initialization with auto&
-            void foo() {
-              ^auto& i = 1;
-            }
-          )cpp",
-          "int",
-      },
-      {
-          R"cpp(// Simple initialization with auto*
-            void foo() {
-              int a = 1;
-              ^auto* i = &a;
-            }
-          )cpp",
-          "int",
-      },
-      {
-          R"cpp(// Auto with initializer list.
-            namespace std
-            {
-              template<class _E>
-              class initializer_list {};
-            }
-            void foo() {
-              ^auto i = {1,2};
-            }
-          )cpp",
-          "class std::initializer_list<int>",
-      },
-      {
-          R"cpp(// User defined conversion to auto
-            struct Bar {
-              operator ^auto() const { return 10; }
-            };
-          )cpp",
-          "int",
-      },
-      {
-          R"cpp(// Simple initialization with decltype(auto)
-            void foo() {
-              ^decltype(auto) i = 1;
-            }
-          )cpp",
-          "int",
-      },
-      {
-          R"cpp(// Simple initialization with const decltype(auto)
-            void foo() {
-              const int j = 0;
-              ^decltype(auto) i = j;
-            }
-          )cpp",
-          "const int",
-      },
-      {
-          R"cpp(// Simple initialization with const& decltype(auto)
-            void foo() {
-              int k = 0;
-              const int& j = k;
-              ^decltype(auto) i = j;
-            }
-          )cpp",
-          "const int &",
-      },
-      {
-          R"cpp(// Simple initialization with & decltype(auto)
-            void foo() {
-              int k = 0;
-              int& j = k;
-              ^decltype(auto) i = j;
-            }
-          )cpp",
-          "int &",
-      },
-      {
-          R"cpp(// decltype with initializer list: nothing
-            namespace std
-            {
-              template<class _E>
-              class initializer_list {};
-            }
-            void foo() {
-              ^decltype(auto) i = {1,2};
-            }
-          )cpp",
-          "",
-      },
-      {
-          R"cpp(// simple trailing return type
-            ^auto main() -> int {
-              return 0;
-            }
-          )cpp",
-          "int",
-      },
-      {
-          R"cpp(// auto function return with trailing type
-            struct Bar {};
-            ^auto test() -> decltype(Bar()) {
-              return Bar();
-            }
-          )cpp",
-          "struct Bar",
-      },
-      {
-          R"cpp(// trailing return type
-            struct Bar {};
-            auto test() -> ^decltype(Bar()) {
-              return Bar();
-            }
-          )cpp",
-          "struct Bar",
-      },
-      {
-          R"cpp(// auto in function return
-            struct Bar {};
-            ^auto test() {
-              return Bar();
-            }
-          )cpp",
-          "struct Bar",
-      },
-      {
-          R"cpp(// auto& in function return
-            struct Bar {};
-            ^auto& test() {
-              return Bar();
-            }
-          )cpp",
-          "struct Bar",
-      },
-      {
-          R"cpp(// auto* in function return
-            struct Bar {};
-            ^auto* test() {
-              Bar* bar;
-              return bar;
-            }
-          )cpp",
-          "struct Bar",
-      },
-      {
-          R"cpp(// const auto& in function return
-            struct Bar {};
-            const ^auto& test() {
-              return Bar();
-            }
-          )cpp",
-          "struct Bar",
-      },
-      {
-          R"cpp(// decltype(auto) in function return
-            struct Bar {};
-            ^decltype(auto) test() {
-              return Bar();
-            }
-          )cpp",
-          "struct Bar",
-      },
-      {
-          R"cpp(// decltype(auto) reference in function return
-            struct Bar {};
-            ^decltype(auto) test() {
-              int a;
-              return (a);
-            }
-          )cpp",
-          "int &",
-      },
-      {
-          R"cpp(// decltype lvalue reference
-            void foo() {
-              int I = 0;
-              ^decltype(I) J = I;
-            }
-          )cpp",
-          "int",
-      },
-      {
-          R"cpp(// decltype lvalue reference
-            void foo() {
-              int I= 0;
-              int &K = I;
-              ^decltype(K) J = I;
-            }
-          )cpp",
-          "int &",
-      },
-      {
-          R"cpp(// decltype lvalue reference parenthesis
-            void foo() {
-              int I = 0;
-              ^decltype((I)) J = I;
-            }
-          )cpp",
-          "int &",
-      },
-      {
-          R"cpp(// decltype rvalue reference
-            void foo() {
-              int I = 0;
-              ^decltype(static_cast<int&&>(I)) J = static_cast<int&&>(I);
-            }
-          )cpp",
-          "int &&",
-      },
-      {
-          R"cpp(// decltype rvalue reference function call
-            int && bar();
-            void foo() {
-              int I = 0;
-              ^decltype(bar()) J = bar();
-            }
-          )cpp",
-          "int &&",
-      },
-      {
-          R"cpp(// decltype of function with trailing return type.
-            struct Bar {};
-            auto test() -> decltype(Bar()) {
-              return Bar();
-            }
-            void foo() {
-              ^decltype(test()) i = test();
-            }
-          )cpp",
-          "struct Bar",
-      },
-      {
-          R"cpp(// decltype of var with decltype.
-            void foo() {
-              int I = 0;
-              decltype(I) J = I;
-              ^decltype(J) K = J;
-            }
-          )cpp",
-          "int",
-      },
-      {
-          R"cpp(// structured binding. Not supported yet
-            struct Bar {};
-            void foo() {
-              Bar a[2];
-              ^auto [x,y] = a;
-            }
-          )cpp",
-          "",
-      },
-      {
-          R"cpp(// Template auto parameter. Nothing (Not useful).
-            template<^auto T>
-            void func() {
-            }
-            void foo() {
-               func<1>();
-            }
-          )cpp",
-          "",
-      },
-      {
-          R"cpp(// More compilcated structured types.
-            int bar();
-            ^auto (*foo)() = bar;
-          )cpp",
-          "int",
-      },
-  };
-
-  for (const OneTest &Test : Tests) {
-    Annotations T(Test.Input);
-    TestTU TU = TestTU::withCode(T.code());
-    TU.ExtraArgs.push_back("-std=c++17");
-    auto AST = TU.build();
-    if (auto H = getHover(AST, T.point())) {
-      EXPECT_NE("", Test.ExpectedHover) << Test.Input;
-      EXPECT_EQ(H->contents.value, Test.ExpectedHover.str()) << Test.Input;
-    } else
-      EXPECT_EQ("", Test.ExpectedHover.str()) << Test.Input;
-  }
-}
-
 TEST(GoToInclude, All) {
   MockFSProvider FS;
-  IgnoreDiagnostics DiagConsumer;
   MockCompilationDatabase CDB;
-  ClangdServer Server(CDB, FS, DiagConsumer, ClangdServer::optsForTest());
+  ClangdServer Server(CDB, FS, ClangdServer::optsForTest());
 
   auto FooCpp = testPath("foo.cpp");
   const char *SourceContents = R"cpp(
@@ -1207,14 +887,14 @@ TEST(GoToInclude, All) {
   #in$5^clude "$6^foo.h"$7^
   )cpp";
   Annotations SourceAnnotations(SourceContents);
-  FS.Files[FooCpp] = SourceAnnotations.code();
+  FS.Files[FooCpp] = std::string(SourceAnnotations.code());
   auto FooH = testPath("foo.h");
 
   const char *HeaderContents = R"cpp([[]]#pragma once
                                      int a;
                                      )cpp";
   Annotations HeaderAnnotations(HeaderContents);
-  FS.Files[FooH] = HeaderAnnotations.code();
+  FS.Files[FooH] = std::string(HeaderAnnotations.code());
 
   Server.addDocument(FooH, HeaderAnnotations.code());
   Server.addDocument(FooCpp, SourceAnnotations.code());
@@ -1256,7 +936,7 @@ TEST(GoToInclude, All) {
   #import "^foo.h"
   )objc");
   auto FooM = testPath("foo.m");
-  FS.Files[FooM] = ObjC.code();
+  FS.Files[FooM] = std::string(ObjC.code());
 
   Server.addDocument(FooM, ObjC.code());
   Locations = runLocateSymbolAt(Server, FooM, ObjC.point());
@@ -1268,20 +948,19 @@ TEST(LocateSymbol, WithPreamble) {
   // Test stragety: AST should always use the latest preamble instead of last
   // good preamble.
   MockFSProvider FS;
-  IgnoreDiagnostics DiagConsumer;
   MockCompilationDatabase CDB;
-  ClangdServer Server(CDB, FS, DiagConsumer, ClangdServer::optsForTest());
+  ClangdServer Server(CDB, FS, ClangdServer::optsForTest());
 
   auto FooCpp = testPath("foo.cpp");
   // The trigger locations must be the same.
   Annotations FooWithHeader(R"cpp(#include "fo^o.h")cpp");
   Annotations FooWithoutHeader(R"cpp(double    [[fo^o]]();)cpp");
 
-  FS.Files[FooCpp] = FooWithHeader.code();
+  FS.Files[FooCpp] = std::string(FooWithHeader.code());
 
   auto FooH = testPath("foo.h");
   Annotations FooHeader(R"cpp([[]])cpp");
-  FS.Files[FooH] = FooHeader.code();
+  FS.Files[FooH] = std::string(FooHeader.code());
 
   runAddDocument(Server, FooCpp, FooWithHeader.code());
   // LocateSymbol goes to a #include file: the result comes from the preamble.
@@ -1290,7 +969,8 @@ TEST(LocateSymbol, WithPreamble) {
       ElementsAre(Sym("foo.h", FooHeader.range())));
 
   // Only preamble is built, and no AST is built in this request.
-  Server.addDocument(FooCpp, FooWithoutHeader.code(), WantDiagnostics::No);
+  Server.addDocument(FooCpp, FooWithoutHeader.code(), "null",
+                     WantDiagnostics::No);
   // We build AST here, and it should use the latest preamble rather than the
   // stale one.
   EXPECT_THAT(
@@ -1300,11 +980,107 @@ TEST(LocateSymbol, WithPreamble) {
   // Reset test environment.
   runAddDocument(Server, FooCpp, FooWithHeader.code());
   // Both preamble and AST are built in this request.
-  Server.addDocument(FooCpp, FooWithoutHeader.code(), WantDiagnostics::Yes);
+  Server.addDocument(FooCpp, FooWithoutHeader.code(), "null",
+                     WantDiagnostics::Yes);
   // Use the AST being built in above request.
   EXPECT_THAT(
       cantFail(runLocateSymbolAt(Server, FooCpp, FooWithoutHeader.point())),
       ElementsAre(Sym("foo", FooWithoutHeader.range())));
+}
+
+TEST(LocateSymbol, NearbyTokenSmoke) {
+  auto T = Annotations(R"cpp(
+    // prints e^rr and crashes
+    void die(const char* [[err]]);
+  )cpp");
+  auto AST = TestTU::withCode(T.code()).build();
+  // We don't pass an index, so can't hit index-based fallback.
+  EXPECT_THAT(locateSymbolAt(AST, T.point()),
+              ElementsAre(Sym("err", T.range())));
+}
+
+TEST(LocateSymbol, NearbyIdentifier) {
+  const char *Tests[] = {
+      R"cpp(
+      // regular identifiers (won't trigger)
+      int hello;
+      int y = he^llo;
+    )cpp",
+      R"cpp(
+      // disabled preprocessor sections
+      int [[hello]];
+      #if 0
+      int y = ^hello;
+      #endif
+    )cpp",
+      R"cpp(
+      // comments
+      // he^llo, world
+      int [[hello]];
+    )cpp",
+      R"cpp(
+      // not triggered by string literals
+      int hello;
+      const char* greeting = "h^ello, world";
+    )cpp",
+
+      R"cpp(
+      // can refer to macro invocations
+      #define INT int
+      [[INT]] x;
+      // I^NT
+    )cpp",
+
+      R"cpp(
+      // can refer to macro invocations (even if they expand to nothing)
+      #define EMPTY
+      [[EMPTY]] int x;
+      // E^MPTY
+    )cpp",
+
+      R"cpp(
+      // prefer nearest occurrence, backwards is worse than forwards
+      int hello;
+      int x = hello;
+      // h^ello
+      int y = [[hello]];
+      int z = hello;
+    )cpp",
+
+      R"cpp(
+      // short identifiers find near results
+      int [[hi]];
+      // h^i
+    )cpp",
+      R"cpp(
+      // short identifiers don't find far results
+      int hi;
+
+
+
+      // h^i
+    )cpp",
+  };
+  for (const char *Test : Tests) {
+    Annotations T(Test);
+    auto AST = TestTU::withCode(T.code()).build();
+    const auto &SM = AST.getSourceManager();
+    llvm::Optional<Range> Nearby;
+    auto Word =
+        SpelledWord::touching(cantFail(sourceLocationInMainFile(SM, T.point())),
+                              AST.getTokens(), AST.getLangOpts());
+    if (!Word) {
+      ADD_FAILURE() << "No word at point! " << Test;
+      continue;
+    }
+    if (const auto *Tok = findNearbyIdentifier(*Word, AST.getTokens()))
+      Nearby = halfOpenToRange(SM, CharSourceRange::getCharRange(
+                                       Tok->location(), Tok->endLocation()));
+    if (T.ranges().empty())
+      EXPECT_THAT(Nearby, Eq(llvm::None)) << Test;
+    else
+      EXPECT_EQ(Nearby, T.range()) << Test;
+  }
 }
 
 TEST(FindReferences, WithinAST) {
@@ -1328,7 +1104,7 @@ TEST(FindReferences, WithinAST) {
 
       R"cpp(// Forward declaration
         class [[Foo]];
-        class [[Foo]] {}
+        class [[Foo]] {};
         int main() {
           [[Fo^o]] foo;
         }
@@ -1338,7 +1114,7 @@ TEST(FindReferences, WithinAST) {
         int [[foo]](int) {}
         int main() {
           auto *X = &[[^foo]];
-          [[foo]](42)
+          [[foo]](42);
         }
       )cpp",
 
@@ -1384,6 +1160,52 @@ TEST(FindReferences, WithinAST) {
         } // namespace ns
         int main() { [[^ns]]::Foo foo; }
       )cpp",
+
+      R"cpp(// Macros
+        #define TYPE(X) X
+        #define FOO Foo
+        #define CAT(X, Y) X##Y
+        class [[Fo^o]] {};
+        void test() {
+          TYPE([[Foo]]) foo;
+          [[FOO]] foo2;
+          TYPE(TYPE([[Foo]])) foo3;
+          [[CAT]](Fo, o) foo4;
+        }
+      )cpp",
+
+      R"cpp(// Macros
+        #define [[MA^CRO]](X) (X+1)
+        void test() {
+          int x = [[MACRO]]([[MACRO]](1));
+        }
+      )cpp",
+
+      R"cpp(
+        int [[v^ar]] = 0;
+        void foo(int s = [[var]]);
+      )cpp",
+
+      R"cpp(
+       template <typename T>
+       class [[Fo^o]] {};
+       void func([[Foo]]<int>);
+      )cpp",
+
+      R"cpp(
+       template <typename T>
+       class [[Foo]] {};
+       void func([[Fo^o]]<int>);
+      )cpp",
+      R"cpp(// Not touching any identifiers.
+        struct Foo {
+          [[~]]Foo() {};
+        };
+        void foo() {
+          Foo f;
+          f.[[^~]]Foo();
+        }
+      )cpp",
   };
   for (const char *Test : Tests) {
     Annotations T(Test);
@@ -1391,46 +1213,83 @@ TEST(FindReferences, WithinAST) {
     std::vector<Matcher<Location>> ExpectedLocations;
     for (const auto &R : T.ranges())
       ExpectedLocations.push_back(RangeIs(R));
-    EXPECT_THAT(findReferences(AST, T.point(), 0),
+    EXPECT_THAT(findReferences(AST, T.point(), 0).References,
                 ElementsAreArray(ExpectedLocations))
         << Test;
   }
 }
 
+TEST(FindReferences, MainFileReferencesOnly) {
+  llvm::StringRef Test =
+      R"cpp(
+        void test() {
+          int [[fo^o]] = 1;
+          // refs not from main file should not be included.
+          #include "foo.inc"
+        })cpp";
+
+  Annotations Code(Test);
+  auto TU = TestTU::withCode(Code.code());
+  TU.AdditionalFiles["foo.inc"] = R"cpp(
+      foo = 3;
+    )cpp";
+  auto AST = TU.build();
+
+  std::vector<Matcher<Location>> ExpectedLocations;
+  for (const auto &R : Code.ranges())
+    ExpectedLocations.push_back(RangeIs(R));
+  EXPECT_THAT(findReferences(AST, Code.point(), 0).References,
+              ElementsAreArray(ExpectedLocations))
+      << Test;
+}
+
 TEST(FindReferences, ExplicitSymbols) {
   const char *Tests[] = {
       R"cpp(
-      struct Foo { Foo* [self]() const; };
+      struct Foo { Foo* [[self]]() const; };
       void f() {
-        if (Foo* T = foo.[^self]()) {} // Foo member call expr.
+        Foo foo;
+        if (Foo* T = foo.[[^self]]()) {} // Foo member call expr.
       }
       )cpp",
 
       R"cpp(
       struct Foo { Foo(int); };
       Foo f() {
-        int [b];
-        return [^b]; // Foo constructor expr.
+        int [[b]];
+        return [[^b]]; // Foo constructor expr.
       }
       )cpp",
 
       R"cpp(
       struct Foo {};
       void g(Foo);
-      Foo [f]();
+      Foo [[f]]();
       void call() {
-        g([^f]());  // Foo constructor expr.
+        g([[^f]]());  // Foo constructor expr.
       }
       )cpp",
 
       R"cpp(
-      void [foo](int);
-      void [foo](double);
+      void [[foo]](int);
+      void [[foo]](double);
 
       namespace ns {
-      using ::[fo^o];
+      using ::[[fo^o]];
       }
       )cpp",
+
+      R"cpp(
+      struct X {
+        operator bool();
+      };
+
+      int test() {
+        X [[a]];
+        [[a]].operator bool();
+        if ([[a^]]) {} // ignore implicit conversion-operator AST node
+      }
+    )cpp",
   };
   for (const char *Test : Tests) {
     Annotations T(Test);
@@ -1438,52 +1297,92 @@ TEST(FindReferences, ExplicitSymbols) {
     std::vector<Matcher<Location>> ExpectedLocations;
     for (const auto &R : T.ranges())
       ExpectedLocations.push_back(RangeIs(R));
-    EXPECT_THAT(findReferences(AST, T.point(), 0),
+    ASSERT_THAT(ExpectedLocations, Not(IsEmpty()));
+    EXPECT_THAT(findReferences(AST, T.point(), 0).References,
                 ElementsAreArray(ExpectedLocations))
         << Test;
   }
 }
 
-TEST(FindReferences, NeedsIndex) {
+TEST(FindReferences, NeedsIndexForSymbols) {
   const char *Header = "int foo();";
   Annotations Main("int main() { [[f^oo]](); }");
   TestTU TU;
-  TU.Code = Main.code();
+  TU.Code = std::string(Main.code());
   TU.HeaderCode = Header;
   auto AST = TU.build();
 
   // References in main file are returned without index.
-  EXPECT_THAT(findReferences(AST, Main.point(), 0, /*Index=*/nullptr),
-              ElementsAre(RangeIs(Main.range())));
+  EXPECT_THAT(
+      findReferences(AST, Main.point(), 0, /*Index=*/nullptr).References,
+      ElementsAre(RangeIs(Main.range())));
   Annotations IndexedMain(R"cpp(
     int main() { [[f^oo]](); }
   )cpp");
 
   // References from indexed files are included.
   TestTU IndexedTU;
-  IndexedTU.Code = IndexedMain.code();
+  IndexedTU.Code = std::string(IndexedMain.code());
   IndexedTU.Filename = "Indexed.cpp";
   IndexedTU.HeaderCode = Header;
-  EXPECT_THAT(findReferences(AST, Main.point(), 0, IndexedTU.index().get()),
-              ElementsAre(RangeIs(Main.range()), RangeIs(IndexedMain.range())));
+  EXPECT_THAT(
+      findReferences(AST, Main.point(), 0, IndexedTU.index().get()).References,
+      ElementsAre(RangeIs(Main.range()), RangeIs(IndexedMain.range())));
+  auto LimitRefs =
+      findReferences(AST, Main.point(), /*Limit*/ 1, IndexedTU.index().get());
+  EXPECT_EQ(1u, LimitRefs.References.size());
+  EXPECT_TRUE(LimitRefs.HasMore);
 
-  EXPECT_EQ(1u, findReferences(AST, Main.point(), /*Limit*/ 1,
-                               IndexedTU.index().get())
-                    .size());
-
-  // If the main file is in the index, we don't return duplicates.
-  // (even if the references are in a different location)
+  // Avoid indexed results for the main file. Use AST for the mainfile.
   TU.Code = ("\n\n" + Main.code()).str();
-  EXPECT_THAT(findReferences(AST, Main.point(), 0, TU.index().get()),
+  EXPECT_THAT(findReferences(AST, Main.point(), 0, TU.index().get()).References,
               ElementsAre(RangeIs(Main.range())));
+}
+
+TEST(FindReferences, NeedsIndexForMacro) {
+  const char *Header = "#define MACRO(X) (X+1)";
+  Annotations Main(R"cpp(
+    int main() {
+      int a = [[MA^CRO]](1);
+    }
+  )cpp");
+  TestTU TU;
+  TU.Code = std::string(Main.code());
+  TU.HeaderCode = Header;
+  auto AST = TU.build();
+
+  // References in main file are returned without index.
+  EXPECT_THAT(
+      findReferences(AST, Main.point(), 0, /*Index=*/nullptr).References,
+      ElementsAre(RangeIs(Main.range())));
+
+  Annotations IndexedMain(R"cpp(
+    int indexed_main() {
+      int a = [[MACRO]](1);
+    }
+  )cpp");
+
+  // References from indexed files are included.
+  TestTU IndexedTU;
+  IndexedTU.Code = std::string(IndexedMain.code());
+  IndexedTU.Filename = "Indexed.cpp";
+  IndexedTU.HeaderCode = Header;
+  EXPECT_THAT(
+      findReferences(AST, Main.point(), 0, IndexedTU.index().get()).References,
+      ElementsAre(RangeIs(Main.range()), RangeIs(IndexedMain.range())));
+  auto LimitRefs =
+      findReferences(AST, Main.point(), /*Limit*/ 1, IndexedTU.index().get());
+  EXPECT_EQ(1u, LimitRefs.References.size());
+  EXPECT_TRUE(LimitRefs.HasMore);
 }
 
 TEST(FindReferences, NoQueryForLocalSymbols) {
   struct RecordingIndex : public MemIndex {
     mutable Optional<llvm::DenseSet<SymbolID>> RefIDs;
-    void refs(const RefsRequest &Req,
+    bool refs(const RefsRequest &Req,
               llvm::function_ref<void(const Ref &)>) const override {
       RefIDs = Req.IDs;
+      return false;
     }
   };
 
@@ -1510,6 +1409,105 @@ TEST(FindReferences, NoQueryForLocalSymbols) {
     else
       EXPECT_EQ(Rec.RefIDs, None) << T.AnnotatedCode;
   }
+}
+
+TEST(GetNonLocalDeclRefs, All) {
+  struct Case {
+    llvm::StringRef AnnotatedCode;
+    std::vector<std::string> ExpectedDecls;
+  } Cases[] = {
+      {
+          // VarDecl and ParamVarDecl
+          R"cpp(
+            void bar();
+            void ^foo(int baz) {
+              int x = 10;
+              bar();
+            })cpp",
+          {"bar"},
+      },
+      {
+          // Method from class
+          R"cpp(
+            class Foo { public: void foo(); };
+            class Bar {
+              void foo();
+              void bar();
+            };
+            void Bar::^foo() {
+              Foo f;
+              bar();
+              f.foo();
+            })cpp",
+          {"Bar", "Bar::bar", "Foo", "Foo::foo"},
+      },
+      {
+          // Local types
+          R"cpp(
+            void ^foo() {
+              class Foo { public: void foo() {} };
+              class Bar { public: void bar() {} };
+              Foo f;
+              Bar b;
+              b.bar();
+              f.foo();
+            })cpp",
+          {},
+      },
+      {
+          // Template params
+          R"cpp(
+            template <typename T, template<typename> class Q>
+            void ^foo() {
+              T x;
+              Q<T> y;
+            })cpp",
+          {},
+      },
+  };
+  for (const Case &C : Cases) {
+    Annotations File(C.AnnotatedCode);
+    auto AST = TestTU::withCode(File.code()).build();
+    SourceLocation SL = llvm::cantFail(
+        sourceLocationInMainFile(AST.getSourceManager(), File.point()));
+
+    const FunctionDecl *FD =
+        llvm::dyn_cast<FunctionDecl>(&findDecl(AST, [SL](const NamedDecl &ND) {
+          return ND.getLocation() == SL && llvm::isa<FunctionDecl>(ND);
+        }));
+    ASSERT_NE(FD, nullptr);
+
+    auto NonLocalDeclRefs = getNonLocalDeclRefs(AST, FD);
+    std::vector<std::string> Names;
+    for (const Decl *D : NonLocalDeclRefs) {
+      if (const auto *ND = llvm::dyn_cast<NamedDecl>(D))
+        Names.push_back(ND->getQualifiedNameAsString());
+    }
+    EXPECT_THAT(Names, UnorderedElementsAreArray(C.ExpectedDecls))
+        << File.code();
+  }
+}
+
+TEST(DocumentLinks, All) {
+  Annotations MainCpp(R"cpp(
+      #/*comments*/include /*comments*/ $foo[["foo.h"]] //more comments
+      int end_of_preamble = 0;
+      #include $bar[[<bar.h>]]
+    )cpp");
+
+  TestTU TU;
+  TU.Code = std::string(MainCpp.code());
+  TU.AdditionalFiles = {{"foo.h", ""}, {"bar.h", ""}};
+  TU.ExtraArgs = {"-isystem."};
+  auto AST = TU.build();
+
+  EXPECT_THAT(
+      clangd::getDocumentLinks(AST),
+      ElementsAre(
+          DocumentLink({MainCpp.range("foo"),
+                        URIForFile::canonicalize(testPath("foo.h"), "")}),
+          DocumentLink({MainCpp.range("bar"),
+                        URIForFile::canonicalize(testPath("bar.h"), "")})));
 }
 
 } // namespace

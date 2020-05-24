@@ -18,6 +18,7 @@
 #include <tuple>
 #include <cassert>
 
+#include "test_macros.h"
 #include "MoveOnly.h"
 #include "allocators.h"
 #include "../alloc_first.h"
@@ -80,7 +81,7 @@ struct Explicit {
 int main(int, char**)
 {
     {
-        std::tuple<Explicit> t{std::allocator_arg, std::allocator<void>{}, 42};
+        std::tuple<Explicit> t{std::allocator_arg, std::allocator<int>{}, 42};
         assert(std::get<0>(t).value == 42);
     }
     {

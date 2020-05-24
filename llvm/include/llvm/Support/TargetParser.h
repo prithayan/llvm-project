@@ -121,12 +121,15 @@ enum GPUKind : uint32_t {
   GK_GFX902 = 61,
   GK_GFX904 = 62,
   GK_GFX906 = 63,
+  GK_GFX908 = 64,
   GK_GFX909 = 65,
 
   GK_GFX1010 = 71,
+  GK_GFX1011 = 72,
+  GK_GFX1012 = 73,
 
   GK_AMDGCN_FIRST = GK_GFX600,
-  GK_AMDGCN_LAST = GK_GFX1010,
+  GK_AMDGCN_LAST = GK_GFX1012,
 };
 
 /// Instruction set architecture version.
@@ -148,7 +151,10 @@ enum ArchFeatureKind : uint32_t {
 
   // Common features.
   FEATURE_FAST_FMA_F32 = 1 << 4,
-  FEATURE_FAST_DENORMAL_F32 = 1 << 5
+  FEATURE_FAST_DENORMAL_F32 = 1 << 5,
+
+  // Wavefront 32 is available.
+  FEATURE_WAVE32 = 1 << 6
 };
 
 StringRef getArchNameAMDGCN(GPUKind AK);

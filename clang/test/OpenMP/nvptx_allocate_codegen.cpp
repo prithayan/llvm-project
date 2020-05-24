@@ -1,5 +1,5 @@
 // RUN: %clang_cc1 -verify -fopenmp -triple x86_64-apple-darwin10.6.0 -fopenmp-targets=nvptx64-nvidia-cuda  -emit-llvm-bc -o %t-host.bc %s
-// RUN: %clang_cc1 -verify -fopenmp -triple nvptx64-nvidia-cuda -fopenmp-targets=nvptx64-nvidia-cuda -emit-llvm %s -fopenmp-is-device -fopenmp-host-ir-file-path %t-host.bc -o - | FileCheck %s
+// RUN: %clang_cc1 -verify -fopenmp -triple nvptx64-nvidia-cuda -fopenmp-targets=nvptx64-nvidia-cuda -emit-llvm %s -fopenmp-is-device -fopenmp-host-ir-file-path %t-host.bc -o - -disable-llvm-optzns | FileCheck %s
 // expected-no-diagnostics
 
 #ifndef HEADER
@@ -7,6 +7,7 @@
 
 #pragma omp declare target
 typedef void **omp_allocator_handle_t;
+extern const omp_allocator_handle_t omp_null_allocator;
 extern const omp_allocator_handle_t omp_default_mem_alloc;
 extern const omp_allocator_handle_t omp_large_cap_mem_alloc;
 extern const omp_allocator_handle_t omp_const_mem_alloc;
@@ -17,11 +18,11 @@ extern const omp_allocator_handle_t omp_pteam_mem_alloc;
 extern const omp_allocator_handle_t omp_thread_mem_alloc;
 
 // CHECK-DAG: @{{.+}}St1{{.+}}b{{.+}} = external global i32,
-// CHECK-DAG: @a = global i32 0,
-// CHECK-DAG: @b = addrspace(4) global i32 0,
-// CHECK-DAG: @c = global i32 0,
-// CHECK-DAG: @d = global %struct.St1 zeroinitializer,
-// CHECK-DAG: @{{.+}}ns{{.+}}a{{.+}} = addrspace(3) global i32 0,
+// CHECK-DAG: @a ={{ hidden | }}global i32 0,
+// CHECK-DAG: @b ={{ hidden | }}addrspace(4) global i32 0,
+// CHECK-DAG: @c ={{ hidden | }}global i32 0,
+// CHECK-DAG: @d ={{ hidden | }}global %struct.St1 zeroinitializer,
+// CHECK-DAG: @{{.+}}ns{{.+}}a{{.+}} ={{ hidden | }}addrspace(3) global i32 0,
 // CHECK-DAG: @{{.+}}main{{.+}}a{{.*}} = internal global i32 0,
 // CHECK-DAG: @{{.+}}ST{{.+}}m{{.+}} = external global i32,
 // CHECK-DAG: @bar_c = internal global i32 0,
@@ -79,7 +80,7 @@ extern template int ST<int>::m;
 
 void baz(float &);
 
-// CHECK: define void @{{.+}}bar{{.+}}()
+// CHECK: define{{ hidden | }}void @{{.+}}bar{{.+}}()
 void bar() {
   // CHECK: alloca float,
   float bar_a;

@@ -184,6 +184,13 @@ TEST(EnumConstant, Matches) {
   EXPECT_TRUE(notMatches("enum X {};", Matcher));
 }
 
+TEST(TagDecl, MatchesTagDecls) {
+  EXPECT_TRUE(matches("struct X {};", tagDecl(hasName("X"))));
+  EXPECT_TRUE(matches("class C {};", tagDecl(hasName("C"))));
+  EXPECT_TRUE(matches("union U {};", tagDecl(hasName("U"))));
+  EXPECT_TRUE(matches("enum E {};", tagDecl(hasName("E"))));
+}
+
 TEST(Matcher, UnresolvedLookupExpr) {
   // FIXME: The test is known to be broken on Windows with delayed template
   // parsing.
@@ -677,6 +684,16 @@ TEST(Matcher, NewExpression) {
 TEST(Matcher, DeleteExpression) {
   EXPECT_TRUE(matches("struct A {}; void f(A* a) { delete a; }",
                       cxxDeleteExpr()));
+}
+
+TEST(Matcher, NoexceptExpression) {
+  StatementMatcher NoExcept = cxxNoexceptExpr();
+  EXPECT_TRUE(matches("void foo(); bool bar = noexcept(foo());", NoExcept));
+  EXPECT_TRUE(
+      matches("void foo() noexcept; bool bar = noexcept(foo());", NoExcept));
+  EXPECT_TRUE(notMatches("void foo() noexcept;", NoExcept));
+  EXPECT_TRUE(notMatches("void foo() noexcept(1+1);", NoExcept));
+  EXPECT_TRUE(matches("void foo() noexcept(noexcept(1+1));", NoExcept));
 }
 
 TEST(Matcher, DefaultArgument) {
@@ -1313,11 +1330,11 @@ TEST(TypeMatching, PointerTypes) {
   //EXPECT_TRUE(matchAndVerifyResultTrue(
   //    "int* a;",
   //    pointerTypeLoc(pointeeLoc(typeLoc().bind("loc"))),
-  //    llvm::make_unique<VerifyIdIsBoundTo<TypeLoc>>("loc", 1)));
+  //    std::make_unique<VerifyIdIsBoundTo<TypeLoc>>("loc", 1)));
   //EXPECT_TRUE(matchAndVerifyResultTrue(
   //    "int* a;",
   //    pointerTypeLoc().bind("loc"),
-  //    llvm::make_unique<VerifyIdIsBoundTo<TypeLoc>>("loc", 1)));
+  //    std::make_unique<VerifyIdIsBoundTo<TypeLoc>>("loc", 1)));
   EXPECT_TRUE(matches(
     "int** a;",
     loc(pointerType(pointee(qualType())))));
@@ -1439,6 +1456,12 @@ TEST(TypeMatching, MatchesTypedefTypes) {
 TEST(TypeMatching, MatchesTemplateSpecializationType) {
   EXPECT_TRUE(matches("template <typename T> class A{}; A<int> a;",
                       templateSpecializationType()));
+}
+
+TEST(TypeMatching, MatchesDeucedTemplateSpecializationType) {
+  EXPECT_TRUE(matches("template <typename T> class A{ public: A(T) {} }; A a(1);",
+                      deducedTemplateSpecializationType(),
+                      LanguageMode::Cxx17OrLater));
 }
 
 TEST(TypeMatching, MatchesRecordType) {
@@ -1576,14 +1599,14 @@ public:
 TEST(IsEqualTo, MatchesNodesByIdentity) {
   EXPECT_TRUE(matchAndVerifyResultTrue(
     "class X { class Y {}; };", recordDecl(hasName("::X::Y")).bind(""),
-    llvm::make_unique<VerifyAncestorHasChildIsEqual<CXXRecordDecl>>()));
+    std::make_unique<VerifyAncestorHasChildIsEqual<CXXRecordDecl>>()));
   EXPECT_TRUE(matchAndVerifyResultTrue(
     "void f() { if (true) if(true) {} }", ifStmt().bind(""),
-    llvm::make_unique<VerifyAncestorHasChildIsEqual<IfStmt>>()));
+    std::make_unique<VerifyAncestorHasChildIsEqual<IfStmt>>()));
   EXPECT_TRUE(matchAndVerifyResultTrue(
     "class X { class Y {} y; };",
     fieldDecl(hasName("y"), hasType(type().bind(""))).bind("decl"),
-    llvm::make_unique<VerifyAncestorHasChildIsEqual<Type>>()));
+    std::make_unique<VerifyAncestorHasChildIsEqual<Type>>()));
 }
 
 TEST(TypedefDeclMatcher, Match) {
@@ -1825,6 +1848,30 @@ void x(int x) {
 ;
 })";
   EXPECT_TRUE(notMatchesWithOpenMP(Source4, Matcher));
+}
+
+TEST(MatchFinderAPI, matchesDynamic) {
+
+  std::string SourceCode = "struct A { void f() {} };";
+  auto Matcher = functionDecl(isDefinition()).bind("method");
+
+  auto astUnit = tooling::buildASTFromCode(SourceCode);
+
+  auto GlobalBoundNodes = matchDynamic(Matcher, astUnit->getASTContext());
+
+  EXPECT_EQ(GlobalBoundNodes.size(), 1u);
+  EXPECT_EQ(GlobalBoundNodes[0].getMap().size(), 1u);
+
+  auto GlobalMethodNode = GlobalBoundNodes[0].getNodeAs<FunctionDecl>("method");
+  EXPECT_TRUE(GlobalMethodNode != nullptr);
+
+  auto MethodBoundNodes =
+      matchDynamic(Matcher, *GlobalMethodNode, astUnit->getASTContext());
+  EXPECT_EQ(MethodBoundNodes.size(), 1u);
+  EXPECT_EQ(MethodBoundNodes[0].getMap().size(), 1u);
+
+  auto MethodNode = MethodBoundNodes[0].getNodeAs<FunctionDecl>("method");
+  EXPECT_EQ(MethodNode, GlobalMethodNode);
 }
 
 } // namespace ast_matchers

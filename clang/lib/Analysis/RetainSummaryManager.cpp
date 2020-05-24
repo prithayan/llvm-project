@@ -140,16 +140,23 @@ RetainSummaryManager::getPersistentSummary(const RetainSummary &OldSumm) {
 static bool isSubclass(const Decl *D,
                        StringRef ClassName) {
   using namespace ast_matchers;
-  DeclarationMatcher SubclassM = cxxRecordDecl(isSameOrDerivedFrom(ClassName));
+  DeclarationMatcher SubclassM =
+      cxxRecordDecl(isSameOrDerivedFrom(std::string(ClassName)));
   return !(match(SubclassM, *D, D->getASTContext()).empty());
 }
 
 static bool isOSObjectSubclass(const Decl *D) {
-  return D && isSubclass(D, "OSMetaClassBase");
+  // OSSymbols are particular OSObjects that are allocated globally
+  // and therefore aren't really refcounted, so we ignore them.
+  return D && isSubclass(D, "OSMetaClassBase") && !isSubclass(D, "OSSymbol");
 }
 
 static bool isOSObjectDynamicCast(StringRef S) {
   return S == "safeMetaCast";
+}
+
+static bool isOSObjectRequiredCast(StringRef S) {
+  return S == "requiredMetaCast";
 }
 
 static bool isOSObjectThisCast(StringRef S) {
@@ -234,7 +241,8 @@ RetainSummaryManager::getSummaryForOSObject(const FunctionDecl *FD,
   if (RetTy->isPointerType()) {
     const CXXRecordDecl *PD = RetTy->getPointeeType()->getAsCXXRecordDecl();
     if (PD && isOSObjectSubclass(PD)) {
-      if (isOSObjectDynamicCast(FName) || isOSObjectThisCast(FName))
+      if (isOSObjectDynamicCast(FName) || isOSObjectRequiredCast(FName) ||
+          isOSObjectThisCast(FName))
         return getDefaultSummary();
 
       // TODO: Add support for the slightly common *Matching(table) idiom.
@@ -499,7 +507,7 @@ RetainSummaryManager::generateSummary(const FunctionDecl *FD,
   FName = FName.substr(FName.find_first_not_of('_'));
 
   // Inspect the result type. Strip away any typedefs.
-  const auto *FT = FD->getType()->getAs<FunctionType>();
+  const auto *FT = FD->getType()->castAs<FunctionType>();
   QualType RetTy = FT->getReturnType();
 
   if (TrackOSObjects)
@@ -657,6 +665,7 @@ RetainSummaryManager::getSummary(AnyCall C,
   switch (C.getKind()) {
   case AnyCall::Function:
   case AnyCall::Constructor:
+  case AnyCall::InheritedConstructor:
   case AnyCall::Allocator:
   case AnyCall::Deallocator:
     Summ = getFunctionSummary(cast_or_null<FunctionDecl>(C.getDecl()));
@@ -745,6 +754,8 @@ RetainSummaryManager::canEval(const CallExpr *CE, const FunctionDecl *FD,
     if (TrackOSObjects) {
       if (isOSObjectDynamicCast(FName) && FD->param_size() >= 1) {
         return BehaviorSummary::IdentityOrZero;
+      } else if (isOSObjectRequiredCast(FName) && FD->param_size() >= 1) {
+        return BehaviorSummary::Identity;
       } else if (isOSObjectThisCast(FName) && isa<CXXMethodDecl>(FD) &&
                  !cast<CXXMethodDecl>(FD)->isStatic()) {
         return BehaviorSummary::IdentityThis;

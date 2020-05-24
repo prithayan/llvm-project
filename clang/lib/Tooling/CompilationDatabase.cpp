@@ -164,7 +164,7 @@ private:
     case driver::Action::InputClass:
       if (Collect) {
         const auto *IA = cast<driver::InputAction>(A);
-        Inputs.push_back(IA->getInputArg().getSpelling());
+        Inputs.push_back(std::string(IA->getInputArg().getSpelling()));
       }
       break;
 
@@ -233,7 +233,7 @@ std::string GetClangToolCommand() {
   SmallString<128> ClangToolPath;
   ClangToolPath = llvm::sys::path::parent_path(ClangExecutable);
   llvm::sys::path::append(ClangToolPath, "clang-tool");
-  return ClangToolPath.str();
+  return std::string(ClangToolPath.str());
 }
 
 } // namespace
@@ -356,7 +356,7 @@ FixedCompilationDatabase::loadFromCommandLine(int &Argc,
   std::vector<std::string> StrippedArgs;
   if (!stripPositionalArgs(CommandLine, StrippedArgs, ErrorMsg))
     return nullptr;
-  return llvm::make_unique<FixedCompilationDatabase>(Directory, StrippedArgs);
+  return std::make_unique<FixedCompilationDatabase>(Directory, StrippedArgs);
 }
 
 std::unique_ptr<FixedCompilationDatabase>
@@ -370,7 +370,7 @@ FixedCompilationDatabase::loadFromFile(StringRef Path, std::string &ErrorMsg) {
   }
   std::vector<std::string> Args{llvm::line_iterator(**File),
                                 llvm::line_iterator()};
-  return llvm::make_unique<FixedCompilationDatabase>(
+  return std::make_unique<FixedCompilationDatabase>(
       llvm::sys::path::parent_path(Path), std::move(Args));
 }
 
@@ -387,8 +387,8 @@ FixedCompilationDatabase(Twine Directory, ArrayRef<std::string> CommandLine) {
 std::vector<CompileCommand>
 FixedCompilationDatabase::getCompileCommands(StringRef FilePath) const {
   std::vector<CompileCommand> Result(CompileCommands);
-  Result[0].CommandLine.push_back(FilePath);
-  Result[0].Filename = FilePath;
+  Result[0].CommandLine.push_back(std::string(FilePath));
+  Result[0].Filename = std::string(FilePath);
   return Result;
 }
 

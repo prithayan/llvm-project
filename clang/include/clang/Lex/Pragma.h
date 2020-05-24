@@ -14,6 +14,7 @@
 #define LLVM_CLANG_LEX_PRAGMA_H
 
 #include "clang/Basic/LLVM.h"
+#include "clang/Basic/SourceLocation.h"
 #include "llvm/ADT/StringMap.h"
 #include "llvm/ADT/StringRef.h"
 #include <string>
@@ -46,6 +47,12 @@ class Token;
     PIK___pragma
   };
 
+  /// Describes how and where the pragma was introduced.
+  struct PragmaIntroducer {
+    PragmaIntroducerKind Kind;
+    SourceLocation Loc;
+  };
+
 /// PragmaHandler - Instances of this interface defined to handle the various
 /// pragmas that the language front-end uses.  Each handler optionally has a
 /// name (e.g. "pack") and the HandlePragma method is invoked when a pragma with
@@ -64,7 +71,7 @@ public:
   virtual ~PragmaHandler();
 
   StringRef getName() const { return Name; }
-  virtual void HandlePragma(Preprocessor &PP, PragmaIntroducerKind Introducer,
+  virtual void HandlePragma(Preprocessor &PP, PragmaIntroducer Introducer,
                             Token &FirstToken) = 0;
 
   /// getIfNamespace - If this is a namespace, return it.  This is equivalent to
@@ -78,7 +85,7 @@ class EmptyPragmaHandler : public PragmaHandler {
 public:
   explicit EmptyPragmaHandler(StringRef Name = StringRef());
 
-  void HandlePragma(Preprocessor &PP, PragmaIntroducerKind Introducer,
+  void HandlePragma(Preprocessor &PP, PragmaIntroducer Introducer,
                     Token &FirstToken) override;
 };
 
@@ -89,11 +96,10 @@ public:
 class PragmaNamespace : public PragmaHandler {
   /// Handlers - This is a map of the handlers in this namespace with their name
   /// as key.
-  llvm::StringMap<PragmaHandler *> Handlers;
+  llvm::StringMap<std::unique_ptr<PragmaHandler>> Handlers;
 
 public:
   explicit PragmaNamespace(StringRef Name) : PragmaHandler(Name) {}
-  ~PragmaNamespace() override;
 
   /// FindHandler - Check to see if there is already a handler for the
   /// specified name.  If not, return the handler for the null name if it
@@ -111,7 +117,7 @@ public:
 
   bool IsEmpty() const { return Handlers.empty(); }
 
-  void HandlePragma(Preprocessor &PP, PragmaIntroducerKind Introducer,
+  void HandlePragma(Preprocessor &PP, PragmaIntroducer Introducer,
                     Token &Tok) override;
 
   PragmaNamespace *getIfNamespace() override { return this; }

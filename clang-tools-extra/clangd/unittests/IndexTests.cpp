@@ -76,14 +76,48 @@ TEST(SymbolSlab, FindAndIterate) {
     EXPECT_THAT(*S.find(SymbolID(Sym)), Named(Sym));
 }
 
+TEST(RelationSlab, Lookup) {
+  SymbolID A{"A"};
+  SymbolID B{"B"};
+  SymbolID C{"C"};
+  SymbolID D{"D"};
+
+  RelationSlab::Builder Builder;
+  Builder.insert(Relation{A, RelationKind::BaseOf, B});
+  Builder.insert(Relation{A, RelationKind::BaseOf, C});
+  Builder.insert(Relation{B, RelationKind::BaseOf, D});
+  Builder.insert(Relation{C, RelationKind::BaseOf, D});
+
+  RelationSlab Slab = std::move(Builder).build();
+  EXPECT_THAT(Slab.lookup(A, RelationKind::BaseOf),
+              UnorderedElementsAre(Relation{A, RelationKind::BaseOf, B},
+                                   Relation{A, RelationKind::BaseOf, C}));
+}
+
+TEST(RelationSlab, Duplicates) {
+  SymbolID A{"A"};
+  SymbolID B{"B"};
+  SymbolID C{"C"};
+
+  RelationSlab::Builder Builder;
+  Builder.insert(Relation{A, RelationKind::BaseOf, B});
+  Builder.insert(Relation{A, RelationKind::BaseOf, C});
+  Builder.insert(Relation{A, RelationKind::BaseOf, B});
+
+  RelationSlab Slab = std::move(Builder).build();
+  EXPECT_THAT(Slab, UnorderedElementsAre(Relation{A, RelationKind::BaseOf, B},
+                                         Relation{A, RelationKind::BaseOf, C}));
+}
+
 TEST(SwapIndexTest, OldIndexRecycled) {
   auto Token = std::make_shared<int>();
   std::weak_ptr<int> WeakToken = Token;
 
-  SwapIndex S(llvm::make_unique<MemIndex>(
-      SymbolSlab(), RefSlab(), std::move(Token), /*BackingDataSize=*/0));
+  SwapIndex S(std::make_unique<MemIndex>(SymbolSlab(), RefSlab(),
+                                          RelationSlab(), std::move(Token),
+                                          /*BackingDataSize=*/0));
   EXPECT_FALSE(WeakToken.expired());      // Current MemIndex keeps it alive.
-  S.reset(llvm::make_unique<MemIndex>()); // Now the MemIndex is destroyed.
+  S.reset(std::make_unique<MemIndex>()); // Now the MemIndex is destroyed.
   EXPECT_TRUE(WeakToken.expired());       // So the token is too.
 }
 
@@ -93,12 +127,13 @@ TEST(MemIndexTest, MemIndexDeduplicate) {
   FuzzyFindRequest Req;
   Req.Query = "2";
   Req.AnyScope = true;
-  MemIndex I(Symbols, RefSlab());
+  MemIndex I(Symbols, RefSlab(), RelationSlab());
   EXPECT_THAT(match(I, Req), ElementsAre("2"));
 }
 
 TEST(MemIndexTest, MemIndexLimitedNumMatches) {
-  auto I = MemIndex::build(generateNumSymbols(0, 100), RefSlab());
+  auto I =
+      MemIndex::build(generateNumSymbols(0, 100), RefSlab(), RelationSlab());
   FuzzyFindRequest Req;
   Req.Query = "5";
   Req.AnyScope = true;
@@ -113,7 +148,7 @@ TEST(MemIndexTest, MemIndexLimitedNumMatches) {
 TEST(MemIndexTest, FuzzyMatch) {
   auto I = MemIndex::build(
       generateSymbols({"LaughingOutLoud", "LionPopulation", "LittleOldLady"}),
-      RefSlab());
+      RefSlab(), RelationSlab());
   FuzzyFindRequest Req;
   Req.Query = "lol";
   Req.AnyScope = true;
@@ -123,8 +158,8 @@ TEST(MemIndexTest, FuzzyMatch) {
 }
 
 TEST(MemIndexTest, MatchQualifiedNamesWithoutSpecificScope) {
-  auto I =
-      MemIndex::build(generateSymbols({"a::y1", "b::y2", "y3"}), RefSlab());
+  auto I = MemIndex::build(generateSymbols({"a::y1", "b::y2", "y3"}), RefSlab(),
+                           RelationSlab());
   FuzzyFindRequest Req;
   Req.Query = "y";
   Req.AnyScope = true;
@@ -132,8 +167,8 @@ TEST(MemIndexTest, MatchQualifiedNamesWithoutSpecificScope) {
 }
 
 TEST(MemIndexTest, MatchQualifiedNamesWithGlobalScope) {
-  auto I =
-      MemIndex::build(generateSymbols({"a::y1", "b::y2", "y3"}), RefSlab());
+  auto I = MemIndex::build(generateSymbols({"a::y1", "b::y2", "y3"}), RefSlab(),
+                           RelationSlab());
   FuzzyFindRequest Req;
   Req.Query = "y";
   Req.Scopes = {""};
@@ -142,7 +177,8 @@ TEST(MemIndexTest, MatchQualifiedNamesWithGlobalScope) {
 
 TEST(MemIndexTest, MatchQualifiedNamesWithOneScope) {
   auto I = MemIndex::build(
-      generateSymbols({"a::y1", "a::y2", "a::x", "b::y2", "y3"}), RefSlab());
+      generateSymbols({"a::y1", "a::y2", "a::x", "b::y2", "y3"}), RefSlab(),
+      RelationSlab());
   FuzzyFindRequest Req;
   Req.Query = "y";
   Req.Scopes = {"a::"};
@@ -151,7 +187,8 @@ TEST(MemIndexTest, MatchQualifiedNamesWithOneScope) {
 
 TEST(MemIndexTest, MatchQualifiedNamesWithMultipleScopes) {
   auto I = MemIndex::build(
-      generateSymbols({"a::y1", "a::y2", "a::x", "b::y3", "y3"}), RefSlab());
+      generateSymbols({"a::y1", "a::y2", "a::x", "b::y3", "y3"}), RefSlab(),
+      RelationSlab());
   FuzzyFindRequest Req;
   Req.Query = "y";
   Req.Scopes = {"a::", "b::"};
@@ -159,7 +196,8 @@ TEST(MemIndexTest, MatchQualifiedNamesWithMultipleScopes) {
 }
 
 TEST(MemIndexTest, NoMatchNestedScopes) {
-  auto I = MemIndex::build(generateSymbols({"a::y1", "a::b::y2"}), RefSlab());
+  auto I = MemIndex::build(generateSymbols({"a::y1", "a::b::y2"}), RefSlab(),
+                           RelationSlab());
   FuzzyFindRequest Req;
   Req.Query = "y";
   Req.Scopes = {"a::"};
@@ -167,7 +205,8 @@ TEST(MemIndexTest, NoMatchNestedScopes) {
 }
 
 TEST(MemIndexTest, IgnoreCases) {
-  auto I = MemIndex::build(generateSymbols({"ns::ABC", "ns::abc"}), RefSlab());
+  auto I = MemIndex::build(generateSymbols({"ns::ABC", "ns::abc"}), RefSlab(),
+                           RelationSlab());
   FuzzyFindRequest Req;
   Req.Query = "AB";
   Req.Scopes = {"ns::"};
@@ -175,7 +214,8 @@ TEST(MemIndexTest, IgnoreCases) {
 }
 
 TEST(MemIndexTest, Lookup) {
-  auto I = MemIndex::build(generateSymbols({"ns::abc", "ns::xyz"}), RefSlab());
+  auto I = MemIndex::build(generateSymbols({"ns::abc", "ns::xyz"}), RefSlab(),
+                           RelationSlab());
   EXPECT_THAT(lookup(*I, SymbolID("ns::abc")), UnorderedElementsAre("ns::abc"));
   EXPECT_THAT(lookup(*I, {SymbolID("ns::abc"), SymbolID("ns::xyz")}),
               UnorderedElementsAre("ns::abc", "ns::xyz"));
@@ -205,7 +245,7 @@ TEST(MemIndexTest, TemplateSpecialization) {
       index::SymbolProperty::TemplatePartialSpecialization);
   B.insert(S);
 
-  auto I = MemIndex::build(std::move(B).build(), RefSlab());
+  auto I = MemIndex::build(std::move(B).build(), RefSlab(), RelationSlab());
   FuzzyFindRequest Req;
   Req.AnyScope = true;
 
@@ -220,8 +260,10 @@ TEST(MemIndexTest, TemplateSpecialization) {
 }
 
 TEST(MergeIndexTest, Lookup) {
-  auto I = MemIndex::build(generateSymbols({"ns::A", "ns::B"}), RefSlab()),
-       J = MemIndex::build(generateSymbols({"ns::B", "ns::C"}), RefSlab());
+  auto I = MemIndex::build(generateSymbols({"ns::A", "ns::B"}), RefSlab(),
+                           RelationSlab()),
+       J = MemIndex::build(generateSymbols({"ns::B", "ns::C"}), RefSlab(),
+                           RelationSlab());
   MergedIndex M(I.get(), J.get());
   EXPECT_THAT(lookup(M, SymbolID("ns::A")), UnorderedElementsAre("ns::A"));
   EXPECT_THAT(lookup(M, SymbolID("ns::B")), UnorderedElementsAre("ns::B"));
@@ -235,8 +277,10 @@ TEST(MergeIndexTest, Lookup) {
 }
 
 TEST(MergeIndexTest, FuzzyFind) {
-  auto I = MemIndex::build(generateSymbols({"ns::A", "ns::B"}), RefSlab()),
-       J = MemIndex::build(generateSymbols({"ns::B", "ns::C"}), RefSlab());
+  auto I = MemIndex::build(generateSymbols({"ns::A", "ns::B"}), RefSlab(),
+                           RelationSlab()),
+       J = MemIndex::build(generateSymbols({"ns::B", "ns::C"}), RefSlab(),
+                           RelationSlab());
   FuzzyFindRequest Req;
   Req.Scopes = {"ns::"};
   EXPECT_THAT(match(MergedIndex(I.get(), J.get()), Req),
@@ -320,7 +364,7 @@ TEST(MergeIndexTest, Refs) {
   Annotations Test1Code(R"(class $Foo[[Foo]];)");
   TestTU Test;
   Test.HeaderCode = HeaderCode;
-  Test.Code = Test1Code.code();
+  Test.Code = std::string(Test1Code.code());
   Test.Filename = "test.cc";
   auto AST = Test.build();
   Dyn.updateMain(Test.Filename, AST);
@@ -337,7 +381,7 @@ TEST(MergeIndexTest, Refs) {
   Annotations Test2Code(R"(class $Foo[[Foo]] {};)");
   TestTU Test2;
   Test2.HeaderCode = HeaderCode;
-  Test2.Code = Test2Code.code();
+  Test2.Code = std::string(Test2Code.code());
   Test2.Filename = "test2.cc";
   StaticAST = Test2.build();
   StaticIndex.updateMain(Test2.Filename, StaticAST);
@@ -345,7 +389,8 @@ TEST(MergeIndexTest, Refs) {
   RefsRequest Request;
   Request.IDs = {Foo.ID};
   RefSlab::Builder Results;
-  Merge.refs(Request, [&](const Ref &O) { Results.insert(Foo.ID, O); });
+  EXPECT_FALSE(
+      Merge.refs(Request, [&](const Ref &O) { Results.insert(Foo.ID, O); }));
   EXPECT_THAT(
       std::move(Results).build(),
       ElementsAre(Pair(
@@ -356,11 +401,29 @@ TEST(MergeIndexTest, Refs) {
 
   Request.Limit = 1;
   RefSlab::Builder Results2;
-  Merge.refs(Request, [&](const Ref &O) { Results2.insert(Foo.ID, O); });
+  EXPECT_TRUE(
+      Merge.refs(Request, [&](const Ref &O) { Results2.insert(Foo.ID, O); }));
   EXPECT_THAT(std::move(Results2).build(),
               ElementsAre(Pair(
                   _, ElementsAre(AnyOf(FileURI("unittest:///test.cc"),
                                        FileURI("unittest:///test2.cc"))))));
+}
+
+TEST(MergeIndexTest, NonDocumentation) {
+  using index::SymbolKind;
+  Symbol L, R;
+  L.ID = R.ID = SymbolID("x");
+  L.Definition.FileURI = "file:/x.h";
+  R.Documentation = "Forward declarations because x.h is too big to include";
+  for (auto ClassLikeKind :
+       {SymbolKind::Class, SymbolKind::Struct, SymbolKind::Union}) {
+    L.SymInfo.Kind = ClassLikeKind;
+    EXPECT_EQ(mergeSymbol(L, R).Documentation, "");
+  }
+
+  L.SymInfo.Kind = SymbolKind::Function;
+  R.Documentation = "Documentation from non-class symbols should be included";
+  EXPECT_EQ(mergeSymbol(L, R).Documentation, R.Documentation);
 }
 
 MATCHER_P2(IncludeHeaderWithRef, IncludeHeader, References, "") {

@@ -1,4 +1,4 @@
-//===-- LanguageRuntime.cpp -------------------------------------*- C++ -*-===//
+//===-- LanguageRuntime.cpp -----------------------------------------------===//
 //
 // Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
 // See https://llvm.org/LICENSE.txt for license information.
@@ -7,15 +7,16 @@
 //===----------------------------------------------------------------------===//
 
 #include "lldb/Target/LanguageRuntime.h"
-#include "Plugins/Language/ObjC/ObjCLanguage.h"
 #include "lldb/Core/PluginManager.h"
 #include "lldb/Core/SearchFilter.h"
 #include "lldb/Interpreter/CommandInterpreter.h"
-#include "lldb/Target/ObjCLanguageRuntime.h"
+#include "lldb/Target/Language.h"
 #include "lldb/Target/Target.h"
 
 using namespace lldb;
 using namespace lldb_private;
+
+char LanguageRuntime::ID = 0;
 
 ExceptionSearchFilter::ExceptionSearchFilter(const lldb::TargetSP &target_sp,
                                              lldb::LanguageType language,
@@ -77,8 +78,7 @@ void ExceptionSearchFilter::UpdateModuleListIfNeeded() {
   }
 }
 
-SearchFilterSP
-ExceptionSearchFilter::DoCopyForBreakpoint(Breakpoint &breakpoint) {
+SearchFilterSP ExceptionSearchFilter::DoCreateCopy() {
   return SearchFilterSP(
       new ExceptionSearchFilter(TargetSP(), m_language, false));
 }
@@ -110,12 +110,11 @@ public:
   ~ExceptionBreakpointResolver() override = default;
 
   Searcher::CallbackReturn SearchCallback(SearchFilter &filter,
-                                          SymbolContext &context, Address *addr,
-                                          bool containing) override {
+                                          SymbolContext &context,
+                                          Address *addr) override {
 
     if (SetActualResolver())
-      return m_actual_resolver_sp->SearchCallback(filter, context, addr,
-                                                  containing);
+      return m_actual_resolver_sp->SearchCallback(filter, context, addr);
     else
       return eCallbackReturnStop;
   }
@@ -154,15 +153,17 @@ public:
   }
 
 protected:
-  BreakpointResolverSP CopyForBreakpoint(Breakpoint &breakpoint) override {
-    return BreakpointResolverSP(
+  BreakpointResolverSP CopyForBreakpoint(BreakpointSP &breakpoint) override {
+    BreakpointResolverSP ret_sp(
         new ExceptionBreakpointResolver(m_language, m_catch_bp, m_throw_bp));
+    ret_sp->SetBreakpoint(breakpoint);
+    return ret_sp;
   }
 
   bool SetActualResolver() {
-    ProcessSP process_sp;
-    if (m_breakpoint) {
-      process_sp = m_breakpoint->GetTarget().GetProcessSP();
+    BreakpointSP breakpoint_sp = GetBreakpoint();
+    if (breakpoint_sp) {
+      ProcessSP process_sp = breakpoint_sp->GetTarget().GetProcessSP();
       if (process_sp) {
         bool refreash_resolver = !m_actual_resolver_sp;
         if (m_language_runtime == nullptr) {
@@ -179,7 +180,7 @@ protected:
 
         if (refreash_resolver && m_language_runtime) {
           m_actual_resolver_sp = m_language_runtime->CreateExceptionResolver(
-              m_breakpoint, m_catch_bp, m_throw_bp);
+              breakpoint_sp, m_catch_bp, m_throw_bp);
         }
       } else {
         m_actual_resolver_sp.reset();
@@ -222,19 +223,24 @@ LanguageRuntime::LanguageRuntime(Process *process) : m_process(process) {}
 
 LanguageRuntime::~LanguageRuntime() = default;
 
-Breakpoint::BreakpointPreconditionSP
-LanguageRuntime::CreateExceptionPrecondition(lldb::LanguageType language,
-                                             bool catch_bp, bool throw_bp) {
-  switch (language) {
-  case eLanguageTypeObjC:
-    if (throw_bp)
-      return Breakpoint::BreakpointPreconditionSP(
-          new ObjCLanguageRuntime::ObjCExceptionPrecondition());
-    break;
-  default:
-    break;
+BreakpointPreconditionSP
+LanguageRuntime::GetExceptionPrecondition(LanguageType language,
+                                          bool throw_bp) {
+  LanguageRuntimeCreateInstance create_callback;
+  for (uint32_t idx = 0;
+       (create_callback =
+            PluginManager::GetLanguageRuntimeCreateCallbackAtIndex(idx)) !=
+       nullptr;
+       idx++) {
+    if (auto precondition_callback =
+            PluginManager::GetLanguageRuntimeGetExceptionPreconditionAtIndex(
+                idx)) {
+      if (BreakpointPreconditionSP precond =
+              precondition_callback(language, throw_bp))
+        return precond;
+    }
   }
-  return Breakpoint::BreakpointPreconditionSP();
+  return BreakpointPreconditionSP();
 }
 
 BreakpointSP LanguageRuntime::CreateExceptionBreakpoint(
@@ -250,10 +256,8 @@ BreakpointSP LanguageRuntime::CreateExceptionBreakpoint(
       target.CreateBreakpoint(filter_sp, resolver_sp, is_internal, hardware,
                               resolve_indirect_functions));
   if (exc_breakpt_sp) {
-    Breakpoint::BreakpointPreconditionSP precondition_sp =
-        CreateExceptionPrecondition(language, catch_bp, throw_bp);
-    if (precondition_sp)
-      exc_breakpt_sp->SetPrecondition(precondition_sp);
+    if (auto precond = GetExceptionPrecondition(language, throw_bp))
+      exc_breakpt_sp->SetPrecondition(precond);
 
     if (is_internal)
       exc_breakpt_sp->SetBreakpointKind("exception");
@@ -289,8 +293,4 @@ void LanguageRuntime::InitializeCommands(CommandObject *parent) {
       }
     }
   }
-}
-
-lldb::SearchFilterSP LanguageRuntime::CreateExceptionSearchFilter() {
-  return m_process->GetTarget().GetSearchFilterForModule(nullptr);
 }
