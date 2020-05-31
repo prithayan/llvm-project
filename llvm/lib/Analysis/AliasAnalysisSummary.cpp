@@ -53,6 +53,7 @@ AliasAttrs getGlobalOrArgAttrFromValue(const Value &Val) {
   if (isa<GlobalValue>(Val))
     return AttrGlobal;
 
+  return AttrNone;
   if (auto *Arg = dyn_cast<Argument>(&Val))
     // Only pointer arguments should have the argument attribute,
     // because things can't escape through scalars without us seeing a

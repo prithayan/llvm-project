@@ -22,8 +22,10 @@
 #include "llvm/IR/PassManager.h"
 #include "llvm/Pass.h"
 #include "llvm/Analysis/MemorySSA.h" 
+#include "llvm/Analysis/PostDominators.h"
 #include <queue>
 #include <set>
+#include <map>
 
 namespace llvm {
 
@@ -35,25 +37,51 @@ class IntResult {
   IntResult(): R(0){}
   int get() {return R;}
 };
+//using UseInstr2DefInstrMapTy = std::map<Instruction*,Instruction*>;
+using ArgumentDefsTy = std::map<unsigned, const Instruction*>;
+using FuncToGenDefsTy = std::map<const Function*, ArgumentDefsTy>;
+using CallToFuncArgsAliasMapTy = std::map<const CallInst*, std::map<unsigned, unsigned>>;
 /// Iterate over every Omp RTL call instruction, and parse its arguments, to
 /// deduce the data mapping pragma used by the programmer. Then record all the
 /// variables mapped and its mapping properties for every Omp RTL call.
 class OmpDiagnosticsLocalAnalysis {
-  const Function &Func2Analyze;
+  const Function &ThisFunc;
   const MemorySSA & MSSA;
   AAResults &AA;
+  FuncToGenDefsTy &FuncToGenDefs;
+  CallToFuncArgsAliasMapTy &CallToFuncArgsAliasMap;
 
   void analyzeBB(const BasicBlock &BB);
+  void analyzeMemUse(const MemoryUse &MemUse);
+  void recordFuncGens(const MemoryDef &MemDef);
+  Value *getAliasingCallArg(CallInst &CIDef, Value &PointerOp);
+
+  llvm::Optional<unsigned> getAliasingArg(const Value &Mem, const Function &F);
   public:
   /// Updates the \p OInfo, with the mapping informa
-  OmpDiagnosticsLocalAnalysis(const Function &F, const MemorySSA & MSSA, AAResults &AA)
-    : Func2Analyze(F), MSSA(MSSA), AA(AA) {}
+  OmpDiagnosticsLocalAnalysis(const Function &F, const MemorySSA & MSSA, AAResults &AA, FuncToGenDefsTy &FuncToGenDefs, CallToFuncArgsAliasMapTy &CallToFuncArgsAliasMap) 
+    : ThisFunc(F), MSSA(MSSA), AA(AA), FuncToGenDefs(FuncToGenDefs),CallToFuncArgsAliasMap(CallToFuncArgsAliasMap){}
   // TODO : make sure the order of traversal of Basicblocks is correct, preorder
   // traversal only
   void run();
+  void recordFuncGens();
   void print();
 };
 
+using ArgToDefMapTy = std::map<unsigned, const Instruction*>;
+class InterproceduralAnalysis {
+  Module &ThisModule;
+  FuncToGenDefsTy &FuncToGenDefs;
+  CallToFuncArgsAliasMapTy &CallToFuncArgsAliasMap;
+
+  bool Converged;
+  void getCalledFuncDefs(CallInst &CI, Function &F, ArgToDefMapTy &ArgToDefMap);
+  void insertDef(Function &F, unsigned FuncArg, Function &CalledFunc, unsigned CalledFuncArg);
+  void analyzeFunc(Function &F);
+  void run();
+  public:
+  InterproceduralAnalysis(Module &ThisModule,FuncToGenDefsTy &FuncToGenDefs, CallToFuncArgsAliasMapTy &CallToFuncArgsAliasMap):ThisModule(ThisModule),FuncToGenDefs(FuncToGenDefs), CallToFuncArgsAliasMap(CallToFuncArgsAliasMap), Converged(false){run(); }
+};
 /// This pass performs the global (interprocedural) Omp Data Mapping Analysis.
 /// (New pass manager).
 class OmpDiagnosticsGlobalAnalysis
@@ -64,10 +92,14 @@ class OmpDiagnosticsGlobalAnalysis
   ModuleAnalysisManager *AnalysisManager;
   std::function<AAResults& (Function&) > GetAAForFunc;
   std::function<MemorySSA & (Function &F) > GetMemSSAForFunc;
+  std::function<PostDominatorTree & (Function &F) > GetPDMForFunc;
+  FuncToGenDefsTy FuncToGenDefs;
+  CallToFuncArgsAliasMapTy CallToFuncArgsAliasMap;
 
   void analyzeModule();
-
-  std::map<std::string, Function *> FuncNameMap;
+  void recordFuncGens();
+  void  interProcRecordFuncGens();
+  void interProcMSSA();
 
   public:
   using Result = IntResult;
