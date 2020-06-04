@@ -18,6 +18,7 @@
 #include "llvm/Analysis/CallGraphSCCPass.h"
 #include "llvm/IR/ValueMap.h"
 #include "llvm/Pass.h"
+#include <map>
 
 namespace llvm {
 
@@ -37,11 +38,14 @@ public:
 
   bool needsWaveLimiter(const Function *F) const;
 
+    using DepthTy = unsigned;
   struct FuncInfo {
     unsigned MemInstCount;
     unsigned InstCount;
     unsigned IAMInstCount; // Indirect access memory instruction count
     unsigned LSMInstCount; // Large stride memory instruction count
+    std::map<const Value*, DepthTy> InstrToDepthMap;
+    std::map<const Value*, DepthTy> MemOpToDepthMap;
     FuncInfo() : MemInstCount(0), InstCount(0), IAMInstCount(0),
                  LSMInstCount(0) {}
   };
