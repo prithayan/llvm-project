@@ -58,6 +58,7 @@ AbstractCallSite::AbstractCallSite(const Use *U)
 
   // First handle unknown users.
   if (!CB) {
+  errs()<<"\n Call Base::"<< *U->getUser();
 
     // If the use is actually in a constant cast expression which itself
     // has only one use, we look through the constant cast expression.
@@ -74,6 +75,7 @@ AbstractCallSite::AbstractCallSite(const Use *U)
       return;
     }
   }
+  errs()<<"\n Call Base::"<< *CB;
 
   // Then handle direct or indirect calls. Thus, if U is the callee of the
   // call site CB it is not a callback and we are done.

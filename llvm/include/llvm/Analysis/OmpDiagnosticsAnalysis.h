@@ -120,11 +120,12 @@ public:
     run();
   }
   void getCallGens(CallToGenDefsTy &CallToGenDefs, CallToGenUsesTy &CallToGenUses);
+  void print();
 };
 
 using FuncToAAResultsMapTy = std::map<const Function *, AAResults *>;
 using FuncToMSSAMapTy = std::map<const Function *, const MemorySSA *>;
-using SetOfInstructionsTy = std::set<const Instruction*> ;
+using SetOfInstructionsTy = std::vector<const Instruction*> ;
 using SetOfMemoryAccessesTy = std::set<const MemoryUseOrDef*>;
 class InterproceduralMSSAWalker {
   const Module &ThisModule;
@@ -133,9 +134,12 @@ class InterproceduralMSSAWalker {
   CallToGenDefsTy &CallToGenDefs;
   CallToGenUsesTy &CallToGenUses;
   std::map<const MemoryPhi *, std::vector<bool>> MemPhiToDeviceDefMap;
+  std::map<const CallInst*, const CallInst*> TargetCIMap;
   enum DefLocation{NoDef, DeviceDef, HostDef} ;
 
   //  llvm::optional<const Instruction*>
+  void recordReachingDefsAtPhi();
+  void printCopy(const SetOfInstructionsTy &Src, const Instruction &Dst, const Instruction &CopyAt, const std::string &copyStr, bool UseOnDevice);
   const Instruction *getFuncArgDef(const CallInst &CI,unsigned ArgNum);
   bool checkIfAlias(const Instruction *Def, const Value *UseMem, AAResults &AR);
   // Iterate over all the arguments to the call instruction \p DefInstr, and check if any argument aliases with Usemem, return the argument which aliases.
@@ -143,14 +147,14 @@ class InterproceduralMSSAWalker {
       const Value *UseMem,
       AAResults &AR, std::set<unsigned> &AliasingArgs);
   DefLocation getDefAccesses(const MemoryAccess &MA, const Value *UseMem,
-      const MemorySSA &MSSA, AAResults &AR, std::set<const MemoryAccess *> &VisitedSet, SetOfInstructionsTy &DefInstrs, SetOfMemoryAccessesTy &SetOfMemoryAccesses);
+      const MemorySSA &MSSA, AAResults &AR, std::set<const MemoryAccess *> &VisitedSet, SetOfInstructionsTy &DefInstrs, SetOfMemoryAccessesTy &SetOfMemoryAccesses, const MemoryUseOrDef &MemUse);
 
   bool getDefAccesses(const MemoryUseOrDef &UseMA, const MemoryAccess &DefMA, const Value *UseMem,const MemorySSA &MSSA, AAResults &AR);
   void handleMemUse(const MemoryUse &MemUse, const MemorySSA &MSSA,
       AAResults &AR);
   void handleMemDef(const MemoryDef &MemDef, const MemorySSA &MSSA,
       AAResults &AR);
-  void analyzeFunc(const MemorySSA &MSSA, AAResults &AR, const Function &F);
+  void analyzeFunc(const MemorySSA &MSSA, AAResults &AR, const Function &F, std::vector<const Function*> &CalledFunctionsList);
   void run();
   bool isInstrOnDevice(const Instruction &I);
   void handleDefOnDevice(const MemoryUseOrDef &MemUse, const MemoryUseOrDef &MemDef);

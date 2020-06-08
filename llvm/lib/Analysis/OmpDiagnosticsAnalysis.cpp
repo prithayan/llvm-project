@@ -21,6 +21,37 @@ using namespace llvm;
 
 #define DEBUG_TYPE "omp-diagnostics"
 
+const Value* getAlloca(const Value* Inst){
+
+  if (auto Gep = dyn_cast<GetElementPtrInst>(Inst))
+    return getAlloca(Gep->getPointerOperand());
+  if (auto Bitcast = dyn_cast<BitCastInst>(Inst))
+    return getAlloca(Bitcast->getOperand(0));
+  
+  return Inst;
+}
+bool checkAlias(const Value* &A, const Value* &B){
+  if (A == nullptr || B == nullptr) 
+    return false;
+  auto MemA = getAlloca(A);
+  auto MemB = getAlloca(B);
+
+  A = MemA;
+  B = MemB;
+  bool AisAlloca = isa<AllocaInst>(MemA);
+  bool BisAlloca = isa<AllocaInst>(MemB);
+  bool AisCall = isa<CallInst> (MemA)&& dyn_cast<CallInst>(MemA)->getCalledFunction()->getName().contains("_Zn");
+  bool BisCall = isa<CallInst> (MemB) && isa<CallInst> (MemB) && dyn_cast<CallInst>(MemB)->getCalledFunction()->getName().contains("_Zn");
+  if (AisCall)
+    LLVM_DEBUG(dbgs()<<"\n Call ::"<<*MemA);
+  if (AisAlloca && BisAlloca  && MemA != MemB )
+    return false;
+  if ((AisAlloca && isa<GlobalVariable>(MemB) ) || (isa<GlobalVariable>(MemA) && BisAlloca) )
+    return false;
+  if ((AisAlloca && BisCall) || (AisCall && BisAlloca)|| (AisCall  && BisCall && dyn_cast<CallInst>(MemA) != dyn_cast<CallInst>(MemB)))
+    return false;
+  return true;
+}
 Value *OmpDiagnosticsLocalAnalysis::getAliasingCallArg(CallInst &CIDef,
                                                        Value &PointerOp) {
   Value *AliasingArg = nullptr;
@@ -116,6 +147,7 @@ void OmpDiagnosticsLocalAnalysis::recordFuncGens(const MemoryUse &MemUse) {
 }
 
 void OmpDiagnosticsLocalAnalysis::recordFuncGens() {
+  LLVM_DEBUG(dbgs() << "\n Analysis Local:"<<ThisFunc.getName());
   for (const BasicBlock &BB : ThisFunc) {
     auto MAList = MSSA.getBlockAccesses(&BB);
     if (MAList == nullptr)
@@ -127,9 +159,26 @@ void OmpDiagnosticsLocalAnalysis::recordFuncGens() {
         recordFuncGens(*MemDef);
     }
   }
+}
+
+void OmpDiagnosticsLocalAnalysis::run() {
+
+  LLVM_DEBUG(dbgs() << "\n Analysis Local:"<<ThisFunc.getName());
+  recordFuncGens();
+
+  return;
+}
+
+void OmpDiagnosticsLocalAnalysis::print() {
+
+  LLVM_DEBUG(dbgs()<<"\n ============= Function ::"<< ThisFunc.getName() << ":: GenDefs::");
   for (auto Iter : FuncToGenDefs[&ThisFunc]) {
     LLVM_DEBUG(dbgs() << "\n Arg:" << Iter.first << "\n Def::";
-               Iter.second->dump());
+               Iter.second->dump() ; Iter.second->getDebugLoc().dump());
+  }
+  for (auto Iter : FuncToGenUses[&ThisFunc]) {
+    LLVM_DEBUG(dbgs() << "\n Arg:" << Iter.first << "\n Use::";
+               Iter.second->dump(); Iter.second->getDebugLoc().dump());
   }
   for (auto Iter : CallToFuncArgsAliasMap) {
     LLVM_DEBUG(dbgs() << "\n Call:" << *Iter.first);
@@ -138,17 +187,31 @@ void OmpDiagnosticsLocalAnalysis::recordFuncGens() {
                         << " Func Arg:" << ArgIter.second);
     }
   }
+  LLVM_DEBUG(dbgs()<<"\n ============= Done Printing Function ::"<< ThisFunc.getName() );
+}
+void InterproceduralAnalysis::print(){
+
+  for (auto &ThisFunc : ThisModule){
+    LLVM_DEBUG(dbgs()<<"\n ============= Function ::"<< ThisFunc.getName() << ":: GenDefs::");
+    for (auto Iter : FuncToGenDefs[&ThisFunc]) {
+      LLVM_DEBUG(dbgs() << "\n Arg:" << Iter.first << "\n Def::";
+          Iter.second->dump() ; Iter.second->getDebugLoc().dump());
+    }
+    for (auto Iter : FuncToGenUses[&ThisFunc]) {
+      LLVM_DEBUG(dbgs() << "\n Arg:" << Iter.first << "\n Use::";
+          Iter.second->dump(); Iter.second->getDebugLoc().dump());
+    }
+    for (auto Iter : CallToFuncArgsAliasMap) {
+      LLVM_DEBUG(dbgs() << "\n Call:" << *Iter.first);
+      for (auto ArgIter : Iter.second) {
+        LLVM_DEBUG(dbgs() << ", Call Arg:" << ArgIter.first
+            << " Func Arg:" << ArgIter.second);
+      }
+    }
+    LLVM_DEBUG(dbgs()<<"\n ============= Done Printing Function ::"<< ThisFunc.getName() );
+  }
 }
 
-void OmpDiagnosticsLocalAnalysis::run() {
-
-  LLVM_DEBUG(dbgs() << "\n Analysis Local:");
-  recordFuncGens();
-
-  return;
-}
-
-void OmpDiagnosticsLocalAnalysis::print() {}
 Function * InterproceduralAnalysis::getCalledFuncUses(CallInst &CI, ArgToUseMapTy &ArgToUseMap) {
   Function *F = CI.getCalledFunction();
   unsigned NumArgs = CI.getNumArgOperands();
@@ -188,8 +251,8 @@ Function * InterproceduralAnalysis::getCalledFuncDefs(CallInst &CI,
     F = CallInstToACSmap[&CI]->getCalledFunction();
     NumArgs = F->arg_size();// CallInstToACSmap[&CI]->getCallArgOperandNo 
     ACS = true;
-    LLVM_DEBUG(dbgs()<<" \n CI:"<<CI << "F:"<<F->getName()<<" num=" << NumArgs);
   }
+    LLVM_DEBUG(dbgs()<<" \n CI:"<<CI << "F:"<<F->getName()<<" num=" << NumArgs);
   auto GenDefsIter = FuncToGenDefs.find(F);
   if (GenDefsIter == FuncToGenDefs.end())
     return nullptr;
@@ -315,10 +378,25 @@ void InterproceduralAnalysis::run() {
   for (Function &F : ThisModule) {
       if (!F.hasName() || F.isIntrinsic() || F.isDeclaration())
         continue;
+      LLVM_DEBUG(dbgs()<<"\n Trying ACS for:"<<F.getName());
     for (Use &U : F.uses()) {
       AbstractCallSite *ACS = new AbstractCallSite(&U);
-      if (ACS != nullptr && *ACS )
+      LLVM_DEBUG(dbgs()<<"\n Use:"<<*U.getUser()<<" acs=" << ACS);
+      if (ACS == nullptr || !*ACS )
+        for (auto &X : U.getUser()->uses()){
+          LLVM_DEBUG(dbgs()<<"\n trying another acs: "<<*X.getUser());
+          AbstractCallSite *XACS = new AbstractCallSite(&X);
+          LLVM_DEBUG(dbgs()<<"\n Use:"<<*U.getUser()<<" acs=" << ACS);
+          if( XACS != nullptr && *XACS) {
+            ACS = XACS;
+            break;
+          }
+
+        }
+      if (ACS != nullptr && *ACS ) {
         CallInstToACSmap[ACS->getInstruction()] = ACS;
+        LLVM_DEBUG(dbgs()<<"\n Construct ACS:"<< *ACS->getInstruction() << "and called = "<< ACS->getCalledFunction()->getName() );
+      }
     }
   }
   unsigned Iteration = 0;
@@ -346,7 +424,11 @@ bool  InterproceduralMSSAWalker::isInstrOnDevice(const Instruction &I){
         continue;
       auto CI = dyn_cast<CallInst>(&PredI);
       if (CI->getCalledFunction()->getName().contains("tgt_target")) {
-        LLVM_DEBUG(dbgs()<<"\n IS DEVICE");
+        if (const CallInst* CpuCI = dyn_cast<CallInst>(&I) ){
+          if (CallToGenDefs.find(CpuCI) != CallToGenDefs.end() || CallToGenUses.find(CpuCI) != CallToGenUses.end())
+          TargetCIMap[CI] = CpuCI;
+        }
+        //LLVM_DEBUG(dbgs()<<"\n IS DEVICE");
         return true;
       }
     }
@@ -354,13 +436,17 @@ bool  InterproceduralMSSAWalker::isInstrOnDevice(const Instruction &I){
 }
 
 void InterproceduralMSSAWalker::checkCallArgAlias(
-    const CallInst &CI, const Value *UseMem, AAResults &AR, std::set<unsigned> &AliasingArgs) {
+    const CallInst &CIparam, const Value *UseMem, AAResults &AR, std::set<unsigned> &AliasingArgs) {
   // Forall args, return the arg number which aliases.
   unsigned ArgNum = 0;
-  for (auto &Arg : CI.args()) {
+  const CallInst *CI = &CIparam;
+  if (CI->getCalledFunction()->getName().contains("tgt_target")) {
+    CI = TargetCIMap[CI];
+  }
+  for (auto &Arg : CI->args()) {
     const Value *ArgV = Arg.get();
-    if (!AR.isNoAlias(ArgV, UseMem)) {
-      LLVM_DEBUG(dbgs()<<"\n Call Arg Alias:"<<ArgNum; CI.dump());
+    if (checkAlias(ArgV, UseMem) && !AR.isNoAlias(ArgV, UseMem)) {
+      LLVM_DEBUG(dbgs()<<"\n Call Arg Alias:"<<ArgNum; CI->dump());
       AliasingArgs.insert(ArgNum);
     }
     ArgNum++;
@@ -377,8 +463,11 @@ bool InterproceduralMSSAWalker::checkIfAlias(const Instruction *Def,
 const Instruction *InterproceduralMSSAWalker::getFuncArgDef(const CallInst &CI,
                                                             unsigned ArgNum) {
   auto IterF = CallToGenDefs.find(&CI);
-  if (IterF == CallToGenDefs.end())
-    return nullptr;
+  if (IterF == CallToGenDefs.end()){
+    IterF = CallToGenDefs.find(TargetCIMap[&CI]);
+    if (IterF == CallToGenDefs.end())
+      return nullptr;
+  }
   auto IterDefI = IterF->second.find(ArgNum);
   if (IterDefI == IterF->second.end())
     return nullptr;
@@ -416,8 +505,8 @@ bool InterproceduralMSSAWalker::getDefAccesses(const MemoryUseOrDef &UseMA,const
   SetOfInstructionsTy SetOfInstructions ;
   SetOfMemoryAccessesTy SetOfMemoryAccesses;
   const Instruction *UseI = UseMA.getMemoryInst();
-  getDefAccesses(DefMA, UseMem, MSSA, AR, VisitedSet, SetOfInstructions, SetOfMemoryAccesses);
-  LLVM_DEBUG(dbgs()<<"\n$$User:"<<*UseI<<" At:::"; UseI->getDebugLoc().dump());
+  getDefAccesses(DefMA, UseMem, MSSA, AR, VisitedSet, SetOfInstructions, SetOfMemoryAccesses, UseMA);
+  LLVM_DEBUG(dbgs()<<"\n$$User:"<<*UseI<< "  UsedOn::"<<isInstrOnDevice(*UseI)<<" At:::"; UseI->getDebugLoc().dump());
   for (auto I : SetOfInstructions){
     LLVM_DEBUG(dbgs()<<"\n$$ Def:"<<*I<<" At:::" ; I->getDebugLoc().dump());
   }
@@ -431,21 +520,31 @@ bool InterproceduralMSSAWalker::getDefAccesses(const MemoryUseOrDef &UseMA,const
 InterproceduralMSSAWalker::DefLocation
 InterproceduralMSSAWalker::getDefAccesses(const MemoryAccess &MA,
                                         const Value *UseMem,
-                                        const MemorySSA &MSSA, AAResults &AR, std::set<const MemoryAccess *> &VisitedSet, SetOfInstructionsTy &SetOfInstructions, SetOfMemoryAccessesTy &SetOfMemoryAccesses) {
+                                        const MemorySSA &MSSA, AAResults &AR, std::set<const MemoryAccess *> &VisitedSet, SetOfInstructionsTy &SetOfInstructions, SetOfMemoryAccessesTy &SetOfMemoryAccesses, const MemoryUseOrDef &UseMA ) {
   if (MSSA.isLiveOnEntryDef(&MA) || VisitedSet.find(&MA) != VisitedSet.end()      ) 
     return NoDef;
   VisitedSet.insert(&MA);
   if (auto UorD = dyn_cast<MemoryUseOrDef>(&MA)) {
     if (const Instruction *DefInstr = UorD->getMemoryInst()) {
       auto Ret = HostDef;
-      if (isInstrOnDevice(*DefInstr))
-        Ret = DeviceDef;
       LLVM_DEBUG(dbgs()<<"\n Checking Alias :";MA.dump(); DefInstr->dump());
       auto Mem = MemoryLocation::getOrNone(DefInstr);
-      if (Mem != None && !AR.isNoAlias((*Mem).Ptr, UseMem)) {
-        LLVM_DEBUG(dbgs() << "\n Aliasing Def::" << *DefInstr);
-        SetOfInstructions.insert(DefInstr);
+      const Value *MemVal = nullptr;
+      if (Mem != None) {
+        MemVal = (*Mem).Ptr;
+        //MemVal = getAlloca(MemVal);
+      }
+
+      //if (MemVal != nullptr && ((isa<AllocaInst>(MemVal) && isa<AllocaInst>(UseMem) && MemVal != UseMem )  ||  (isa<AllocaInst>(MemVal) && isa<GlobalVariable>(UseMem) ) || (isa<GlobalVariable>(MemVal) && isa<AllocaInst>(UseMem) ) )){
+      //  MemVal = nullptr;
+      //}
+      if (checkAlias(MemVal, UseMem) && !AR.isNoAlias(MemVal, UseMem)) {
+        LLVM_DEBUG(dbgs() << "\n Aliasing mem"<<*MemVal <<" Def::" << *DefInstr
+            <<"\n Usemem:"<<*UseMem);
+        SetOfInstructions.push_back(DefInstr);
         SetOfMemoryAccesses.insert(UorD);
+        if (isInstrOnDevice(*DefInstr))
+          Ret = DeviceDef;
         return Ret;
       }
       // If the call instruction is a potential def, since an argument aliases,
@@ -454,31 +553,84 @@ InterproceduralMSSAWalker::getDefAccesses(const MemoryAccess &MA,
       if (auto CI = dyn_cast<CallInst>(DefInstr)) {
         std::set<unsigned> AliasingArgs;
         checkCallArgAlias(*CI, UseMem, AR, AliasingArgs);
-        for (auto ArgAliasNum : AliasingArgs)
+        for (auto ArgAliasNum : AliasingArgs) {
           if (auto DefI = getFuncArgDef(*CI, ArgAliasNum)) {
-            SetOfInstructions.insert(DefI);
-            SetOfMemoryAccesses.insert(UorD);
+            SetOfInstructions.push_back(DefI);
+            if (isInstrOnDevice(*DefInstr) || CI->getCalledFunction()->getName().contains("tgt_target"))
+              Ret = DeviceDef;
             return Ret;
+            SetOfMemoryAccesses.insert(UorD);
           }
+        }
       }
     }
   }
   auto Ret = NoDef;
+  std::vector<DefLocation> ReachingDefLocations;
+  unsigned Arg = 1;
   // This Memory Access does not alias, so start walking the chain up.
-  for (auto DefIter = MA.defs_begin(); DefIter != MA.defs_end(); DefIter++) {
+  for (auto DefIter = MA.defs_begin(); DefIter != MA.defs_end(); DefIter++, Arg++) {
     const MemoryAccess *DefMA = *DefIter;
-    if (MSSA.isLiveOnEntryDef(DefMA)) 
+    if (MSSA.isLiveOnEntryDef(DefMA)) {
+      ReachingDefLocations.push_back(HostDef);
       continue;
-    
-    auto DefOn = getDefAccesses(*DefMA, UseMem, MSSA, AR, VisitedSet, SetOfInstructions, SetOfMemoryAccesses);
-    if (DefOn != NoDef)
-    LLVM_DEBUG(dbgs()<<"\nDefOn:"<<DefOn);
-    if (DefOn == DeviceDef && Ret == HostDef){
-      LLVM_DEBUG(dbgs()<<"\n Move Device-Host-Copy here::";MA.getBlock()->getFirstNonPHIOrDbg()->getDebugLoc().dump()); 
     }
-    Ret = DefOn;
+
+    auto DefOn = getDefAccesses(*DefMA, UseMem, MSSA, AR, VisitedSet, SetOfInstructions, SetOfMemoryAccesses, UseMA);
+    if (Arg > 2) {
+      LLVM_DEBUG(dbgs()<<" \n MA::"<<MA);
+      assert("Not handled >2 Phi arguments");
+    }
+
+      if (Arg == 2)
+        LLVM_DEBUG(dbgs()<<"\n DEFON phi::"<<MA <<"="<<Ret<<","<<DefOn);
+    if (Arg == 2 && Ret != DefOn ){
+      bool UseOnDevice = isInstrOnDevice(*UseMA.getMemoryInst());
+      std::string CopyStr = "";
+      if (UseOnDevice && Ret == HostDef)
+        CopyStr = " Host to Device Copy 2nd ";
+      if (UseOnDevice && DefOn == HostDef)
+        CopyStr = " Host to Device Copy 1st ";
+
+      if (!UseOnDevice && Ret == DeviceDef)
+        CopyStr = " Device to Host Copy 2nd ";
+      if (!UseOnDevice && DefOn == DeviceDef)
+        CopyStr = " Device to Host Copy 1st ";
+
+      if (Arg == 2){
+        LLVM_DEBUG(dbgs()<<"\n DEFON phi::"<<MA <<"="<<Ret<<","<<DefOn);
+        printCopy(SetOfInstructions, *UseMA.getMemoryInst(), *MA.getBlock()->getFirstNonPHIOrDbg(), CopyStr, UseOnDevice);
+      }
+      if (UseOnDevice)
+        Ret = HostDef;
+      else
+        Ret = DeviceDef;
+
+    }
+    ReachingDefLocations.push_back(DefOn);
+    if (DefOn != NoDef && Arg == 1) 
+      Ret = DefOn;
+
   }
   return Ret;
+
+}
+
+void InterproceduralMSSAWalker::printCopy(const SetOfInstructionsTy &Def, const Instruction &Use, const Instruction &CopyAt, const std::string &CopyStr, bool UseOnDevice){
+  auto Size = Def.size();
+  if (Size >1) {
+  const Instruction *Def1 = Def.at(Size-1);
+  LLVM_DEBUG(dbgs()<<"\n Def1 ::"<< *Def1 << " At ::";  Def1->getDebugLoc().dump());
+  }
+  if (Size >2) {
+  const Instruction *Def2 = Def.at(Size-2);
+  LLVM_DEBUG(dbgs()<<"\n Def2 ::"<< *Def2 << " At ::";  Def2->getDebugLoc().dump());
+  }
+  LLVM_DEBUG(dbgs()<<"\n Use ::"<< Use << " At ::";  Use.getDebugLoc().dump());
+  LLVM_DEBUG(dbgs()<<"\n"<<CopyStr << " At ::";  CopyAt.getDebugLoc().dump()); 
+  LLVM_DEBUG(dbgs()<<"\n PHI ::"<< CopyAt);
+  LLVM_DEBUG(dbgs()<<"\n Mem:"<< *getAlloca(&Use));
+
 }
 
 void InterproceduralMSSAWalker::handleMemUse(const MemoryUse &MemUse,
@@ -495,7 +647,8 @@ void InterproceduralMSSAWalker::handleMemUse(const MemoryUse &MemUse,
   auto Mem = MemoryLocation::getOrNone(Ld);
   if (Mem == None)
     return;
-  if (getDefAccesses(MemUse, *MemDef, Mem->Ptr, MSSA, AR))
+  const Value *MemAddr = getAlloca(Mem->Ptr);
+  if (getDefAccesses(MemUse, *MemDef, MemAddr , MSSA, AR))
     LLVM_DEBUG(dbgs() << "\n Load:" << *Ld;
         if (Ld->getDebugLoc()) Ld->getDebugLoc()->dump());
 }
@@ -510,8 +663,11 @@ void InterproceduralMSSAWalker::handleMemDef(const MemoryDef &MemDef,
   auto CI = dyn_cast<CallInst>(DefI) ;
   if (CI == nullptr) return;
   auto UsesIter =  CallToGenUses.find(CI);
-  if (UsesIter == CallToGenUses.end())
-    return;
+  if (UsesIter == CallToGenUses.end()){
+    UsesIter = CallToGenUses.find(TargetCIMap[CI]);
+    if (UsesIter == CallToGenUses.end())
+      return;
+  }
   LLVM_DEBUG(dbgs()<<"\nCI::"<<*CI);
   for (auto AI : UsesIter->second){
     LLVM_DEBUG(dbgs()<<"\n arg::"<<AI.first<<" instr:"<<*AI.second);
@@ -521,16 +677,25 @@ void InterproceduralMSSAWalker::handleMemDef(const MemoryDef &MemDef,
     ArgNum++;
     if (UsesIter->second.find(ArgNum) == UsesIter->second.end())
       continue;
-    LLVM_DEBUG(dbgs()<<"\n Func Use::"; UsesIter->second[ArgNum]->getDebugLoc().dump());
-    if (getDefAccesses(MemDef, MemDef, Arg.get(), MSSA, AR))
-      LLVM_DEBUG(dbgs()<<"\n YesUse:"<< *CI << " Arg::" << *Arg.get() ; CI->getDebugLoc().dump());
+    LLVM_DEBUG(dbgs()<<"\n Func Use::"<<*Arg.get(); UsesIter->second[ArgNum]->getDebugLoc().dump()
+        );
+    
+    getDefAccesses(MemDef, *MemDef.getDefiningAccess(), Arg.get(), MSSA, AR);
   }
 }
 
 void InterproceduralMSSAWalker::analyzeFunc(const MemorySSA &MSSA,
-                                            AAResults &AR, const Function &F) {
+                                            AAResults &AR, const Function &F, std::vector<const Function*> &CalledFunctionsList) {
 
+  LLVM_DEBUG(dbgs()<<"\n Function ::"<<F.getName());
   for (const BasicBlock &BB : F) {
+    for (auto &I : BB)
+      if (auto CI = dyn_cast<CallInst>(&I)) {
+        CalledFunctionsList.push_back(CI->getCalledFunction());
+        isInstrOnDevice(*CI);
+      }
+      
+    
     auto MAList = MSSA.getBlockAccesses(&BB);
     if (MAList == nullptr)
       continue;
@@ -544,16 +709,35 @@ void InterproceduralMSSAWalker::analyzeFunc(const MemorySSA &MSSA,
 }
 
 void InterproceduralMSSAWalker::run() {
+  std::string EntryFuncStr = "main";
+  const Function *EntryFunc = nullptr;
   for (const Function &F : ThisModule) {
-    auto FSSA = FuncToMSSAMap.find(&F);
+    if (!F.hasName() || F.isIntrinsic() || F.isDeclaration() || F.getName() != EntryFuncStr)
+      continue;
+    EntryFunc = &F;
+    break;
+  }
+  if (EntryFunc == nullptr) 
+    return;
+  std::vector<const Function*> WorkList;
+  std::set<const Function*> VisitedSet;
+  WorkList.push_back(EntryFunc);
+  while (!WorkList.empty()) {
+    auto F = WorkList.back(); 
+    WorkList.pop_back();
+    if (F == nullptr || VisitedSet.find(F) != VisitedSet.end())
+      continue;
+    VisitedSet.insert(F);
+    auto FSSA = FuncToMSSAMap.find(F);
     if (FSSA == FuncToMSSAMap.end())
       continue;
-    auto AAIter = FuncToAAResultsMap.find(&F);
+    auto AAIter = FuncToAAResultsMap.find(F);
     if (AAIter == FuncToAAResultsMap.end())
       assert("Invalid Alias Analysis Results");
     AAResults *AR = AAIter->second;
-    analyzeFunc(*FSSA->second, *AR, F);
+    analyzeFunc(*FSSA->second, *AR, *F, WorkList);
   }
+
 }
 
 AnalysisKey OmpDiagnosticsGlobalAnalysis::Key;
@@ -611,60 +795,52 @@ void OmpDiagnosticsGlobalAnalysis::recordFuncGens() {
     OmpDiagnosticsLocalAnalysis LocalA(F, MSSA, AA, FuncToGenDefs,
                                        FuncToGenUses, CallToFuncArgsAliasMap);
     LocalA.recordFuncGens();
-    handleIndirectCalls(F);
-
-
+    LocalA.print();
+    //handleIndirectCalls(F);
   }
 }
+
 void print(std::map<const CallInst* , std::map<unsigned, const Instruction*>> CtoI){
   for (auto CIter : CtoI){
     const CallInst *CI= CIter.first;
-    LLVM_DEBUG(dbgs()<<"\n Call:"<<*CI;CI->getDebugLoc().dump());
+    LLVM_DEBUG(dbgs()<<"\n Call:"<<*CI<<" AT::";CI->getDebugLoc().dump());
     for (auto UIter : CIter.second){
       LLVM_DEBUG(dbgs()<<"\n Arg:"<<UIter.first<<" ::Instr:: "<<*UIter.second; UIter.second->getDebugLoc().dump());
     }
   }
 }
+
 void OmpDiagnosticsGlobalAnalysis::interProcRecordFuncGens() {
   InterproceduralAnalysis IA(*ThisModule, FuncToGenDefs, FuncToGenUses,
       CallToFuncArgsAliasMap);
   CallToGenDefsTy CallToGenDefs;
   CallToGenUsesTy CallToGenUses;
   IA.getCallGens(CallToGenDefs, CallToGenUses);
-  LLVM_DEBUG(dbgs()<<"\n  ==========================Def::");
+  IA.print();
+  LLVM_DEBUG(dbgs()<<"\n  ==========================Call Def::");
   print(CallToGenDefs);
-  LLVM_DEBUG(dbgs()<<"\n ==========================Use::");
+  LLVM_DEBUG(dbgs()<<"\n ==========================Call Use::");
   print(CallToGenUses);
 
   InterproceduralMSSAWalker IPA(*ThisModule, FuncToAAResultsMap,FuncToMSSAMap,  CallToGenDefs, CallToGenUses);
 
-  LLVM_DEBUG(dbgs()<<"\n================DEFUSE=================\n");
-  for (Function &ThisFunc : *ThisModule) {
-    LLVM_DEBUG(dbgs()<<"\n Func::"<<ThisFunc.getName());
-    for (auto Iter : FuncToGenDefs[&ThisFunc]) {
-      LLVM_DEBUG(dbgs() << "\n Arg:" << Iter.first << "\n Def::";
-          Iter.second->dump(); Iter.second->getDebugLoc().dump());
-    }
-    for (auto Iter : FuncToGenUses[&ThisFunc]) {
-      LLVM_DEBUG(dbgs() << "\n Arg:" << Iter.first << "\n Use::";
-          Iter.second->dump(); Iter.second->getDebugLoc().dump());
-    }
-  }
-  LLVM_DEBUG(dbgs()<<"\n================DEFUSE=================\n");
+  //LLVM_DEBUG(dbgs()<<"\n================DEFUSE=================\n");
+  //for (Function &ThisFunc : *ThisModule) {
+  //  LLVM_DEBUG(dbgs()<<"\n Func::"<<ThisFunc.getName());
+  //  for (auto Iter : FuncToGenDefs[&ThisFunc]) {
+  //    LLVM_DEBUG(dbgs() << "\n Arg:" << Iter.first << "\n Def::";
+  //        Iter.second->dump(); Iter.second->getDebugLoc().dump());
+  //  }
+  //  for (auto Iter : FuncToGenUses[&ThisFunc]) {
+  //    LLVM_DEBUG(dbgs() << "\n Arg:" << Iter.first << "\n Use::";
+  //        Iter.second->dump(); Iter.second->getDebugLoc().dump());
+  //  }
+  //}
+  //LLVM_DEBUG(dbgs()<<"\n================DEFUSE=================\n");
 }
 
 void OmpDiagnosticsGlobalAnalysis::interProcMSSA() {
 
-  std::string EntryFuncStr = "fun";
-  Function *EntryFunc = nullptr;
-  for (Function &F : *ThisModule) {
-    if (!F.hasName() || F.isIntrinsic() || F.isDeclaration())
-      continue;
-    if (F.getName() != EntryFuncStr)
-      continue;
-    EntryFunc = &F;
-    break;
-  }
 }
 
 void OmpDiagnosticsGlobalAnalysis::analyzeModule() {
