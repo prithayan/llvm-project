@@ -17,7 +17,12 @@
 
 #include "llvm/Analysis/CallGraphSCCPass.h"
 #include "llvm/IR/ValueMap.h"
+#include "llvm/IR/CFG.h"
+
 #include "llvm/Pass.h"
+#include <map>
+#include <set>
+#include <queue>
 
 namespace llvm {
 
@@ -42,6 +47,10 @@ public:
     unsigned InstCount;
     unsigned IAMInstCount; // Indirect access memory instruction count
     unsigned LSMInstCount; // Large stride memory instruction count
+    using DepthTy = unsigned;
+    std::map<const Value *, DepthTy> InstrToDepthMap;
+    std::set<const Value*> SetOfArgDepends;
+    std::map< DepthTy, unsigned> DepthToMemOpsMap;
     FuncInfo() : MemInstCount(0), InstCount(0), IAMInstCount(0),
                  LSMInstCount(0) {}
   };

@@ -28,10 +28,15 @@
 #include "llvm/IR/Module.h"
 #include "llvm/IR/ValueMap.h"
 #include "llvm/Support/CommandLine.h"
+#include <set>
 
 using namespace llvm;
 
 #define DEBUG_TYPE "amdgpu-perf-hint"
+
+static cl::opt<unsigned>
+    LatencyBoundThresh("amdgpu-latbound-threshold", cl::init(4), cl::Hidden,
+                   cl::desc("Function mem bound threshold in %"));
 
 static cl::opt<unsigned>
     MemBoundThresh("amdgpu-membound-threshold", cl::init(50), cl::Hidden,
@@ -101,6 +106,7 @@ private:
 
   const TargetLowering *TLI;
 
+  unsigned estimateRegisters(const Function &F);
   AMDGPUPerfHintAnalysis::FuncInfo *visit(const Function &F);
   static bool isMemBound(const AMDGPUPerfHintAnalysis::FuncInfo &F);
   static bool needLimitWave(const AMDGPUPerfHintAnalysis::FuncInfo &F);
@@ -203,15 +209,137 @@ bool AMDGPUPerfHint::isIndirectAccess(const Instruction *Inst) const {
   return false;
 }
 
+unsigned AMDGPUPerfHint::estimateRegisters(const Function &F) {
+  unsigned RegEstimate = 0;
+  const BasicBlock *TerminatorBB = nullptr; 
+  for (auto &B : F) 
+    for (auto &I : B) 
+      if (isa<ReturnInst>(&I)){
+        TerminatorBB = &B;
+        break;
+      }
+  if (TerminatorBB == nullptr)
+    return RegEstimate;
+
+  std::map<const BasicBlock*, std::set<const Value*> > BlockToRegistersLive;
+  std::set<const BasicBlock*> VisitedSet;
+  std::queue<const BasicBlock*> BBQ;
+  BBQ.push( TerminatorBB);
+  unsigned MaxLiveCount = 0;
+  std::set<const Value*> MaxLiveSet;
+  while (!BBQ.empty()){
+    const BasicBlock *VisitBB = BBQ.front(); BBQ.pop();
+    if (VisitedSet.find(VisitBB) != VisitedSet.end())
+      continue;
+    VisitedSet.insert(VisitBB);
+    for (auto RevI = VisitBB->rbegin() ;  RevI != VisitBB->rend(); RevI++ ){
+      const Instruction& I = *RevI;
+      BlockToRegistersLive[VisitBB].erase(&I);
+      for (const Value* Op : I.operands()){
+        if (isa<Instruction>(Op) && !isa<PHINode>(Op))
+        BlockToRegistersLive[VisitBB].insert(Op);
+      }
+      if (MaxLiveCount  < BlockToRegistersLive[VisitBB].size()){
+        MaxLiveCount = BlockToRegistersLive[VisitBB].size();
+        MaxLiveSet = BlockToRegistersLive[VisitBB];
+      }
+    }
+
+    for (const BasicBlock* PrevBB: predecessors(VisitBB)){
+      BBQ.push(PrevBB);
+      BlockToRegistersLive[PrevBB].insert(BlockToRegistersLive[VisitBB].begin(), BlockToRegistersLive[VisitBB].end());
+    }
+  }
+  for (auto V : MaxLiveSet){
+    if (auto I = dyn_cast<Instruction>(V)){
+      LLVM_DEBUG(dbgs()<<"\n Live::"<<*I;I->getDebugLoc().dump());
+      if (I->getType()->isVectorTy())
+        LLVM_DEBUG(dbgs()<<" \n Count="<< dyn_cast<VectorType>(I->getType())->getElementCount().Min);
+    }
+  }
+  RegEstimate = MaxLiveCount;
+  LLVM_DEBUG(dbgs()<<"\n Reg Estimate:"<<RegEstimate<<"\t Size="<< MaxLiveSet.size());
+  return RegEstimate;
+}
+
 AMDGPUPerfHintAnalysis::FuncInfo *AMDGPUPerfHint::visit(const Function &F) {
   AMDGPUPerfHintAnalysis::FuncInfo &FI = FIM[&F];
 
   LLVM_DEBUG(dbgs() << "[AMDGPUPerfHint] process " << F.getName() << '\n');
+ // for (auto &VArg : F.args()){
+ //   LLVM_DEBUG(dbgs()<<"\n Varg::"; VArg.dump());
+ //   for (auto &VArgUser: VArg.uses()){
+ //     LLVM_DEBUG(dbgs()<<"\n Arg user::"; VArgUser->dump());
+ //   }
+ // }
+
+
+  std::set<const BasicBlock*> VisitedSet;
+  std::queue<const BasicBlock*> BBQ;
+  BBQ.push( &*F.begin());
+  unsigned GlobalDepth = 0, MaxDepth = 0;
+  while (!BBQ.empty()){
+    const BasicBlock *VisitBB = BBQ.front(); BBQ.pop();
+    if (VisitedSet.find(VisitBB) != VisitedSet.end())
+      continue;
+    VisitedSet.insert(VisitBB);
+    for (const BasicBlock* NextBB: successors(VisitBB)){
+      BBQ.push(NextBB);
+    }
+    for (auto &I : *VisitBB) {
+      unsigned Depth = GlobalDepth;
+      auto I2DIter = FI.InstrToDepthMap.find(&I);
+      if (I2DIter != FI.InstrToDepthMap.end())
+        Depth = I2DIter->second;
+      for (auto &Op : I.operands()){
+        const Value *OpV = Op.get();
+        if (FI.InstrToDepthMap.find(OpV) != FI.InstrToDepthMap.end())
+          if (Depth < FI.InstrToDepthMap[OpV])
+            Depth = FI.InstrToDepthMap[OpV];
+      }   
+      bool isCall = isa<CallBase>(&I);
+      if (isCall && dyn_cast<CallBase>(&I)->getIntrinsicID() == Intrinsic::not_intrinsic){
+        if (GlobalDepth < Depth)
+          GlobalDepth = Depth;
+        if (GlobalDepth < MaxDepth)
+          GlobalDepth = MaxDepth;
+        LLVM_DEBUG(dbgs()<<"\n Call::"<<GlobalDepth; I.dump(); I.getDebugLoc().dump());
+      }
+      auto isMemory = isa<LoadInst>(&I);
+      if (isMemory)
+        Depth++;
+      if (MaxDepth < Depth)
+        MaxDepth = Depth;
+      FI.InstrToDepthMap[&I] = Depth;
+      if (isMemory)
+        FI.DepthToMemOpsMap[Depth]++;
+    }
+  }
+
+  for (auto Iter : FI.InstrToDepthMap){
+    if ( getMemoryInstrPtr(dyn_cast<Instruction>(Iter.first))) {
+      LLVM_DEBUG(dbgs()<<"\n Depth = "<<Iter.second<<" I:"<<*Iter.first; dyn_cast<Instruction>(Iter.first)->getDebugLoc().dump());
+      LLVM_DEBUG(dbgs()<<"\n is indirect?::"<<isIndirectAccess(dyn_cast<Instruction>(Iter.first)));
+    }
+  }
+  unsigned MaxOps = 0, MaxAtDepth = 0;
+  for (auto Iter : FI.DepthToMemOpsMap){
+      LLVM_DEBUG(dbgs()<<"\n Depth = "<<Iter.first<<" Count:"<<Iter.second);
+      if (Iter.first > 1 && MaxOps < Iter.second) {
+        MaxOps = Iter.second;
+        MaxAtDepth = Iter.first;
+      }
+  }
+  LLVM_DEBUG(dbgs()<<"\n F:"<<F.getName()<<":: Max ops="<<MaxOps<<"\n");
+  auto RegEstimate = estimateRegisters(F);
+  errs()<<"\n =======Function:"<<F.getName()<<":: Max ops="<<MaxOps
+    <<"  and Reg Estimate="<<RegEstimate<<"============\n";
 
   for (auto &B : F) {
     LastAccess = MemAccessInfo();
     for (auto &I : B) {
-      if (getMemoryInstrPtr(&I)) {
+      auto P = getMemoryInstrPtr(&I);
+      if (P) {
         if (isIndirectAccess(&I))
           ++FI.IAMInstCount;
         if (isLargeStride(&I))
@@ -243,7 +371,8 @@ AMDGPUPerfHintAnalysis::FuncInfo *AMDGPUPerfHint::visit(const Function &F) {
         AM.BaseGV = dyn_cast_or_null<GlobalValue>(const_cast<Value *>(Ptr));
         AM.HasBaseReg = !AM.BaseGV;
         if (TLI->isLegalAddressingMode(*DL, AM, GEP->getResultElementType(),
-                                       GEP->getPointerAddressSpace()))
+              GEP->getPointerAddressSpace()))
+
           // Offset will likely be folded into load or store
           continue;
         ++FI.InstCount;
@@ -252,6 +381,9 @@ AMDGPUPerfHintAnalysis::FuncInfo *AMDGPUPerfHint::visit(const Function &F) {
       }
     }
   }
+
+  
+
 
   return &FI;
 }
@@ -271,6 +403,7 @@ bool AMDGPUPerfHint::runOnFunction(Function &F) {
                     << " IAMInst: " << Info->IAMInstCount << '\n'
                     << " LSMInst: " << Info->LSMInstCount << '\n'
                     << " TotalInst: " << Info->InstCount << '\n');
+
 
   if (isMemBound(*Info)) {
     LLVM_DEBUG(dbgs() << F.getName() << " is memory bound\n");
