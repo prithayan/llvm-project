@@ -51,6 +51,8 @@ public:
     std::map<const Value *, DepthTy> InstrToDepthMap;
     std::set<const Value*> SetOfArgDepends;
     std::map< DepthTy, unsigned> DepthToMemOpsMap;
+    using WaitAfter = unsigned;
+    std::map<const Value*, WaitAfter> MemoryInstToWaitAfter;
     FuncInfo() : MemInstCount(0), InstCount(0), IAMInstCount(0),
                  LSMInstCount(0) {}
   };

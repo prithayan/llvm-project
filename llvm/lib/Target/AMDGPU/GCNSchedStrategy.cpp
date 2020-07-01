@@ -57,6 +57,9 @@ void GCNMaxOccupancySchedStrategy::initialize(ScheduleDAGMI *DAG) {
 
   SGPRCriticalLimit -= ErrorMargin;
   VGPRCriticalLimit -= ErrorMargin;
+
+  LLVM_DEBUG(dbgs()<<"\n VGPRCriticalLimit="<<VGPRCriticalLimit 
+      <<"SGPRCriticalLimit="<<SGPRCriticalLimit<<"\n");
 }
 
 void GCNMaxOccupancySchedStrategy::initCandidate(SchedCandidate &Cand, SUnit *SU,

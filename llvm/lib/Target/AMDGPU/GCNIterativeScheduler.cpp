@@ -329,10 +329,10 @@ void GCNIterativeScheduler::finalizeSchedule() { // overriden
   if (Regions.empty())
     return;
   switch (Strategy) {
-  case SCHEDULE_MINREGONLY: scheduleMinReg(); break;
-  case SCHEDULE_MINREGFORCED: scheduleMinReg(true); break;
-  case SCHEDULE_LEGACYMAXOCCUPANCY: scheduleLegacyMaxOccupancy(); break;
-  case SCHEDULE_ILP: scheduleILP(false); break;
+  case SCHEDULE_MINREGONLY: LLVM_DEBUG(dbgs()<<"\n SCHEDULE_MINREGONLY");scheduleMinReg(); break;
+  case SCHEDULE_MINREGFORCED:LLVM_DEBUG(dbgs()<<"\n SCHEDULE_MINREGFORCED"); scheduleMinReg(true); break;
+  case SCHEDULE_LEGACYMAXOCCUPANCY:LLVM_DEBUG(dbgs()<<"\n SCHEDULE_LEGACYMAXOCCUPANCY"); scheduleLegacyMaxOccupancy(); break;
+  case SCHEDULE_ILP:LLVM_DEBUG(dbgs()<<"\n SCHEDULE_ILP"); scheduleILP(false); break;
   }
 }
 

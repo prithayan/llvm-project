@@ -106,7 +106,18 @@ private:
 
   const TargetLowering *TLI;
 
+  std::map<const Instruction*, bool> InstructionToMemDepMap;
+
+  using SetOfInstrs = std::set<const Instruction*>;
+  bool insertIntoSet( SetOfInstrs &LiveSet, const Instruction* Instr){
+    if (LiveSet.find(Instr) != LiveSet.end())
+      return true;
+    LiveSet.insert(Instr);
+    return true;
+  }
   unsigned estimateRegisters(const Function &F);
+  void constructSimpleDDG(const Function &F, AMDGPUPerfHintAnalysis::FuncInfo &FI);
+  bool isDependentOnMemory(const Instruction &I, std::set<const Instruction*> &VisitedSet);
   AMDGPUPerfHintAnalysis::FuncInfo *visit(const Function &F);
   static bool isMemBound(const AMDGPUPerfHintAnalysis::FuncInfo &F);
   static bool needLimitWave(const AMDGPUPerfHintAnalysis::FuncInfo &F);
@@ -221,59 +232,87 @@ unsigned AMDGPUPerfHint::estimateRegisters(const Function &F) {
   if (TerminatorBB == nullptr)
     return RegEstimate;
 
-  std::map<const BasicBlock*, std::set<const Value*> > BlockToRegistersLive;
-  std::set<const BasicBlock*> VisitedSet;
-  std::queue<const BasicBlock*> BBQ;
-  BBQ.push( TerminatorBB);
+  bool Changed = false;
+  SetOfInstrs MaxLiveSet;
+  std::map<const BasicBlock*, SetOfInstrs> BlockToRegistersLive;
   unsigned MaxLiveCount = 0;
-  std::set<const Value*> MaxLiveSet;
-  while (!BBQ.empty()){
-    const BasicBlock *VisitBB = BBQ.front(); BBQ.pop();
-    if (VisitedSet.find(VisitBB) != VisitedSet.end())
-      continue;
-    VisitedSet.insert(VisitBB);
-    for (auto RevI = VisitBB->rbegin() ;  RevI != VisitBB->rend(); RevI++ ){
-      const Instruction& I = *RevI;
-      BlockToRegistersLive[VisitBB].erase(&I);
-      for (const Value* Op : I.operands()){
-        if (isa<Instruction>(Op) && !isa<PHINode>(Op))
-        BlockToRegistersLive[VisitBB].insert(Op);
+  unsigned CountIters = 10;
+  do {
+    std::set<const BasicBlock*> VisitedSet;
+    std::queue<const BasicBlock*> BBQ;
+    BBQ.push( TerminatorBB);
+    while (!BBQ.empty()){
+      const BasicBlock *VisitBB = BBQ.front(); BBQ.pop();
+      if (VisitedSet.find(VisitBB) != VisitedSet.end())
+        continue;
+      VisitedSet.insert(VisitBB);
+      for (auto RevI = VisitBB->rbegin() ;  RevI != VisitBB->rend(); RevI++ ){
+        const Instruction& I = *RevI;
+        BlockToRegistersLive[VisitBB].erase(&I);
+        for (const Value* Op : I.operands()){
+          if (isa<Instruction>(Op) && !isa<PHINode>(Op))
+            Changed |= insertIntoSet(BlockToRegistersLive[VisitBB], dyn_cast<Instruction>(Op));
+        }
+        if (MaxLiveSet.size()  < BlockToRegistersLive[VisitBB].size()){
+          MaxLiveCount = BlockToRegistersLive[VisitBB].size();
+          MaxLiveSet = BlockToRegistersLive[VisitBB];
+        }
       }
-      if (MaxLiveCount  < BlockToRegistersLive[VisitBB].size()){
-        MaxLiveCount = BlockToRegistersLive[VisitBB].size();
-        MaxLiveSet = BlockToRegistersLive[VisitBB];
-      }
-    }
 
-    for (const BasicBlock* PrevBB: predecessors(VisitBB)){
-      BBQ.push(PrevBB);
-      BlockToRegistersLive[PrevBB].insert(BlockToRegistersLive[VisitBB].begin(), BlockToRegistersLive[VisitBB].end());
+      for (const BasicBlock* PrevBB: predecessors(VisitBB)){
+        BBQ.push(PrevBB);
+        for (const Instruction* BBLiveInstr : BlockToRegistersLive[VisitBB]){
+          Changed  |= insertIntoSet(BlockToRegistersLive[PrevBB], BBLiveInstr);
+        }
+      }
     }
-  }
-  for (auto V : MaxLiveSet){
-    if (auto I = dyn_cast<Instruction>(V)){
-      LLVM_DEBUG(dbgs()<<"\n Live::"<<*I;I->getDebugLoc().dump());
-      if (I->getType()->isVectorTy())
-        LLVM_DEBUG(dbgs()<<" \n Count="<< dyn_cast<VectorType>(I->getType())->getElementCount().Min);
+    LLVM_DEBUG(dbgs()<<"\n Printing Live Vars::");
+    for (auto V : MaxLiveSet){
+      if (auto I = dyn_cast<Instruction>(V)){
+        LLVM_DEBUG(dbgs()<<"\n Live::"<<*I;I->getDebugLoc().dump());
+        if (I->getType()->isVectorTy())
+          LLVM_DEBUG(dbgs()<<" \n Count="<< dyn_cast<VectorType>(I->getType())->getElementCount().Min);
+      }
     }
-  }
+  }while(CountIters-- > 0 );
   RegEstimate = MaxLiveCount;
   LLVM_DEBUG(dbgs()<<"\n Reg Estimate:"<<RegEstimate<<"\t Size="<< MaxLiveSet.size());
   return RegEstimate;
 }
 
-AMDGPUPerfHintAnalysis::FuncInfo *AMDGPUPerfHint::visit(const Function &F) {
-  AMDGPUPerfHintAnalysis::FuncInfo &FI = FIM[&F];
+bool AMDGPUPerfHint::isDependentOnMemory(const Instruction &I, std::set<const Instruction*> &VisitedSet){
+  LLVM_DEBUG(dbgs()<<"\n IS??"; I.dump());
+  if (InstructionToMemDepMap.find(&I) != InstructionToMemDepMap.end())
+    return InstructionToMemDepMap[&I];
+  if (auto Ld = dyn_cast<LoadInst>(&I)) {
+    if (Ld->getPointerAddressSpace() == AMDGPUAS::CONSTANT_ADDRESS) {
+      InstructionToMemDepMap[Ld] = false;
+      return false;
+    }
+    LLVM_DEBUG(dbgs()<<"\n YES DEP ON MEMORY:::"<< I<<"\t as:: "<<Ld->getPointerAddressSpace());
+    InstructionToMemDepMap[Ld] = true;
+    return true;
+  }
+  if (isa<AllocaInst>(&I) || isa<CallInst>(&I)) {
+    InstructionToMemDepMap[&I] = false;
+    return false;
+  }
+  if (VisitedSet.find(&I) != VisitedSet.end())
+    return false;
+  VisitedSet.insert(&I);
 
-  LLVM_DEBUG(dbgs() << "[AMDGPUPerfHint] process " << F.getName() << '\n');
- // for (auto &VArg : F.args()){
- //   LLVM_DEBUG(dbgs()<<"\n Varg::"; VArg.dump());
- //   for (auto &VArgUser: VArg.uses()){
- //     LLVM_DEBUG(dbgs()<<"\n Arg user::"; VArgUser->dump());
- //   }
- // }
 
+  for (auto &Op : I.operands()){
+    const Value *V = Op.get();
+     if (auto OpI = dyn_cast<Instruction>(V ))
+       if (isDependentOnMemory(*OpI, VisitedSet))
+         return true;
+  }
+  InstructionToMemDepMap[&I] = false;
+  return false;
+}
 
+void AMDGPUPerfHint::constructSimpleDDG(const Function &F, AMDGPUPerfHintAnalysis::FuncInfo &FI){
   std::set<const BasicBlock*> VisitedSet;
   std::queue<const BasicBlock*> BBQ;
   BBQ.push( &*F.begin());
@@ -317,23 +356,54 @@ AMDGPUPerfHintAnalysis::FuncInfo *AMDGPUPerfHint::visit(const Function &F) {
   }
 
   for (auto Iter : FI.InstrToDepthMap){
-    if ( getMemoryInstrPtr(dyn_cast<Instruction>(Iter.first))) {
+    if (auto PtrVal =  getMemoryInstrPtr(dyn_cast<Instruction>(Iter.first))) {
+      if (!dyn_cast<Instruction>(Iter.first)->getDebugLoc())
+        continue;
       LLVM_DEBUG(dbgs()<<"\n Depth = "<<Iter.second<<" I:"<<*Iter.first; dyn_cast<Instruction>(Iter.first)->getDebugLoc().dump());
-      LLVM_DEBUG(dbgs()<<"\n is indirect?::"<<isIndirectAccess(dyn_cast<Instruction>(Iter.first)));
+      bool MemDep = false;
+      if (auto GepPtr = dyn_cast<GetElementPtrInst>(PtrVal)){
+        for (auto Index = GepPtr->idx_begin(); Index != GepPtr->idx_end(); Index++)
+          if (auto IndexInstr = dyn_cast<Instruction>(*Index)) {
+         std::set<const Instruction*> VisitedSet;
+            if (isDependentOnMemory(*IndexInstr, VisitedSet)) {
+              MemDep = true;
+              break;
+            }
+          }
+      }else if (isa<Instruction>(PtrVal)){
+         std::set<const Instruction*> VisitedSet;
+            MemDep = isDependentOnMemory(*dyn_cast<Instruction>(PtrVal), VisitedSet);
+      }
+      LLVM_DEBUG(dbgs()<<"\n is indirect?::"<<MemDep);
     }
   }
   unsigned MaxOps = 0, MaxAtDepth = 0;
   for (auto Iter : FI.DepthToMemOpsMap){
-      LLVM_DEBUG(dbgs()<<"\n Depth = "<<Iter.first<<" Count:"<<Iter.second);
-      if (Iter.first > 1 && MaxOps < Iter.second) {
-        MaxOps = Iter.second;
-        MaxAtDepth = Iter.first;
-      }
+    LLVM_DEBUG(dbgs()<<"\n Depth = "<<Iter.first<<" Count:"<<Iter.second);
+    if (Iter.first > 1 && MaxOps < Iter.second) {
+      MaxOps = Iter.second;
+      MaxAtDepth = Iter.first;
+    }
   }
   LLVM_DEBUG(dbgs()<<"\n F:"<<F.getName()<<":: Max ops="<<MaxOps<<"\n");
   auto RegEstimate = estimateRegisters(F);
   errs()<<"\n =======Function:"<<F.getName()<<":: Max ops="<<MaxOps
     <<"  and Reg Estimate="<<RegEstimate<<"============\n";
+}
+
+AMDGPUPerfHintAnalysis::FuncInfo *AMDGPUPerfHint::visit(const Function &F) {
+  AMDGPUPerfHintAnalysis::FuncInfo &FI = FIM[&F];
+
+  constructSimpleDDG(F,FI);
+  LLVM_DEBUG(dbgs() << "[AMDGPUPerfHint] process " << F.getName() << '\n');
+ // for (auto &VArg : F.args()){
+ //   LLVM_DEBUG(dbgs()<<"\n Varg::"; VArg.dump());
+ //   for (auto &VArgUser: VArg.uses()){
+ //     LLVM_DEBUG(dbgs()<<"\n Arg user::"; VArgUser->dump());
+ //   }
+ // }
+
+
 
   for (auto &B : F) {
     LastAccess = MemAccessInfo();
