@@ -30,7 +30,6 @@
 #include "llvm/Analysis/MemoryLocation.h"
 #include "llvm/Analysis/OptimizationRemarkEmitter.h"
 #include "llvm/Analysis/ScalarEvolution.h"
-#include "llvm/Analysis/ScalarEvolutionExpander.h"
 #include "llvm/Analysis/ScalarEvolutionExpressions.h"
 #include "llvm/Analysis/TargetLibraryInfo.h"
 #include "llvm/Analysis/ValueTracking.h"
@@ -506,7 +505,7 @@ public:
   typedef PointerIntPair<Value *, 1, bool> MemAccessInfo;
   typedef SmallVector<MemAccessInfo, 8> MemAccessInfoList;
 
-  AccessAnalysis(const DataLayout &Dl, Loop *TheLoop, AliasAnalysis *AA,
+  AccessAnalysis(const DataLayout &Dl, Loop *TheLoop, AAResults *AA,
                  LoopInfo *LI, MemoryDepChecker::DepCandidates &DA,
                  PredicatedScalarEvolution &PSE)
       : DL(Dl), TheLoop(TheLoop), AST(*AA), LI(LI), DepCands(DA),
@@ -706,18 +705,19 @@ bool AccessAnalysis::canCheckPtrAtRT(RuntimePointerChecking &RtCheck,
   // to place a runtime bound check.
   bool CanDoRT = true;
 
-  bool NeedRTCheck = false;
+  bool MayNeedRTCheck = false;
   if (!IsRTCheckAnalysisNeeded) return true;
 
   bool IsDepCheckNeeded = isDependencyCheckNeeded();
 
   // We assign a consecutive id to access from different alias sets.
   // Accesses between different groups doesn't need to be checked.
-  unsigned ASId = 1;
+  unsigned ASId = 0;
   for (auto &AS : AST) {
     int NumReadPtrChecks = 0;
     int NumWritePtrChecks = 0;
     bool CanDoAliasSetRT = true;
+    ++ASId;
 
     // We assign consecutive id to access from different dependence sets.
     // Accesses within the same set don't need a runtime check.
@@ -748,14 +748,30 @@ bool AccessAnalysis::canCheckPtrAtRT(RuntimePointerChecking &RtCheck,
     // check them.  But there is no need to checks if there is only one
     // dependence set for this alias set.
     //
-    // Note that this function computes CanDoRT and NeedRTCheck independently.
-    // For example CanDoRT=false, NeedRTCheck=false means that we have a pointer
-    // for which we couldn't find the bounds but we don't actually need to emit
-    // any checks so it does not matter.
+    // Note that this function computes CanDoRT and MayNeedRTCheck
+    // independently. For example CanDoRT=false, MayNeedRTCheck=false means that
+    // we have a pointer for which we couldn't find the bounds but we don't
+    // actually need to emit any checks so it does not matter.
     bool NeedsAliasSetRTCheck = false;
-    if (!(IsDepCheckNeeded && CanDoAliasSetRT && RunningDepId == 2))
+    if (!(IsDepCheckNeeded && CanDoAliasSetRT && RunningDepId == 2)) {
       NeedsAliasSetRTCheck = (NumWritePtrChecks >= 2 ||
                              (NumReadPtrChecks >= 1 && NumWritePtrChecks >= 1));
+      // For alias sets without at least 2 writes or 1 write and 1 read, there
+      // is no need to generate RT checks and CanDoAliasSetRT for this alias set
+      // does not impact whether runtime checks can be generated.
+      if (!NeedsAliasSetRTCheck) {
+        assert((AS.size() <= 1 ||
+                all_of(AS,
+                       [this](auto AC) {
+                         MemAccessInfo AccessWrite(AC.getValue(), true);
+                         return DepCands.findValue(AccessWrite) ==
+                                DepCands.end();
+                       })) &&
+               "Can only skip updating CanDoRT below, if all entries in AS "
+               "are reads or there is at most 1 entry");
+        continue;
+      }
+    }
 
     // We need to perform run-time alias checks, but some pointers had bounds
     // that couldn't be checked.
@@ -774,7 +790,7 @@ bool AccessAnalysis::canCheckPtrAtRT(RuntimePointerChecking &RtCheck,
     }
 
     CanDoRT &= CanDoAliasSetRT;
-    NeedRTCheck |= NeedsAliasSetRTCheck;
+    MayNeedRTCheck |= NeedsAliasSetRTCheck;
     ++ASId;
   }
 
@@ -808,15 +824,18 @@ bool AccessAnalysis::canCheckPtrAtRT(RuntimePointerChecking &RtCheck,
     }
   }
 
-  if (NeedRTCheck && CanDoRT)
+  if (MayNeedRTCheck && CanDoRT)
     RtCheck.generateChecks(DepCands, IsDepCheckNeeded);
 
   LLVM_DEBUG(dbgs() << "LAA: We need to do " << RtCheck.getNumberOfChecks()
                     << " pointer comparisons.\n");
 
-  RtCheck.Need = NeedRTCheck;
+  // If we can do run-time checks, but there are no checks, no runtime checks
+  // are needed. This can happen when all pointers point to the same underlying
+  // object for example.
+  RtCheck.Need = CanDoRT ? RtCheck.getNumberOfChecks() != 0 : MayNeedRTCheck;
 
-  bool CanDoRTIfNeeded = !NeedRTCheck || CanDoRT;
+  bool CanDoRTIfNeeded = !RtCheck.Need || CanDoRT;
   if (!CanDoRTIfNeeded)
     RtCheck.reset();
   return CanDoRTIfNeeded;
@@ -1793,7 +1812,7 @@ bool LoopAccessInfo::canAnalyzeLoop() {
   return true;
 }
 
-void LoopAccessInfo::analyzeLoop(AliasAnalysis *AA, LoopInfo *LI,
+void LoopAccessInfo::analyzeLoop(AAResults *AA, LoopInfo *LI,
                                  const TargetLibraryInfo *TLI,
                                  DominatorTree *DT) {
   typedef SmallPtrSet<Value*, 16> ValueSet;
@@ -2186,7 +2205,7 @@ void LoopAccessInfo::collectStridedAccess(Value *MemAccess) {
 }
 
 LoopAccessInfo::LoopAccessInfo(Loop *L, ScalarEvolution *SE,
-                               const TargetLibraryInfo *TLI, AliasAnalysis *AA,
+                               const TargetLibraryInfo *TLI, AAResults *AA,
                                DominatorTree *DT, LoopInfo *LI)
     : PSE(std::make_unique<PredicatedScalarEvolution>(*SE, *L)),
       PtrRtChecking(std::make_unique<RuntimePointerChecking>(SE)),

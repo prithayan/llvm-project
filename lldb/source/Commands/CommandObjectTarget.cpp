@@ -200,7 +200,9 @@ public:
   LoadDependentFiles m_load_dependent_files;
 
 private:
-  DISALLOW_COPY_AND_ASSIGN(OptionGroupDependents);
+  OptionGroupDependents(const OptionGroupDependents &) = delete;
+  const OptionGroupDependents &
+  operator=(const OptionGroupDependents &) = delete;
 };
 
 #pragma mark CommandObjectTargetCreate
@@ -3997,7 +3999,9 @@ public:
 
 private:
   // For CommandObjectTargetModules only
-  DISALLOW_COPY_AND_ASSIGN(CommandObjectTargetModules);
+  CommandObjectTargetModules(const CommandObjectTargetModules &) = delete;
+  const CommandObjectTargetModules &
+  operator=(const CommandObjectTargetModules &) = delete;
 };
 
 class CommandObjectTargetSymbolsAdd : public CommandObjectParsed {
@@ -4395,7 +4399,9 @@ public:
 
 private:
   // For CommandObjectTargetModules only
-  DISALLOW_COPY_AND_ASSIGN(CommandObjectTargetSymbols);
+  CommandObjectTargetSymbols(const CommandObjectTargetSymbols &) = delete;
+  const CommandObjectTargetSymbols &
+  operator=(const CommandObjectTargetSymbols &) = delete;
 };
 
 #pragma mark CommandObjectTargetStopHookAdd
@@ -4616,8 +4622,8 @@ protected:
     //  First step, make the specifier.
     std::unique_ptr<SymbolContextSpecifier> specifier_up;
     if (m_options.m_sym_ctx_specified) {
-      specifier_up.reset(
-          new SymbolContextSpecifier(GetDebugger().GetSelectedTarget()));
+      specifier_up = std::make_unique<SymbolContextSpecifier>(
+          GetDebugger().GetSelectedTarget());
 
       if (!m_options.m_module_name.empty()) {
         specifier_up->AddSpecification(

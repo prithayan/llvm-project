@@ -145,6 +145,7 @@ class VectorLegalizer {
   void ExpandFixedPointDiv(SDNode *Node, SmallVectorImpl<SDValue> &Results);
   SDValue ExpandStrictFPOp(SDNode *Node);
   void ExpandStrictFPOp(SDNode *Node, SmallVectorImpl<SDValue> &Results);
+  void ExpandREM(SDNode *Node, SmallVectorImpl<SDValue> &Results);
 
   void UnrollStrictFPOp(SDNode *Node, SmallVectorImpl<SDValue> &Results);
 
@@ -427,6 +428,7 @@ SDValue VectorLegalizer::LegalizeOp(SDValue Op) {
   case ISD::FRINT:
   case ISD::FNEARBYINT:
   case ISD::FROUND:
+  case ISD::FROUNDEVEN:
   case ISD::FFLOOR:
   case ISD::FP_ROUND:
   case ISD::FP_EXTEND:
@@ -865,6 +867,10 @@ void VectorLegalizer::Expand(SDNode *Node, SmallVectorImpl<SDValue> &Results) {
   case ISD::VECREDUCE_FMAX:
   case ISD::VECREDUCE_FMIN:
     Results.push_back(TLI.expandVecReduce(Node, DAG));
+    return;
+  case ISD::SREM:
+  case ISD::UREM:
+    ExpandREM(Node, Results);
     return;
   }
 
@@ -1350,6 +1356,17 @@ void VectorLegalizer::ExpandStrictFPOp(SDNode *Node,
   }
 
   UnrollStrictFPOp(Node, Results);
+}
+
+void VectorLegalizer::ExpandREM(SDNode *Node,
+                                SmallVectorImpl<SDValue> &Results) {
+  assert((Node->getOpcode() == ISD::SREM || Node->getOpcode() == ISD::UREM) &&
+         "Expected REM node");
+
+  SDValue Result;
+  if (!TLI.expandREM(Node, Result, DAG))
+    Result = DAG.UnrollVectorOp(Node);
+  Results.push_back(Result);
 }
 
 void VectorLegalizer::UnrollStrictFPOp(SDNode *Node,

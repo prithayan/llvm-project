@@ -356,7 +356,27 @@ public:
   ArrayRef<std::pair<unsigned, const char *>>
   getSerializableBitmaskMachineOperandTargetFlags() const override;
 
+  /// ARM supports the MachineOutliner.
+  bool isFunctionSafeToOutlineFrom(MachineFunction &MF,
+                                   bool OutlineFromLinkOnceODRs) const override;
+  outliner::OutlinedFunction getOutliningCandidateInfo(
+      std::vector<outliner::Candidate> &RepeatedSequenceLocs) const override;
+  outliner::InstrType getOutliningType(MachineBasicBlock::iterator &MIT,
+                                       unsigned Flags) const override;
+  bool isMBBSafeToOutlineFrom(MachineBasicBlock &MBB,
+                              unsigned &Flags) const override;
+  void buildOutlinedFrame(MachineBasicBlock &MBB, MachineFunction &MF,
+                          const outliner::OutlinedFunction &OF) const override;
+  MachineBasicBlock::iterator
+  insertOutlinedCall(Module &M, MachineBasicBlock &MBB,
+                     MachineBasicBlock::iterator &It, MachineFunction &MF,
+                     const outliner::Candidate &C) const override;
+
 private:
+  /// Returns an unused general-purpose register which can be used for
+  /// constructing an outlined call if one exists. Returns 0 otherwise.
+  unsigned findRegisterToSaveLRTo(const outliner::Candidate &C) const;
+
   unsigned getInstBundleLength(const MachineInstr &MI) const;
 
   int getVLDMDefCycle(const InstrItineraryData *ItinData,
@@ -665,15 +685,16 @@ static inline bool isMovRegOpcode(int Opc) {
 /// vary with the subtarget.
 static inline bool isValidCoprocessorNumber(unsigned Num,
                                             const FeatureBitset& featureBits) {
+  // In Armv7 and Armv8-M CP10 and CP11 clash with VFP/NEON, however, the
+  // coprocessor is still valid for CDP/MCR/MRC and friends. Allowing it is
+  // useful for code which is shared with older architectures which do not know
+  // the new VFP/NEON mnemonics.
+
   // Armv8-A disallows everything *other* than 111x (CP14 and CP15).
   if (featureBits[ARM::HasV8Ops] && (Num & 0xE) != 0xE)
     return false;
 
-  // Armv7 disallows 101x (CP10 and CP11), which clash with VFP/NEON.
-  if (featureBits[ARM::HasV7Ops] && (Num & 0xE) == 0xA)
-    return false;
-
-  // Armv8.1-M also disallows 100x (CP8,CP9) and 111x (CP14,CP15)
+  // Armv8.1-M disallows 100x (CP8,CP9) and 111x (CP14,CP15)
   // which clash with MVE.
   if (featureBits[ARM::HasV8_1MMainlineOps] &&
       ((Num & 0xE) == 0x8 || (Num & 0xE) == 0xE))

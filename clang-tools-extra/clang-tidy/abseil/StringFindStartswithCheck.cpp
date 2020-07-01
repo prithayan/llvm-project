@@ -12,8 +12,8 @@
 #include "clang/AST/ASTContext.h"
 #include "clang/ASTMatchers/ASTMatchers.h"
 #include "clang/Frontend/CompilerInstance.h"
-
-#include <cassert>
+#include "clang/Lex/Lexer.h"
+#include "clang/Lex/Preprocessor.h"
 
 using namespace clang::ast_matchers;
 
@@ -52,8 +52,8 @@ void StringFindStartswithCheck::registerMatchers(MatchFinder *Finder) {
       // Match [=!]= with a zero on one side and a string.find on the other.
       binaryOperator(
           hasAnyOperatorName("==", "!="),
-          hasEitherOperand(ignoringParenImpCasts(ZeroLiteral)),
-          hasEitherOperand(ignoringParenImpCasts(StringFind.bind("findexpr"))))
+          hasOperands(ignoringParenImpCasts(ZeroLiteral),
+                      ignoringParenImpCasts(StringFind.bind("findexpr"))))
           .bind("expr"),
       this);
 }

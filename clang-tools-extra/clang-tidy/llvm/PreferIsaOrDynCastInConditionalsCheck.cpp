@@ -10,6 +10,7 @@
 #include "PreferIsaOrDynCastInConditionalsCheck.h"
 #include "clang/AST/ASTContext.h"
 #include "clang/ASTMatchers/ASTMatchFinder.h"
+#include "clang/Lex/Lexer.h"
 
 using namespace clang::ast_matchers;
 
@@ -52,15 +53,17 @@ void PreferIsaOrDynCastInConditionalsCheck::registerMatchers(
           .bind("rhs");
 
   Finder->addMatcher(
-      stmt(anyOf(ifStmt(Any), whileStmt(Any), doStmt(Condition),
-                 binaryOperator(
-                     allOf(unless(isExpansionInFileMatching(
-                               "llvm/include/llvm/Support/Casting.h")),
-                           hasOperatorName("&&"),
-                           hasLHS(implicitCastExpr().bind("lhs")),
-                           hasRHS(anyOf(implicitCastExpr(has(CallExpression)),
-                                        CallExpression))))
-                     .bind("and"))),
+      traverse(ast_type_traits::TK_AsIs,
+               stmt(anyOf(
+                   ifStmt(Any), whileStmt(Any), doStmt(Condition),
+                   binaryOperator(
+                       allOf(unless(isExpansionInFileMatching(
+                                 "llvm/include/llvm/Support/Casting.h")),
+                             hasOperatorName("&&"),
+                             hasLHS(implicitCastExpr().bind("lhs")),
+                             hasRHS(anyOf(implicitCastExpr(has(CallExpression)),
+                                          CallExpression))))
+                       .bind("and")))),
       this);
 }
 

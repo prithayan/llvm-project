@@ -160,6 +160,27 @@ private:
     return false;
   }
 
+  bool parseUntouchableParens() {
+    while (CurrentToken) {
+      CurrentToken->Finalized = true;
+      switch (CurrentToken->Tok.getKind()) {
+      case tok::l_paren:
+        next();
+        if (!parseUntouchableParens())
+          return false;
+        continue;
+      case tok::r_paren:
+        next();
+        return true;
+      default:
+        // no-op
+        break;
+      }
+      next();
+    }
+    return false;
+  }
+
   bool parseParens(bool LookForDecls = false) {
     if (!CurrentToken)
       return false;
@@ -170,6 +191,11 @@ private:
     // FIXME: This is a bit of a hack. Do better.
     Contexts.back().ColonIsForRangeExpr =
         Contexts.size() == 2 && Contexts[0].ColonIsForRangeExpr;
+
+    if (Left->Previous && Left->Previous->is(TT_UntouchableMacroFunc)) {
+      Left->Finalized = true;
+      return parseUntouchableParens();
+    }
 
     bool StartsObjCMethodExpr = false;
     if (FormatToken *MaybeSel = Left->Previous) {
@@ -978,16 +1004,18 @@ private:
         if (CurrentToken->isOneOf(tok::star, tok::amp))
           CurrentToken->setType(TT_PointerOrReference);
         consumeToken();
+        if (CurrentToken && CurrentToken->is(tok::comma) &&
+            CurrentToken->Previous->isNot(tok::kw_operator))
+          break;
         if (CurrentToken && CurrentToken->Previous->isOneOf(
                                 TT_BinaryOperator, TT_UnaryOperator, tok::comma,
                                 tok::star, tok::arrow, tok::amp, tok::ampamp))
           CurrentToken->Previous->setType(TT_OverloadedOperator);
       }
-      if (CurrentToken) {
+      if (CurrentToken && CurrentToken->is(tok::l_paren))
         CurrentToken->setType(TT_OverloadedOperatorLParen);
-        if (CurrentToken->Previous->is(TT_BinaryOperator))
-          CurrentToken->Previous->setType(TT_OverloadedOperator);
-      }
+      if (CurrentToken && CurrentToken->Previous->is(TT_BinaryOperator))
+        CurrentToken->Previous->setType(TT_OverloadedOperator);
       break;
     case tok::question:
       if (Tok->is(TT_CSharpNullConditionalLSquare)) {
@@ -1309,7 +1337,7 @@ private:
             TT_TypenameMacro, TT_FunctionLBrace, TT_ImplicitStringLiteral,
             TT_InlineASMBrace, TT_JsFatArrow, TT_LambdaArrow, TT_NamespaceMacro,
             TT_OverloadedOperator, TT_RegexLiteral, TT_TemplateString,
-            TT_ObjCStringLiteral))
+            TT_ObjCStringLiteral, TT_UntouchableMacroFunc))
       CurrentToken->setType(TT_Unknown);
     CurrentToken->Role.reset();
     CurrentToken->MatchingParen = nullptr;
@@ -2896,6 +2924,11 @@ bool TokenAnnotator::spaceRequiredBetween(const AnnotatedLine &Line,
     // No whitespace in x(/*foo=*/1), except for JavaScript.
     return Style.Language == FormatStyle::LK_JavaScript ||
            !Left.TokenText.endswith("=*/");
+
+  // Space between template and attribute.
+  // e.g. template <typename T> [[nodiscard]] ...
+  if (Left.is(TT_TemplateCloser) && Right.is(TT_AttributeSquare))
+    return true;
   if (Right.is(tok::l_paren)) {
     if ((Left.is(tok::r_paren) && Left.is(TT_AttributeParen)) ||
         (Left.is(tok::r_square) && Left.is(TT_AttributeSquare)))
@@ -3073,7 +3106,8 @@ bool TokenAnnotator::spaceRequiredBefore(const AnnotatedLine &Line,
 
     // space between keywords and paren e.g. "using ("
     if (Right.is(tok::l_paren))
-      if (Left.isOneOf(tok::kw_using, Keywords.kw_async, Keywords.kw_when))
+      if (Left.isOneOf(tok::kw_using, Keywords.kw_async, Keywords.kw_when,
+                       Keywords.kw_lock))
         return Style.SpaceBeforeParens == FormatStyle::SBPO_ControlStatements ||
                spaceRequiredBeforeParens(Right);
   } else if (Style.Language == FormatStyle::LK_JavaScript) {
@@ -3962,7 +3996,7 @@ void TokenAnnotator::printDebugInfo(const AnnotatedLine &Line) {
                  << " C=" << Tok->CanBreakBefore
                  << " T=" << getTokenTypeName(Tok->getType())
                  << " S=" << Tok->SpacesRequiredBefore
-                 << " B=" << Tok->BlockParameterCount
+                 << " F=" << Tok->Finalized << " B=" << Tok->BlockParameterCount
                  << " BK=" << Tok->BlockKind << " P=" << Tok->SplitPenalty
                  << " Name=" << Tok->Tok.getName() << " L=" << Tok->TotalLength
                  << " PPK=" << Tok->PackingKind << " FakeLParens=";

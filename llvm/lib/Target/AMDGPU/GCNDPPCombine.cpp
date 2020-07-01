@@ -105,6 +105,11 @@ public:
     MachineFunctionPass::getAnalysisUsage(AU);
   }
 
+  MachineFunctionProperties getRequiredProperties() const override {
+    return MachineFunctionProperties()
+      .set(MachineFunctionProperties::Property::IsSSA);
+  }
+
 private:
   int getDPPOp(unsigned Op) const;
 };
@@ -168,7 +173,9 @@ MachineInstr *GCNDPPCombine::createDPPInst(MachineInstr &OrigMI,
   }
 
   auto DPPInst = BuildMI(*OrigMI.getParent(), OrigMI,
-                         OrigMI.getDebugLoc(), TII->get(DPPOp));
+                         OrigMI.getDebugLoc(), TII->get(DPPOp))
+    .setMIFlags(OrigMI.getFlags());
+
   bool Fail = false;
   do {
     auto *Dst = TII->getNamedOperand(OrigMI, AMDGPU::OpName::vdst);
@@ -561,8 +568,6 @@ bool GCNDPPCombine::runOnMachineFunction(MachineFunction &MF) {
 
   MRI = &MF.getRegInfo();
   TII = ST.getInstrInfo();
-
-  assert(MRI->isSSA() && "Must be run on SSA");
 
   bool Changed = false;
   for (auto &MBB : MF) {
