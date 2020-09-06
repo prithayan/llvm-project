@@ -95,6 +95,7 @@ add_llvm_component_library(LLVMAnalysis
   PhiValues.cpp
   PostDominators.cpp
   ProfileSummaryInfo.cpp
+  MemUseDefAnalysis.cpp
   PtrUseVisitor.cpp
   RegionInfo.cpp
   RegionPass.cpp
@@ -122,6 +123,7 @@ add_llvm_component_library(LLVMAnalysis
 
   ADDITIONAL_HEADER_DIRS
   ${LLVM_MAIN_INCLUDE_DIR}/llvm/Analysis
+  ${LLVM_MAIN_INCLUDE_DIR}/openmp/libomptarget/include/
 
   DEPENDS
   intrinsics_gen
