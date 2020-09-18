@@ -1,4 +1,4 @@
-//===- OmpDiagnosticsAnalysis.cpp - Stack memory safety analysis
+//===- OmpDiagnosticsAnalysis.cpp - Analyze omp target clauses and infer data
 //-------------===//
 //
 // Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
@@ -46,10 +46,10 @@ OmpDiagnosticsLocalAnalysis::getAliasingArg(const Value &Mem,
     ArgI++;
   }
   // This means none of the arguments alias, could be global.
-  return None;
+  return ArgI;
 }
 
-void OmpDiagnosticsLocalAnalysis::recordFuncGens(const MemoryDef &MemDef) {
+void OmpDiagnosticsLocalAnalysis::recordFuncGenDefs(const MemoryDef &MemDef) {
   LLVM_DEBUG(dbgs() << "\n MemDef:"; MemDef.dump());
   if (MSSA.isLiveOnEntryDef(&MemDef))
     return;
@@ -57,6 +57,7 @@ void OmpDiagnosticsLocalAnalysis::recordFuncGens(const MemoryDef &MemDef) {
   if (DefInstr == nullptr)
     assert("Cannot handle MemoryDef: not liveonentry or instruction");
   const Function &ParentF = *DefInstr->getFunction();
+  // if this is a call instruction, then check if we are passing a function argument to this call instruction. This is required to handle use defs across multiple function calls.
   if (auto CI = dyn_cast<CallInst>(DefInstr)) {
     for (unsigned CallArgI = 0; CallArgI < CI->getNumArgOperands();
          CallArgI++) {
@@ -65,11 +66,13 @@ void OmpDiagnosticsLocalAnalysis::recordFuncGens(const MemoryDef &MemDef) {
       // Does not alias with any function argument.
       if (FArgI == None)
         continue;
+      // Call instruction argument refers to which parent function argument.
       CallToFuncArgsAliasMap[CI][CallArgI] = *FArgI;
       // FuncToGenDefs[&ThisFunc][*FArgI] = CI;
       // AA.alias(Arg,
     }
   }
+  // Next check if this store instruction updates one of the function arguments.
   if (auto St = dyn_cast<StoreInst>(DefInstr)) {
     auto Mem = MemoryLocation::getOrNone(St);
     if (Mem == None)
@@ -84,7 +87,7 @@ void OmpDiagnosticsLocalAnalysis::recordFuncGens(const MemoryDef &MemDef) {
   }
 }
 
-bool OmpDiagnosticsLocalAnalysis::checkIfLiveOnEntry(
+bool OmpDiagnosticsLocalAnalysis::recordIfLiveOnEntry(
     const MemoryAccess &MA, const Instruction &Ld, const unsigned AliasingArg) {
   for (auto DefIter = MA.defs_begin(); DefIter != MA.defs_end(); DefIter++) {
     const MemoryAccess *DefMA = *DefIter;
@@ -92,27 +95,31 @@ bool OmpDiagnosticsLocalAnalysis::checkIfLiveOnEntry(
       addFuncToGenUse(Ld, AliasingArg);
       return true;
     }
-    if (checkIfLiveOnEntry(*DefMA, Ld, AliasingArg))
+    if (recordIfLiveOnEntry(*DefMA, Ld, AliasingArg))
       return true;
   }
   return false;
 }
 
-void OmpDiagnosticsLocalAnalysis::recordFuncGens(const MemoryUse &MemUse) {
+void OmpDiagnosticsLocalAnalysis::recordFuncGenUses(const MemoryUse &MemUse) {
+  // This function records if the instruction uses one of the function arguments.
   LLVM_DEBUG(dbgs() << "\n MemUse:" << MemUse);
   if (!isa<LoadInst>(MemUse.getMemoryInst())) {
     MemUse.getMemoryInst()->dump();
     assert("Instruction MemUse Not handled:");
   }
   LoadInst *Ld = dyn_cast<LoadInst>(MemUse.getMemoryInst());
+  // Get the memory location corresponding to the load instruction.
   auto LdMem = MemoryLocation::get(Ld);
+  // Check if the load address accesses one of the function arguments.
   auto AliasingArg = getAliasingArg(*LdMem.Ptr, *Ld->getFunction());
   LLVM_DEBUG(dbgs() << " \n Mem Loc::" << *LdMem.Ptr
                     << " AliasingArg=" << AliasingArg);
   if (AliasingArg == None)
     return;
   const MemoryAccess *MA = &MemUse;
-  checkIfLiveOnEntry(*MA, *Ld, *AliasingArg);
+  recordIfLiveOnEntry(*MA, *Ld, *AliasingArg);
+  return ;
 }
 
 void OmpDiagnosticsLocalAnalysis::recordFuncGens() {
@@ -122,9 +129,9 @@ void OmpDiagnosticsLocalAnalysis::recordFuncGens() {
       continue;
     for (const MemoryAccess &MA : *MAList) {
       if (auto MemUse = dyn_cast<MemoryUse>(&MA))
-        recordFuncGens(*MemUse);
+        recordFuncGenUses(*MemUse);
       if (auto MemDef = dyn_cast<MemoryDef>(&MA))
-        recordFuncGens(*MemDef);
+        recordFuncGenDefs(*MemDef);
     }
   }
   for (auto Iter : FuncToGenDefs[&ThisFunc]) {
@@ -141,6 +148,10 @@ void OmpDiagnosticsLocalAnalysis::recordFuncGens() {
 }
 
 void OmpDiagnosticsLocalAnalysis::run() {
+  // This analysis records the following 3 items,
+  // 1. Which instruction uses one of the function arguments.
+  // 2. Which instruction defines one of the function arguments.
+  // 3. Which call instruction passes one of the function arguments.
 
   LLVM_DEBUG(dbgs() << "\n Analysis Local:");
   recordFuncGens();
@@ -608,14 +619,15 @@ void OmpDiagnosticsGlobalAnalysis::recordFuncGens() {
     FuncToAAResultsMap[&F] = &AA;
     FuncToMSSAMap[&F] = &MSSA;
     LLVM_DEBUG(MSSA.dump());
+    //The function local analysis updates 3 maps,
+    // 1. Func gen Defs, 2. Func gen Uses, 3. Call instruction to function arguments.
     OmpDiagnosticsLocalAnalysis LocalA(F, MSSA, AA, FuncToGenDefs,
                                        FuncToGenUses, CallToFuncArgsAliasMap);
     LocalA.recordFuncGens();
-    handleIndirectCalls(F);
-
-
+    //handleIndirectCalls(F);
   }
 }
+
 void print(std::map<const CallInst* , std::map<unsigned, const Instruction*>> CtoI){
   for (auto CIter : CtoI){
     const CallInst *CI= CIter.first;

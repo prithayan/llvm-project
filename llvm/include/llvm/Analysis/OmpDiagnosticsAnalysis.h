@@ -57,18 +57,22 @@ class OmpDiagnosticsLocalAnalysis {
   const Function &ThisFunc;
   const MemorySSA &MSSA;
   AAResults &AA;
+  /// The following 3 maps are the result, they are updated after this analysis, 
   FuncToGenDefsTy &FuncToGenDefs;
   FuncToGenUsesTy &FuncToGenUses;
+  // Map of which call instruction argument refers to which parent function argument.
   CallToFuncArgsAliasMapTy &CallToFuncArgsAliasMap;
+  ///
 
   void analyzeBB(const BasicBlock &BB);
-  void recordFuncGens(const MemoryUse &MemUse);
-  void recordFuncGens(const MemoryDef &MemDef);
+  // This function records if the instruction uses one of the function arguments.
+  void recordFuncGenUses(const MemoryUse &MemUse);
+  void recordFuncGenDefs(const MemoryDef &MemDef);
   Value *getAliasingCallArg(CallInst &CIDef, Value &PointerOp);
   void addFuncToGenUse(const Instruction &MemUse, unsigned FuncArgNum) {
     FuncToGenUses[MemUse.getFunction()][FuncArgNum] = &MemUse;
   }
-  bool checkIfLiveOnEntry(const MemoryAccess &MA, const Instruction &Ld,
+  bool recordIfLiveOnEntry(const MemoryAccess &MA, const Instruction &Ld,
                           const unsigned AliasingArg);
 
   // Iterate over all function arguments, and check which argument aliases with
@@ -86,6 +90,10 @@ public:
         CallToFuncArgsAliasMap(CallToFuncArgsAliasMap) {}
   // TODO : make sure the order of traversal of Basicblocks is correct, preorder
   // traversal only
+  // This analysis records the following 3 items,
+  // 1. Which instruction uses one of the function arguments.
+  // 2. Which instruction defines one of the function arguments.
+  // 3. Which call instruction passes one of the function arguments.
   void run();
   void recordFuncGens();
   void print();
@@ -191,6 +199,7 @@ class OmpDiagnosticsGlobalAnalysis
 public:
   using Result = IntResult;
   Result run(Module &M, ModuleAnalysisManager &AM);
+  /// Dummy function, does nothing right now.
   void handleIndirectCalls(Function &F);
 };
 
