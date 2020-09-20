@@ -76,8 +76,13 @@ OmpDiagnosticsLocalAnalysis::getAliasingArg(const Value &Mem,
       return ArgI;
     ArgI++;
   }
+ std::set<const Value*> Visited;
+  if (isGlobalVariable(Mem, Visited)) {
+    LLVM_DEBUG(dbgs()<<"\n is Global::"<<Mem);
+    return ArgI;
+  }
   // This means none of the arguments alias, could be global.
-  return ArgI;
+  return None;
 }
 
 void OmpDiagnosticsLocalAnalysis::recordFuncGenDefs(const MemoryDef &MemDef) {
@@ -112,22 +117,28 @@ void OmpDiagnosticsLocalAnalysis::recordFuncGenDefs(const MemoryDef &MemDef) {
     if (ArgI == None)
       return;
     LLVM_DEBUG(dbgs() << "\n arg:" << *ArgI << "\n Def::" << MemDef);
-    FuncToGenDefs[&ThisFunc][*ArgI] = DefInstr;
+    addFuncToGenDef(*DefInstr, *ArgI);
+    //FuncToGenDefs[&ThisFunc][*ArgI] = DefInstr;
 
     // LLVM_DEBUG(dbgs()<<" \n Mem Loc::"<<*MemoryLocation::get(St).Ptr);
   }
 }
 
-bool OmpDiagnosticsLocalAnalysis::recordIfLiveOnEntry(
-    const MemoryAccess &MA, const Instruction &Ld, const unsigned AliasingArg) {
-  for (auto DefIter = MA.defs_begin(); DefIter != MA.defs_end(); DefIter++) {
-    const MemoryAccess *DefMA = *DefIter;
-    if (MSSA.isLiveOnEntryDef(DefMA)) {
-      addFuncToGenUse(Ld, AliasingArg);
+bool OmpDiagnosticsLocalAnalysis::isGlobalVariable(const Value &Ptr, std::set<const Value*> &Visited) {
+  if (isa<GlobalVariable>(&Ptr))
+    return true;
+  if (Visited.find(&Ptr) != Visited.end())
+    return false;
+  Visited.insert(&Ptr);
+  const Instruction *I = dyn_cast<Instruction>(&Ptr);
+  if (I == nullptr)
+    return false;
+  for (unsigned OpI = 0 ; OpI < I->getNumOperands() ; OpI++){
+    const Value* Op = I->getOperand(OpI);
+    if (isGlobalVariable(*Op, Visited)) {
+      LLVM_DEBUG(dbgs()<<"\n this is global::"<<*Op);
       return true;
     }
-    if (recordIfLiveOnEntry(*DefMA, Ld, AliasingArg))
-      return true;
   }
   return false;
 }
@@ -148,8 +159,11 @@ void OmpDiagnosticsLocalAnalysis::recordFuncGenUses(const MemoryUse &MemUse) {
                     << " AliasingArg=" << AliasingArg);
   if (AliasingArg == None)
     return;
-  const MemoryAccess *MA = &MemUse;
-  recordIfLiveOnEntry(*MA, *Ld, *AliasingArg);
+  //const MemoryAccess *MA = &MemUse;
+  //if (isGlobalVariable(*MA)) 
+  addFuncToGenUse(*Ld, *AliasingArg);
+  
+  //isGlobalVariable(*MA, *Ld, *AliasingArg);
   return ;
 }
 
@@ -183,9 +197,15 @@ void OmpDiagnosticsLocalAnalysis::run() {
 }
 
 void OmpDiagnosticsLocalAnalysis::print() {
+  LLVM_DEBUG(dbgs()<<"\n Print OmpDiagnosticsLocalAnalysis func defs::");
   for (auto Iter : FuncToGenDefs[&ThisFunc]) {
     LLVM_DEBUG(dbgs() << "\n Arg:" << Iter.first << "\n Def::";
-               Iter.second->dump());
+               Iter.second->dump();Iter.second->getDebugLoc().dump());
+  }
+  LLVM_DEBUG(dbgs()<<"\n Print OmpDiagnosticsLocalAnalysis func Useses::");
+  for (auto Iter : FuncToGenUses[&ThisFunc]) {
+    LLVM_DEBUG(dbgs() << "\n Arg:" << Iter.first << "\n Use::";
+               Iter.second->dump();Iter.second->getDebugLoc().dump());
   }
   for (auto Iter : CallToFuncArgsAliasMap) {
     LLVM_DEBUG(dbgs() << "\n Call:" << *Iter.first);
@@ -801,7 +821,7 @@ void OmpDiagnosticsGlobalAnalysis::interProcRecordFuncGens() {
   CallToGenDefsTy CallToGenDefs;
   CallToGenUsesTy CallToGenUses;
   IA.getCallGens(CallToGenDefs, CallToGenUses);
-  IA.print();
+  //IA.print();
   LLVM_DEBUG(dbgs()<<"\n  ==========================Call Def::");
   print(CallToGenDefs);
   LLVM_DEBUG(dbgs()<<"\n ==========================Call Use::");
