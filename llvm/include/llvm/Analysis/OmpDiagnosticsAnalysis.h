@@ -69,11 +69,31 @@ class OmpDiagnosticsLocalAnalysis {
   void recordFuncGenUses(const MemoryUse &MemUse);
   void recordFuncGenDefs(const MemoryDef &MemDef);
   Value *getAliasingCallArg(CallInst &CIDef, Value &PointerOp);
+  void adjustFuncArgNum(const Instruction &MemUse, unsigned &FuncArgNum, const FuncToGenDefsTy &Temp ) {
+    // If recording global uses, then keep appending.
+    auto FIter = Temp.find(MemUse.getFunction()) ;
+    if ( FIter != Temp.end() && 
+         FuncArgNum >= MemUse.getFunction()->arg_size() && /*Make sure this is for a global var, and not func argument*/
+        FIter->second.find(FuncArgNum) != FIter->second.end()){
+      // Find a func arg num that does not already exist, append logic.
+      while (FIter->second.find(FuncArgNum) != FIter->second.end()){
+        //TODO: add an alias check to overwrite same defs.
+        FuncArgNum++;
+      }
+    }
+  }
+
+  void addFuncToGenDef(const Instruction &MemDef, unsigned FuncArgNum) {
+    // Here we make sure, it is never overwritten
+    adjustFuncArgNum(MemDef, FuncArgNum, FuncToGenDefs);
+    FuncToGenDefs[MemDef.getFunction()][FuncArgNum] = &MemDef;
+  }
   void addFuncToGenUse(const Instruction &MemUse, unsigned FuncArgNum) {
+    // Here we make sure, it is never overwritten
+    adjustFuncArgNum(MemUse, FuncArgNum, FuncToGenUses);
     FuncToGenUses[MemUse.getFunction()][FuncArgNum] = &MemUse;
   }
-  bool recordIfLiveOnEntry(const MemoryAccess &MA, const Instruction &Ld,
-                          const unsigned AliasingArg);
+  bool isGlobalVariable(const Value &Ptr, std::set<const Value*> &Visited);
 
   // Iterate over all function arguments, and check which argument aliases with
   // Mem
