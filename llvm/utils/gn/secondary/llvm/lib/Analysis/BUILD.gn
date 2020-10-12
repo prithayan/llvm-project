@@ -87,6 +87,7 @@ static_library("Analysis") {
     "ObjCARCAliasAnalysis.cpp",
     "ObjCARCAnalysisUtils.cpp",
     "ObjCARCInstKind.cpp",
+    "OmpDiagnosticsAnalysis.cpp",
     "OptimizationRemarkEmitter.cpp",
     "OrderedInstructions.cpp",
     "PHITransAddr.cpp",
